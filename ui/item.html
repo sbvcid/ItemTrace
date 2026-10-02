@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>商品詳細 · ItemTrace</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a href="/items">&larr; 返回</a>
+  <span class="grow"></span>
+  <span class="sub" id="head-id"></span>
+  <span id="head-status"></span>
+</header>
+
+<div class="wrap">
+
+  <div id="error"></div>
+
+  <div id="notfound" class="empty" hidden>
+    找不到這件商品，可能編號打錯了。<br>
+    <a href="/items">回到列表</a>
+  </div>
+
+  <div id="detail" hidden>
+
+    <!-- 照片優先：使用習慣是看照片 → 瞄一眼 → 改錯的地方 -->
+    <section>
+      <h2>照片 <span class="dim" id="wall-count"></span></h2>
+      <div class="wall" id="wall"></div>
+      <div class="empty" id="wall-empty" hidden>還沒有照片</div>
+    </section>
+
+    <section id="pending-sec" hidden>
+      <h2>待確認建議 <span class="dim" id="pending-count"></span></h2>
+      <div id="pending"></div>
+    </section>
+
+    <section>
+      <div class="card">
+        <h2>商品資料</h2>
+        <form id="form">
+          <div class="grid2">
+            <div class="field"><label for="f-name">品名</label><input id="f-name"></div>
+            <div class="field"><label for="f-brand">品牌</label><input id="f-brand"></div>
+            <div class="field"><label for="f-model">型號</label><input id="f-model"></div>
+            <div class="field"><label for="f-category">分類</label><input id="f-category" list="cats"></div>
+            <div class="field"><label for="f-quantity">數量</label><input id="f-quantity" type="number" min="1" step="1"></div>
+            <div class="field"><label for="f-condition">品況</label><input id="f-condition"></div>
+          </div>
+          <div class="field" style="margin-top:12px">
+            <label for="f-notes">備註</label>
+            <textarea id="f-notes" rows="3"></textarea>
+          </div>
+          <datalist id="cats"></datalist>
+          <div style="display:flex;align-items:center;gap:12px;margin-top:14px">
+            <button class="primary" type="submit" id="save">儲存</button>
+            <span class="saved" id="saved" hidden></span>
+            <span class="grow" style="flex:1"></span>
+            <span class="dim" id="updated"></span>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section>
+      <div class="card">
+        <h2>識別碼</h2>
+        <table id="identifiers"><thead>
+          <tr><th style="width:86px">種類</th><th>值</th><th style="width:96px"></th></tr>
+        </thead><tbody></tbody></table>
+        <div class="empty" id="id-empty" hidden>還沒有識別碼</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="card">
+        <h2>觀測紀錄</h2>
+        <table id="observations"><thead>
+          <tr><th style="width:118px">編號</th><th style="width:84px">種類</th>
+              <th>時間</th><th style="width:120px">照片</th></tr>
+        </thead><tbody></tbody></table>
+        <div class="empty" id="obs-empty" hidden>還沒有觀測紀錄</div>
+      </div>
+    </section>
+
+    <details id="history">
+      <summary>修改歷史（<span id="event-count">0</span> 筆）</summary>
+      <div id="events"></div>
+    </details>
+
+  </div>
+</div>
+
+<script src="/static/api.js"></script>
+<script src="/static/item.js"></script>
+</body>
+</html>

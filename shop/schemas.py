@@ -34,6 +34,16 @@ class ItemOut(_Out):
     updated_at: str
 
 
+class ItemListOut(ItemOut):
+    """列表用：多帶照片數量與代表照片，讓 UI 不用為每筆各打一次詳情。
+
+    這是加出來的欄位，不改 ItemOut，所以既有的詳情／PATCH 回應完全不受影響。
+    """
+
+    photo_count: int = 0
+    thumbnail: str | None = None
+
+
 class ItemCreate(BaseModel):
     name: str = ""
     brand: str = ""
@@ -247,6 +257,9 @@ class HealthOut(BaseModel):
 class StatsOut(BaseModel):
     counts: dict[str, int]
     recent: list[EventOut]
+    #: UI 篩選下拉選單需要的清單；不放前端是因為前端不該硬寫分類與狀態值，
+    #: 硬寫會和 DDL 的 CHECK 漂移。
+    categories: list[str] = Field(default_factory=list)
 
 
 class IdentifierLookupOut(BaseModel):

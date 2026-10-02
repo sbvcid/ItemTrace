@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>商品列表 · ItemTrace</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a href="/items">&larr;</a>
+  <h1>商品紀錄</h1>
+  <span class="grow"></span>
+  <span class="sub" id="count"></span>
+  <a class="sub" href="/docs" target="_blank" rel="noopener">API</a>
+</header>
+
+<div class="wrap">
+
+  <div class="filters">
+    <input id="q" type="search" placeholder="搜尋：品名、品牌、型號、序號後半段…" autocomplete="off">
+    <div class="row">
+      <select id="f-status">
+        <option value="">全部狀態</option>
+      </select>
+      <select id="f-category">
+        <option value="">全部分類</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="error"></div>
+  <div class="rows" id="rows"></div>
+  <div class="empty" id="empty" hidden>沒有符合的商品</div>
+
+  <div class="pager">
+    <button id="prev">上一頁</button>
+    <span id="pageinfo"></span>
+    <button id="next">下一頁</button>
+  </div>
+
+</div>
+
+<script src="/static/api.js"></script>
+<script src="/static/list.js"></script>
+</body>
+</html>

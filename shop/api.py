@@ -18,6 +18,7 @@ Repository 裡，交易與 rollback 的行為因此與 CLI、測試完全一致�
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any, Iterator
 
 from fastapi import (
@@ -30,7 +31,8 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import __version__, config as config_mod, db as db_mod, ids
 from . import inbox as inbox_mod
@@ -50,6 +52,7 @@ from .schemas import (
     InboxListing,
     ItemCreate,
     ItemDetail,
+    ItemListOut,
     ItemOut,
     ItemPatch,
     ObservationCreate,
@@ -99,12 +102,41 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.state.config = cfg
     _register_error_handlers(app)
     app.include_router(router)
+    _register_ui(app)
 
     @app.get("/files/{path:path}", include_in_schema=False)
     def serve_file(path: str, cfg: Annotated[Config, Depends(get_config)]) -> FileResponse:
         return _serve_file(cfg, path)
 
     return app
+
+
+UI_DIR = Path(__file__).resolve().parent.parent / "ui"
+
+
+def _register_ui(app: FastAPI) -> None:
+    """掛上 Phase 6A 的兩個頁面。
+
+    這些不是 API，所以不放進 OpenAPI（/docs 保持純 API 契約）。
+    頁面是靜態 HTML，資料全部由前端的 fetch 打 /api/*，後端不多做一層模板。
+    """
+    if not UI_DIR.is_dir():  # 測試環境或未 checkout UI 時不影響 API
+        return
+    app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def home() -> RedirectResponse:
+        return RedirectResponse("/items")
+
+    @app.get("/items", include_in_schema=False)
+    def items_page() -> FileResponse:
+        return FileResponse(UI_DIR / "index.html")
+
+    @app.get("/items/{item_id}", include_in_schema=False)
+    def item_page(item_id: str) -> FileResponse:
+        # item_id 不在這裡驗證：頁面殼子對任何 id 都一樣，
+        # 真正的 404 由前端呼叫 /api/items/{id} 時得到。
+        return FileResponse(UI_DIR / "item.html")
 
 
 def _register_error_handlers(app: FastAPI) -> None:
@@ -144,7 +176,7 @@ def _detail(exc: Exception) -> Any:
 # ----------------------------------------------------------------------
 
 
-@router.get("/api/items", response_model=list[ItemOut], tags=["items"])
+@router.get("/api/items", response_model=list[ItemListOut], tags=["items"])
 def list_items(
     repo: Repo,
     q: Annotated[str | None, Query(description="品名／品牌／型號／備註／識別碼")] = None,
@@ -152,9 +184,14 @@ def list_items(
     category: str | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
-) -> list[ItemOut]:
-    return to_outs(repo.list_items(q=q, status=status, category=category,
-                                   limit=limit, offset=offset))
+) -> list[ItemListOut]:
+    items = repo.list_items(q=q, status=status, category=category,
+                            limit=limit, offset=offset)
+    summaries = repo.photo_summaries([item.id for item in items])
+    return [
+        ItemListOut(**base.model_dump(), **summaries[base.id])
+        for base in to_outs(items)
+    ]
 
 
 @router.post("/api/items", response_model=ItemOut, status_code=201, tags=["items"])
@@ -591,7 +628,11 @@ def health(cfg: Annotated[Config, Depends(get_config)]) -> HealthOut:
 
 @router.get("/api/stats", response_model=StatsOut, tags=["system"])
 def stats(repo: Repo, limit: Annotated[int, Query(ge=1, le=200)] = 10) -> StatsOut:
-    return StatsOut(counts=repo.counts(), recent=to_outs(repo.list_recent_events(limit)))
+    return StatsOut(
+        counts=repo.counts(),
+        recent=to_outs(repo.list_recent_events(limit)),
+        categories=repo.distinct_categories(),
+    )
 
 
 # ----------------------------------------------------------------------

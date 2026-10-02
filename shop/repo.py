@@ -244,6 +244,48 @@ class Repository:
         ).fetchall()
         return [Identifier.from_row(row) for row in rows]
 
+    def photo_summaries(self, item_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """一次查出多件商品的照片數量與代表照片。
+
+        列表頁要顯示縮圖，但 GET /api/items 不含照片欄位；逐筆呼叫詳情會變成
+        N+1 次請求，所以這裡一次撈完。代表照片取最早的 original —— 那是進貨
+        當下的證據，比後來補拍的更能代表這件商品。
+        """
+        summaries: dict[str, dict[str, Any]] = {
+            item_id: {"photo_count": 0, "thumbnail": None} for item_id in item_ids
+        }
+        if not item_ids:
+            return summaries
+        marks = ", ".join("?" for _ in item_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT s.item_id,
+                   s.n AS photo_count,
+                   (SELECT p.filename FROM photos p
+                     WHERE p.item_id = s.item_id AND p.role = 'original'
+                     ORDER BY p.id LIMIT 1) AS thumbnail
+              FROM (SELECT item_id, count(*) AS n
+                      FROM photos
+                     WHERE item_id IN ({marks})
+                     GROUP BY item_id) s
+            """,  # noqa: S608 — 欄位來自模組常數，項目 id 走參數
+            item_ids,
+        ).fetchall()
+        for row in rows:
+            summaries[row["item_id"]] = {
+                "photo_count": row["photo_count"],
+                "thumbnail": row["thumbnail"],
+            }
+        return summaries
+
+    def distinct_categories(self) -> list[str]:
+        """已用過的分類清單。UI 的篩選下拉選單需要它。"""
+        rows = self.conn.execute(
+            "SELECT DISTINCT category FROM items"
+            " WHERE category <> '' ORDER BY category"
+        ).fetchall()
+        return [row["category"] for row in rows]
+
     def counts(self) -> dict[str, int]:
         result: dict[str, int] = {}
         for table in (
