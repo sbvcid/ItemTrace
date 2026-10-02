@@ -8,15 +8,23 @@
 4. 基本資料存取 —— 列表、篩選、分頁
 
 刻意不做，避免越過階段邊界：
-  * 模糊搜尋、identifier 半截序號搜尋 → 階段 5
-  * 檔案落盤、EXIF、sha256 去重        → 階段 3
-  * HTTP 形狀與狀態碼                   → 階段 4
+  * 檔案落盤、EXIF、sha256 去重 → 階段 3（見 shop.photos / shop.inbox）
+  * HTTP 形狀與狀態碼          → 階段 4（見 shop.api）
 
-刪除語意遵守 SPEC-v1 §1「原始資料不可破壞」：
-  items                → 只能 void（status='void'），不物理刪除
-  photos               → 只能刪 role='derived'，original 需先改 role
-  identifiers          → 可以刪（API 契約明列 DELETE），但 events 留完整快照
-  observations/suggestions → 不刪，只改狀態
+刪除語意遵守 SPEC-v1 §1、§2.3：
+
+正常生命週期
+  items        → 只能 void（status='void'），資料與檔案都保留
+  photos       → 只能刪 role='derived'；original 要刪必須先改 role，
+                 那是明確表態，不會在流程中被悄悄蓋掉
+  identifiers  → 可以刪（API 契約明列 DELETE），但 events 留完整快照
+  observations → 不刪，只改狀態
+  suggestions  → 不刪，接受與拒絕都保留（推論與事實分離）
+
+永久淘汰
+  使用者明確決定要永久刪除某件商品時，未來會允許一次性刪除該 item、
+  四張子表與 files/<item-id>/ 整棵目錄樹。**不做任何自動過期清理。**
+  那條路徑尚未實作，API 與 UI 都還沒有提供；日常一律走 void。
 """
 
 from __future__ import annotations
