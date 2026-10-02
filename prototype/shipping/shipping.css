@@ -1,0 +1,253 @@
+/* 出貨單 100mm x 150mm
+   位置依原稿量測（出貨單 空白.pdf）換算，單位一律 mm / pt */
+
+:root {
+  --ink: #16181d;
+  --line: #c9ccd3;
+  --accent: #4c8dff;
+  --font-ui: "Microsoft JhengHei", "Microsoft JhengHei UI", "微軟正黑體", sans-serif;
+  --font-print: "DFKai-SB", "標楷體", "BiauKai", "KaiTi", serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: #0f1115;
+  color: #e7eaf0;
+  font: 15px/1.55 var(--font-ui);
+  --card-w: 101.6mm;
+  --card-h: 152.4mm;
+}
+
+body[data-size="100x150"] { --card-w: 100mm; --card-h: 150mm; }
+
+/* ---------- 工具列 ---------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: #171a21;
+  border-bottom: 1px solid #262b35;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.toolbar .grow { flex: 1; }
+.toolbar .back { color: #8b93a5; text-decoration: none; font-size: 14px; }
+.toolbar .back:hover { color: #e7eaf0; }
+
+.zoom { display: flex; align-items: center; gap: 4px; }
+.zoom span { font-size: 13px; color: #8b93a5; margin-right: 2px; }
+.zoom button { padding: 6px 12px; font-size: 13px; }
+
+.card-size { display: flex; align-items: center; gap: 4px; margin-right: 8px; }
+.card-size span { font-size: 13px; color: #8b93a5; margin-right: 2px; }
+.card-size button { padding: 6px 12px; font-size: 13px; }
+
+button {
+  background: #22262f;
+  color: #e7eaf0;
+  border: 1px solid #262b35;
+  border-radius: 7px;
+  padding: 8px 16px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover { background: #2b303b; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+/* ---------- 版面 ---------- */
+
+.layout {
+  display: flex;
+  gap: 34px;
+  padding: 26px 20px 50px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.editor {
+  background: #171a21;
+  border: 1px solid #262b35;
+  border-radius: 10px;
+  padding: 20px;
+  flex: 0 0 300px;
+  max-width: 100%;
+}
+
+.editor h1 { margin: 0 0 16px; font-size: 19px; }
+.editor label { display: block; margin: 14px 0 5px; font-size: 13px; color: #8b93a5; }
+.editor label em { font-style: normal; margin-left: 6px; font-size: 11px; color: #5d6478; }
+.editor small { display: block; margin-top: 5px; font-size: 12px; color: #6d7488; line-height: 1.45; }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+
+input, textarea {
+  width: 100%;
+  background: #0c0e12;
+  color: #e7eaf0;
+  border: 1px solid #262b35;
+  border-radius: 7px;
+  padding: 9px 12px;
+  font: inherit;
+  resize: vertical;
+}
+
+input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+
+.quick { margin-top: 18px; border-top: 1px solid #262b35; padding-top: 14px; }
+.quick > span { font-size: 12px; color: #6d7488; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+.chip {
+  background: #22262f;
+  border: 1px solid #262b35;
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.chip:hover { background: #2b303b; border-color: var(--accent); }
+
+.stage { flex: 1 1 420px; min-width: 0; }
+.stage .hint { color: #6d7488; font-size: 12.5px; margin-top: 14px; }
+
+.zoombox { width: var(--card-w); height: var(--card-h); transition: width .15s, height .15s; }
+.zoombox .card { transform-origin: top left; }
+
+/* ---------- 出貨單本體 ---------- */
+
+.card {
+  width: var(--card-w);
+  height: var(--card-h);
+  background: #fff;
+  color: var(--ink);
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, .5);
+  font-family: var(--font-print);
+}
+
+.card img { position: absolute; display: block; }
+
+/* logo / QR 的位置已量好，用自己的圖即可（見 shipping.html 的註解）。
+   原本這裡放的是賣家本人的圖片，已移除。 */
+.card .logo { left: 9.2mm; top: 8.1mm; width: 38.8mm; }
+
+.card .head {
+  position: absolute;
+  left: 53mm;
+  right: 6mm;
+  top: 8mm;
+  text-align: left;
+}
+
+.card .title {
+  font-family: var(--font-ui);
+  font-size: 12.5pt;
+  font-weight: 700;
+  letter-spacing: .04em;
+  line-height: 1.1;
+}
+
+.card .subtitle {
+  font-family: "Times New Roman", Georgia, serif;
+  font-size: 9pt;
+  line-height: 1.3;
+  margin-top: .6mm;
+}
+
+.card .date { font-size: 10.5pt; margin-top: 3.4mm; }
+.card .date b { font-family: var(--font-ui); font-size: 10pt; font-weight: 700; }
+
+.goods { position: absolute; left: 6.2mm; right: 6.2mm; top: 58.4mm; }
+.goods-label { font-size: 10.5pt; line-height: 1.2; }
+
+.goods-list { margin-top: .8mm; }
+
+.goods-row {
+  display: flex;
+  align-items: baseline;
+  gap: 2mm;
+  font-size: 8.5pt;
+  height: 3.9mm;
+  border-bottom: .25mm dotted #b4b8c2;
+  line-height: 1.1;
+}
+
+.goods-row .idx {
+  font-family: var(--font-ui);
+  font-size: 7.5pt;
+  color: #7c8290;
+  flex: 0 0 auto;
+}
+
+.goods-row .txt { flex: 1; word-break: break-word; }
+
+.goods-extra { font-size: 7.5pt; color: #55596a; margin-top: .6mm; line-height: 1.2; }
+.goods-extra:empty { display: none; }
+
+.goods-meta {
+  display: flex;
+  gap: 7mm;
+  font-size: 8pt;
+  line-height: 1.3;
+  margin-top: 1.2mm;
+  font-family: var(--font-ui);
+}
+
+.goods-meta span:empty { display: none; }
+.goods-meta .lbl { color: #7c8290; }
+
+.card .thanks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 85.5mm;
+  text-align: center;
+  font-family: var(--font-ui);
+  font-size: 15pt;
+  font-weight: 700;
+  letter-spacing: .06em;
+}
+
+.foot { position: absolute; left: 6.5mm; right: 6.5mm; top: 94.6mm; height: 31mm; }
+.foot .note { font-size: 8.5pt; line-height: 1.6; }
+.foot .qr { right: 0; top: 1mm; width: 29mm; height: 29mm; }
+
+.contact { position: absolute; left: 6.5mm; right: 6.5mm; top: 125.8mm; }
+.contact-info { font-size: 9pt; line-height: 1.42; }
+.contact .fb {
+  position: absolute;
+  right: 0;
+  width: 29mm;
+  text-align: center;
+  top: 4.2mm;
+  font-family: "Times New Roman", Georgia, serif;
+  font-size: 10.5pt;
+  font-weight: 700;
+}
+
+.card .closing { position: absolute; left: 6.5mm; bottom: 4.4mm; font-size: 9pt; }
+
+/* ---------- 列印 ---------- */
+
+@page { size: 101.6mm 152.4mm; margin: 0; }
+
+@media print {
+  body { background: #fff; }
+  .toolbar, .editor, .stage .hint, .card-size { display: none !important; }
+  .layout { padding: 0; display: block; }
+  .zoombox { width: auto; height: auto; }
+  .card { box-shadow: none; margin: 0; transform: none !important; }
+}
+
+@media (max-width: 900px) {
+  .editor { flex: 1 1 100%; }
+}

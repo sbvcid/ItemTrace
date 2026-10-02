@@ -1,0 +1,21 @@
+# 讓 repo 內容與工作目錄一致，避免跨平台時整個檔案被改寫。
+* text=auto
+
+# Windows 批次檔必須是 CRLF，否則在 cmd.exe 會壞掉。
+*.bat text eol=crlf
+
+# 原始碼與文件固定 LF。
+*.py text eol=lf
+*.sql text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+
+# 二進位檔不要碰。
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.pdf binary
+*.db binary

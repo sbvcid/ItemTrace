@@ -1,0 +1,62 @@
+# ── 本機資料，永遠不進 Git ──────────────────────────────────────────
+# 整個資料夾可以搬移備份，所以商品、照片、設定都在本機。
+# 唯一需要備份的是 DATA_ROOT，不是這個 repo。
+
+# 資料庫（WAL 模式下還有 -wal / -shm）
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# 本機設定。config.example.json 是樣板，由它產生 config.json。
+config.json
+
+# 商品照片與待處理檔案
+files/
+inbox/
+backups/
+
+# ── Python ───────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+env/
+.mypy_cache/
+.ruff_cache/
+
+# ── 測試 ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ── 憑證與本機機密 ────────────────────────────────────────────────
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa
+id_ed25519
+credentials.json
+secrets.json
+.netrc
+.npmrc
+
+# ── 作業系統與編輯器 ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

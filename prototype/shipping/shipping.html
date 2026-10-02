@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>出貨單排版技術（無建置）</title>
+<link rel="stylesheet" href="shipping.css">
+</head>
+<body>
+
+<!--
+  這是 SPEC-v1 §9 指名要保留的技術資產：出貨單的 mm 級版面控制與標籤機列印。
+
+  為什麼獨立放這裡：
+    原本這些檔案在舊概念驗證（交易紀錄）裡，和 v1 的資料模型無關。
+    舊版含賣家本人的姓名、電話、地址與社群 QR，不適合放在公開 repo，
+    已全部移除。這裡只留下排版技術本身，聯絡資訊一律是 placeholder。
+
+  要接回 v1 時（§13 擴充點「出貨單」）：
+    只需讀 items / identifiers 填欄位，不必碰 v1 的資料模型。
+  商品以外的欄位（序號、編號）已對應 SPEC-v1 §5 的資料。
+-->
+
+<div class="toolbar">
+  <div class="grow"></div>
+  <div class="card-size">
+    <span>尺寸</span>
+    <button type="button" data-size="4x6" class="on">4 &times; 6 吋</button>
+    <button type="button" data-size="100x150">100 &times; 150 mm</button>
+  </div>
+  <div class="zoom">
+    <span>預覽</span>
+    <button type="button" data-zoom="1" class="on">100%</button>
+    <button type="button" data-zoom="1.5">150%</button>
+    <button type="button" data-zoom="2">200%</button>
+  </div>
+  <button id="print" class="primary">列印出貨單</button>
+</div>
+
+<div class="layout">
+  <form class="editor" id="editor" autocomplete="off">
+    <h1>出貨單</h1>
+
+    <label for="f-date">日期</label>
+    <input id="f-date" type="date">
+    <small>開單時自動填入今天，需要時可以改。</small>
+
+    <label for="f-items">商品</label>
+    <textarea id="f-items" rows="5" placeholder="一行一個商品，例如：&#10;CPU 型號&#10;顯示卡型號"></textarea>
+    <small>一行一個，會照順序印在單上。這張單最多印 3 行。</small>
+
+    <label for="f-extra">單上備註<em>選填</em></label>
+    <input id="f-extra" maxlength="30" placeholder="例：含原廠風扇">
+    <small>印在商品清單下方，不填就不會印。</small>
+
+    <div class="grid2">
+      <div>
+        <label for="f-serial">序號<em>選填</em></label>
+        <input id="f-serial" placeholder="XXXXXXXXXXXX" autocapitalize="characters" spellcheck="false">
+        <small>印在商品清單下方。退貨時比對用，建議從 items / identifiers 帶入。</small>
+      </div>
+      <div>
+        <label for="f-code">編號<em>選填</em></label>
+        <input id="f-code" placeholder="ITM-0001">
+        <small>對應 v1 的 item id 或平台流水編號。</small>
+      </div>
+    </div>
+
+    <div class="quick">
+      <span class="muted">快速填入</span>
+      <div class="chips" id="chips"></div>
+    </div>
+  </form>
+
+  <div class="stage">
+    <div class="zoombox" id="zoombox">
+    <div class="card" id="card">
+
+      <!-- 賣家自己的 logo：位置已量好，放一張自己的圖即可。
+      <img class="logo" src="logo.png" alt=""> -->
+
+      <div class="head">
+        <div class="title">出貨單</div>
+        <div class="subtitle">Delivery Order</div>
+        <div class="date">日期：<b id="out-date">—</b></div>
+      </div>
+
+      <div class="goods">
+        <div class="goods-label">商品：</div>
+        <div class="goods-list" id="out-items"></div>
+        <div class="goods-meta">
+          <span id="out-serial"></span>
+          <span id="out-code"></span>
+        </div>
+        <div class="goods-extra" id="out-extra"></div>
+      </div>
+
+      <div class="thanks">感謝您的購買</div>
+
+      <div class="foot">
+        <div class="note">
+          小提醒：請確認商品數量與狀況<br>
+          商品收到後若有任何問題<br>
+          請於鑑賞期內告知<br>
+          將盡速為您處理
+        </div>
+        <!-- 賣家自己的聯絡 QR：位置已量好。
+        <img class="qr" src="qr.png" alt="聯絡方式"> -->
+      </div>
+
+      <div class="contact">
+        <!-- placeholder：請換成自己的聯絡資訊 -->
+        <div class="contact-info">
+          聯絡人：　<your name><br>
+          電話：　<your phone><br>
+          地址：　<your address>
+        </div>
+      </div>
+
+      <div class="closing">祝您有美好的一天！</div>
+    </div>
+    </div>
+    <p class="hint" id="size-label">實際尺寸 4 × 6 吋（101.6 × 152.4 mm）</p>
+  </div>
+</div>
+
+<style id="page-size">@page { size: 101.6mm 152.4mm; margin: 0; }</style>
+
+<script src="shipping.js"></script>
+</body>
+</html>

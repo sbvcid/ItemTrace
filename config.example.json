@@ -1,0 +1,8 @@
+{
+  "data_root": ".",
+  "database": "catalog.db",
+  "backup_dir": "backups",
+  "backup_keep": 30,
+  "server_host": "127.0.0.1",
+  "server_port": 8731
+}

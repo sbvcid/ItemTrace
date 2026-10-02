@@ -1,0 +1,5 @@
+# SPEC-v1 §9 指定的技術選型：FastAPI + uvicorn。
+# 資料層、檔案層、CLI 只用標準函式庫，依赖只有 HTTP 這一層。
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
