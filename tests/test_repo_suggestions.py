@@ -30,9 +30,17 @@ def test_suggestion_keeps_source_photo(repo, item):
 
 
 def test_suggestion_field_is_restricted(repo, item):
-    for field in ("price", "identifier:uuid", "notes"):
+    # notes 原本在這裡（Phase 2 依 SPEC-v1 §2.2 的註解）是不可建議的欄位，
+    # Phase 8A 起開放 —— 外部 Vision 常從照片推斷外觀描述，放進 notes 合理。
+    for field in ("price", "identifier:uuid", "quantity", "status"):
         with pytest.raises(ValidationError):
             repo.add_suggestion(item.id, field, "x")
+
+
+def test_notes_is_suggestable_since_phase8a(repo, item):
+    suggestion = repo.add_suggestion(item.id, "notes", "外觀良好，有輕微刮痕")
+    repo.accept_suggestion(suggestion.id)
+    assert repo.get_item(item.id).notes == "外觀良好，有輕微刮痕"
 
 
 def test_suggestion_requires_existing_item(repo):

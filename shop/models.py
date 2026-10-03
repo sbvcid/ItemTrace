@@ -46,7 +46,11 @@ SUGGESTION_STATUSES = ("pending", "accepted", "rejected", "superseded")
 
 #: suggestions.field 允許直接寫入 items 的欄位；identifier 類另建 identifiers
 #: （SPEC-v1 §2.2 field 註解：name|brand|model|category|condition|identifier:serial）。
-SUGGESTABLE_FIELDS = ("name", "brand", "model", "category", "condition")
+#: suggestions.field 可以直接寫進 items 的欄位；identifier 類另建 identifiers。
+#: 來源是 SPEC-v1 §2.2 的 field 註解，Phase 8A 起加上 notes ——
+#: 外部 Vision 常從照片推斷外觀描述，放進 notes 合理。
+#: quantity 不在列表裡：數量是事實，不是 AI 的判斷。
+SUGGESTABLE_FIELDS = ("name", "brand", "model", "category", "condition", "notes")
 
 #: suggestions.field 的識別碼前綴，後面接 identifiers.kind。
 IDENTIFIER_FIELD_PREFIX = "identifier:"

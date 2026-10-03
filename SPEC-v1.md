@@ -121,7 +121,7 @@ CREATE INDEX idx_ident_norm ON identifiers(normalized);
 CREATE TABLE suggestions (
     id               TEXT PRIMARY KEY,
     item_id          TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-    field            TEXT NOT NULL,            -- name|brand|model|category|condition|identifier:serial
+    field            TEXT NOT NULL,            -- name|brand|model|category|condition|notes|identifier:serial
     value            TEXT NOT NULL,
     confidence       REAL,
     source           TEXT NOT NULL DEFAULT 'external',
