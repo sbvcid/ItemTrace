@@ -124,7 +124,12 @@ async function mountPage(options = {}) {
       const method = (init && init.method) || "GET";
       calls.push(`${method} ${path}`);
 
-      if (path.includes("/events")) return ok(state.events);
+      if (path.includes("/events")) {
+        if (options.failEventsAfterSave && state.saved) {
+          return fail(503, "歷史服務暫時無法回應");
+        }
+        return ok(state.events);
+      }
       if (path === "/api/stats?limit=1") return ok({ counts: {}, categories: [], recent: [] });
       if (path === "/api/identifiers/lookup") {
         return ok({ value: "", normalized: "", matches: [] });
@@ -137,10 +142,24 @@ async function mountPage(options = {}) {
           return fail(options.decisionError, options.decisionDetail || "已有相同識別碼");
         }
         if (options.onDecide) options.onDecide(state, id, action);
+        state.decided = true;
         return ok({ id, status: action === "accept" ? "accepted" : "rejected" });
+      }
+      /* 欄位 PATCH */
+      if (path === "/api/items/ITM-0001" && (init && init.method) === "PATCH") {
+        if (options.saveError) {
+          return fail(options.saveError, options.saveDetail || "欄位不合法");
+        }
+        state.saved = true;
+        if (options.onSave) options.onSave(state);
+        return ok(state.detail.item);
       }
       if (path === "/api/items/ITM-0001") {
         if (options.failDetail) return ok({});
+        /* 決定已經成功，但重新載入失敗 —— 8B.1 要驗的就是這個語義 */
+        if (state.decided && options.failReloadAfterDecide) {
+          return fail(503, "服務暫時無法回應");
+        }
         return ok(state.detail);
       }
       return ok({});
@@ -273,6 +292,23 @@ async function scenario(label, options = {}) {
       afterSectionShown: page.view.element("pending-sec").hidden === false,
     };
   }
+  if (options.submitForm) {
+    const form = page.view.element("form");
+    const input = page.view.element("f-brand");
+    input.value = "華碩";
+    await Promise.all((input.listeners.input || []).map((fn) => fn({})));
+    await Promise.all((form.listeners.submit || []).map((fn) => fn({ preventDefault() {} })));
+    await page.view.flush();
+    return {
+      ...base,
+      savedText: page.view.element("saved").textContent,
+      savedHidden: page.view.element("saved").hidden,
+      errorBoxText: (page.view.element("error") || {}).textContent || "",
+      errorBoxChildren: page.view.element("error").childNodes.map((c) => c.textContent),
+      saveButtonDisabled: page.view.element("save").disabled,
+      afterBrand: page.view.element("f-brand").value,
+    };
+  }
   return base;
 }
 
@@ -355,6 +391,22 @@ async function scenario(label, options = {}) {
       state.detail.suggestions[0].status = "accepted";
     },
     click: { card: 0, action: "accept" },
+  }));
+
+  /* 8B.1：POST 成功，但重載失敗 */
+  results.push(await scenario("接受成功但重載失敗", {
+    failReloadAfterDecide: true,
+    onDecide: (state) => { state.detail.item.brand = "華碩"; },
+    click: { card: 0, action: "accept", errorOn409: true },
+  }));
+  results.push(await scenario("拒絕成功但重載失敗", {
+    failReloadAfterDecide: true,
+    click: { card: 0, action: "reject", errorOn409: true },
+  }));
+  /* 對照組：PATCH 成功但歷史載入失敗 */
+  results.push(await scenario("欄位儲存成功但歷史載入失敗", {
+    failEventsAfterSave: true,
+    submitForm: true,
   }));
 
   process.stdout.write(JSON.stringify(results, null, 2));

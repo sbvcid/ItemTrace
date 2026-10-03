@@ -430,6 +430,13 @@ details > div { padding: 0 16px 14px; }
   color: #ffc9cb;
   font-size: 13px;
 }
+/* 決定已經生效、只是畫面沒載回來 —— 用警示色而不是錯誤色，
+   免得看起來像「可以再試一次」 */
+.sugg-error.sugg-warn {
+  background: rgba(240, 180, 41, .12);
+  border-color: rgba(240, 180, 41, .55);
+  color: #ffe0a3;
+}
 
 .saved { color: var(--ok); font-size: 13px; }
 

@@ -242,6 +242,99 @@ def test_unsaved_form_edits_survive_a_decision(views):
     assert row["afterCardCount"] == 0
 
 
+# ----------------------------------------------------------------------
+# 8B.1：決定成功但重載失敗 —— 不能說成「接受失敗」
+#
+# POST 之後 refresh() 也可能失敗（events 或 detail 請求掛掉）。那時候
+# 建議已經被接受了，說「接受失敗」會讓人再按一次，然後拿到 400。
+# 兩種失敗必須分開講。
+# ----------------------------------------------------------------------
+
+
+def test_accept_succeeded_but_reload_failed_is_not_reported_as_failure(views):
+    row = views["接受成功但重載失敗"]
+    assert row["afterErrorHidden"] is False
+    assert "接受失敗" not in row["afterErrorText"]
+    assert "接受成功" in row["afterErrorText"]
+    assert "重新整理" in row["afterErrorText"]
+
+
+def test_reload_failure_message_quotes_the_underlying_error(views):
+    text = views["接受成功但重載失敗"]["afterErrorText"]
+    assert "服務暫時無法回應" in text
+
+
+def test_decided_card_stays_visible_when_reload_failed(views):
+    """畫面是舊的，卡片還在 —— 但要說清楚它已經被決定了。"""
+    row = views["接受成功但重載失敗"]
+    assert row["afterCardCount"] == 1
+    assert row["afterSectionShown"] is True
+
+
+def test_decided_card_is_not_decidable_again_after_reload_failure(views):
+    """決定已經發生，再按一次只會拿到 400。卡片必須鎖住。"""
+    row = views["接受成功但重載失敗"]
+    assert row["afterDisabled"] == [True, True]
+
+
+def test_reject_succeeded_but_reload_failed_is_also_not_a_failure(views):
+    row = views["拒絕成功但重載失敗"]
+    assert "拒絕失敗" not in row["afterErrorText"]
+    assert "拒絕成功" in row["afterErrorText"]
+    assert row["afterDisabled"] == [True, True]
+
+
+def test_reload_failure_does_not_wedge_the_whole_page(views):
+    """只是這張卡的訊息出問題，不該讓整頁變成「找不到這件商品」。"""
+    for label in ("接受成功但重載失敗", "拒絕成功但重載失敗"):
+        assert views[label]["notFoundShown"] is False, label
+
+
+def test_field_save_success_is_not_reported_as_failure_when_history_fails(views):
+    """同一個混淆也存在 PATCH：欄位存好了，不能因為歷史載不到就說儲存失敗。"""
+    row = views["欄位儲存成功但歷史載入失敗"]
+    messages = " ".join(row["errorBoxChildren"])
+    assert "儲存失敗" not in messages
+    assert "已儲存" in messages
+    assert "歷史" in messages
+    assert row["savedText"] == "已儲存"
+    assert row["savedHidden"] is False
+
+
+def test_field_save_button_is_re_enabled_after_a_history_failure(views):
+    """歷史載不到不該讓人卡住不能再存。"""
+    assert views["欄位儲存成功但歷史載入失敗"]["saveButtonDisabled"] is False
+
+
+def test_reload_failure_uses_the_warning_style(views):
+    """決定已生效只是畫面過期 —— 用警示色而不是錯誤色，
+    免得看起來像「再試一次」。"""
+    css = (Path(__file__).resolve().parents[1] / "ui" / "app.css").read_text(
+        encoding="utf-8"
+    )
+    assert ".sugg-error.sugg-warn" in css
+    source = (Path(__file__).resolve().parents[1] / "ui" / "item.js").read_text(
+        encoding="utf-8"
+    )
+    assert 'classList.add("sugg-warn")' in source
+
+
+def test_decision_and_reload_failures_are_separate_code_paths(client):
+    """結構上的保險：POST 與 refresh 不在同一個 try 裡。"""
+    source = (Path(__file__).resolve().parents[1] / "ui" / "item.js").read_text(
+        encoding="utf-8"
+    )
+    body = source.split("async function decide(")[1].split("\nasync function")[0]
+    # 兩個 catch：第一個處理 POST 失敗，第二個處理重載失敗
+    assert body.count("} catch (err) {") == 2
+    post_at = body.index('"/api/suggestions/"')
+    first_catch = body.index("} catch (err) {")
+    refresh_at = body.index("await refresh()")
+    assert post_at < first_catch < refresh_at, (
+        "refresh 必須在 POST 的 try/catch 之外，才不會被混為一談"
+    )
+
+
 def test_source_text_has_no_ai_client_and_no_bulk_action():
     """8B 不碰 AI client，也不做批次接受。"""
     source = (Path(__file__).resolve().parents[1] / "ui" / "item.js").read_text(

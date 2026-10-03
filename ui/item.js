@@ -130,25 +130,42 @@ function cardFor(suggestionId) {
   return document.querySelector('.sugg[data-suggestion="' + suggestionId + '"]');
 }
 
-/* 接受或拒絕。失敗時（例如 identifier 撞號回 409）卡片要留在畫面上並顯示
-   真實訊息 —— 絕不能看起來像成功，因為伺服器根本沒動。 */
+/* 接受或拒絕。
+   兩種失敗必須分開講：
+     POST 失敗      → 伺服器沒動，建議仍是 pending → 卡片留著、按鈕交回去
+     重載失敗       → 建議已經被接受了，只是畫面過期
+   混在一起會出兩種毛病：該再按一次的人按不到，不該再按的人一直按到 400。 */
 async function decide(card, suggestionId, action) {
   const slot = card.errorSlot;
   slot.hidden = true;
   slot.textContent = "";
   setCardBusy(card, true);
 
+  const verb = action === "accept" ? "接受" : "拒絕";
   try {
     await api(
       "/api/suggestions/" + encodeURIComponent(suggestionId) + "/" + action,
       { method: "POST" }
     );
-    await refresh();
   } catch (err) {
     /* 伺服器沒動 → 建議仍是 pending，把按鈕交回去讓人再試一次 */
     setCardBusy(card, false);
     slot.hidden = false;
-    slot.textContent = (action === "accept" ? "接受失敗：" : "拒絕失敗：") + err.message;
+    slot.textContent = verb + "失敗：" + err.message;
+    return;
+  }
+
+  /* 到這裡建議已經被決定了，接下來重載失敗也不能說「接受失敗」 */
+  try {
+    await refresh();
+  } catch (err) {
+    /* 畫面是舊的，不能讓人再對同一筆建議按一次 —— 決定已經發生了。
+       訊息說清楚「已接受但沒載回來」，並叫他自己重新整理。 */
+    slot.hidden = false;
+    slot.classList.add("sugg-warn");
+    slot.textContent =
+      verb + "成功，但重新載入資料失敗（" + err.message +
+      "）。請重新整理頁面確認結果。";
   }
 }
 
@@ -334,26 +351,37 @@ async function save(event) {
 
   const button = document.getElementById("save");
   button.disabled = true;
+  let updated;
   try {
-    const updated = await api("/api/items/" + encodeURIComponent(current.id), {
+    updated = await api("/api/items/" + encodeURIComponent(current.id), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(changes),
     });
-    current = updated;
-    FIELDS.forEach((name) => { field(name).value = updated[name]; });
-    dirty = new Set();
-    document.getElementById("head-status").replaceChildren(badge(updated.status));
-    document.getElementById("updated").textContent =
-      "更新於 " + shortTime(updated.updated_at);
-    saved.hidden = false;
-    saved.textContent = "已儲存";
-    setTimeout(() => { saved.hidden = true; }, 2000);
+  } catch (err) {
+    /* PATCH 沒成功 → 資料沒動，說「儲存失敗」是對的 */
+    showError("儲存失敗：" + err.message);
+    button.disabled = false;
+    return;
+  }
+
+  /* 到這裡欄位已經改成功了。接著只是把歷史拉回來，
+     就算拉不到也不能說「儲存失敗」 —— 那會讓人以為要再存一次。 */
+  current = updated;
+  FIELDS.forEach((name) => { field(name).value = updated[name]; });
+  dirty = new Set();
+  document.getElementById("head-status").replaceChildren(badge(updated.status));
+  document.getElementById("updated").textContent =
+    "更新於 " + shortTime(updated.updated_at);
+  saved.hidden = false;
+  saved.textContent = "已儲存";
+  setTimeout(() => { saved.hidden = true; }, 2000);
+  button.disabled = false;
+
+  try {
     renderEvents(await api("/api/items/" + encodeURIComponent(current.id) + "/events"));
   } catch (err) {
-    showError("儲存失敗：" + err.message);
-  } finally {
-    button.disabled = false;
+    showError("欄位已儲存，但修改歷史載入失敗（" + err.message + "）。");
   }
 }
 

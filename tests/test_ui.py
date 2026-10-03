@@ -457,14 +457,26 @@ def test_item_page_renders_without_errors(item_view):
     assert row["shownErrors"] == [], f"頁面報錯：{row['shownErrors']}"
 
 
+#: 這些情境是「刻意」產生錯誤訊息的（Phase 8B 的決定／重載失敗路徑），
+#: 不在「渲染錯誤不得顯示成找不到這件商品」的管轄範圍內。
+INTENTIONALLY_FAILING = {
+    "detail 抓不到",
+    "accept 回 409",
+    "accept 回 500",
+    "接受成功但重載失敗",
+    "拒絕成功但重載失敗",
+    "欄位儲存成功但歷史載入失敗",
+}
+
+
 def test_render_events_does_not_show_item_not_found(item_view):
     """renderEvents 出錯不該讓整頁變成「找不到這件商品」。
 
     這正是那個 bug 的症狀：例外被 start() 的 catch 吃掉，顯示成 notFound。
     """
     for label, row in item_view.items():
-        if label == "detail 抓不到":
-            continue  # 這情境本來就該顯示 notFound
+        if label in INTENTIONALLY_FAILING:
+            continue
         assert row["notFoundShown"] is False, f"{label} 顯示成找不到這件商品"
         assert row["shownErrors"] == [], f"{label}：{row['shownErrors']}"
 
