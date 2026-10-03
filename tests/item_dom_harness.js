@@ -106,6 +106,49 @@ function nonRevertibleEvents() {
   ];
 }
 
+/* Phase 9.1：entity_type / field 的完整矩陣。
+   UI 的 canRevert() 比 backend 的 revert_event() 嚴格：後端還會檢查
+   entity_type 與該 entity 的可改欄位。這裡把兩邊的邊界案例都列出來。 */
+function revertMatrix() {
+  const at = (id, entity_type, field, extra) => ({
+    id, entity_type, entity_id: "X1", type: "field.changed",
+    actor: "user", field, prev_value: "A", next_value: "B",
+    payload: {}, created_at: "2026-10-02T17:00:00", ...extra,
+  });
+  return [
+    /* item：後端允許的欄位 → 有按鈕 */
+    at("M01", "item", "brand"),
+    at("M02", "item", "quantity"),
+    at("M03", "item", "attributes"),
+    at("M04", "item", "status"),
+    /* item：後端不允許的欄位 → 無按鈕 */
+    at("M05", "item", "not_a_real_field"),
+    at("M06", "item", "created_at"),
+    at("M07", "item", "id"),
+    /* identifier：後端允許 → 有按鈕 */
+    at("M10", "identifier", "value"),
+    at("M11", "identifier", "kind"),
+    at("M12", "identifier", "confidence"),
+    /* identifier：normalized 有 field.changed 但後端不允許復原 */
+    at("M13", "identifier", "normalized"),
+    at("M14", "identifier", "not_a_field"),
+    /* observation / photo / suggestion：UI 刻意不支援 */
+    at("M20", "observation", "note"),
+    at("M21", "observation", "captured_at"),
+    at("M22", "photo", "angle"),
+    at("M23", "photo", "role"),
+    at("M24", "suggestion", "value"),
+    at("M25", "suggestion", "confidence"),
+    /* 未知 entity_type */
+    at("M30", "invoice", "total"),
+    at("M31", "unknown_thing", "whatever"),
+    /* field / prev_value 為 null，以及不是 field.changed */
+    at("M40", "item", null),
+    at("M41", "item", "brand", { prev_value: null }),
+    at("M42", "item", "brand", { type: "item.created" }),
+  ];
+}
+
 /* item.html 裡初始帶 hidden 的元素 */
 const INITIALLY_HIDDEN = {
   notfound: true,
@@ -527,6 +570,9 @@ async function scenario(label, options = {}) {
   /* Phase 9 的復原情境 */
   results.push(await scenario("復原按鈕只出現在可復原事件", {
     events: eventsPayload({ extraEvents: nonRevertibleEvents() }),
+  }));
+  results.push(await scenario("entity/field 矩陣", {
+    events: eventsPayload({ extraEvents: revertMatrix() }),
   }));
   results.push(await scenario("復原成功", {
     events: eventsPayload(),

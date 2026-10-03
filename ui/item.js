@@ -294,13 +294,39 @@ function renderObservations(observations, photosById) {
 
 /* -------------------------------------------------------------- 歷史 */
 
-/* 只有「把 prev_value 寫回去」有意義的事件才給復原。
-   條件和後端 shop/events.py 的 revert() 完全一致：type='field.changed'，
-   而且 field 與 prev_value 都在。用同一組條件才不會出現按下去必定 400 的
-   按鈕 —— item.created、suggestion.*、photo.created 都不該有。 */
+/* 可復原的範圍。
+
+   backend 的 Repository.revert_event() 是權威契約：除了 type='field.changed'、
+   field 與 prev_value 都要在，它還會檢查 entity_type 有沒有在 _REVERT_TARGETS，
+   以及 field 有沒有在該 entity 的可改欄位裡。所以只照前三項判斷會出現
+   「按鈕看得到、按下去必定 400」。
+
+   把整份 _REVERT_TARGETS 複製過來只是換一份會漂移的規則，這裡只列商品頁
+   真正需要的兩個 entity：
+
+     item        這一頁的表單就在改這些欄位，是復原的主要用途。
+                 attributes / status 不在表單裡，但後端允許復原，所以一併列入
+                 （用 FIELDS 串出來，避免兩份欄位清單各自漂移）。
+     identifier  序號打錯要救得回來，value 是最常見的。
+                 注意 backend 不允許復原 'normalized'：update_identifier 會為
+                 它寫 field.changed，但它不在 IDENTIFIER_EDITABLE_FIELDS 裡，
+                 所以不能列。
+
+   刻意排除（測試會驗證這些事件確實沒有按鈕）：
+     observation / photo  商品頁沒有這兩者的編輯入口，這些 field.changed 只
+                          可能來自直接呼叫 API。
+     suggestion          商品頁不能編輯建議；而已決定的建議在 backend 的
+                          update_suggestion() 會直接擲錯，本來就不可復原。 */
+const REVERTIBLE = {
+  item: FIELDS.concat(["attributes", "status"]),
+  identifier: ["value", "kind", "confidence", "source", "source_photo_id"],
+};
+
 function canRevert(event) {
-  return event.type === "field.changed" &&
-         !!event.field &&
+  const allowed = REVERTIBLE[event.entity_type];
+  return !!allowed &&
+         event.type === "field.changed" &&
+         allowed.indexOf(event.field) !== -1 &&
          event.prev_value !== null;
 }
 
