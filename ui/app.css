@@ -387,8 +387,9 @@ details > div { padding: 0 16px 14px; }
 
 .event {
   display: grid;
-  grid-template-columns: 118px 1fr;
+  grid-template-columns: 118px 1fr auto;
   gap: 10px;
+  align-items: start;
   padding: 7px 0;
   border-bottom: 1px solid var(--line);
   font-size: 13.5px;
@@ -398,6 +399,19 @@ details > div { padding: 0 16px 14px; }
 .event .what b { color: var(--accent); font-weight: 600; }
 .event .val { color: var(--muted); }
 .event .val .to { color: var(--ink); }
+.event .event-body { min-width: 0; }
+.event .event-act { white-space: nowrap; }
+.event .event-act button { padding: 5px 12px; font-size: 13px; }
+.event .event-error {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(242, 85, 90, .12);
+  border: 1px solid rgba(242, 85, 90, .5);
+  color: #ffc9cb;
+  font-size: 12.5px;
+}
 
 .sugg {
   background: rgba(76, 141, 255, .07);

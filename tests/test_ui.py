@@ -167,7 +167,7 @@ def test_frontend_touches_only_the_endpoints_it_needs(client):
     assert seen <= {
         "/api/items", "/api/stats", "/api/identifiers/lookup",
         "/api/inbox", "/api/inbox/group", "/api/inbox/photos",
-        "/api/inbox/intake", "/api/suggestions",
+        "/api/inbox/intake", "/api/suggestions", "/api/events",
     }, f"前端用到了範圍外的端點：{seen}"
     assert "/api/items" in spec and "/api/inbox/intake" in spec
 
@@ -382,11 +382,19 @@ def test_photos_are_only_opened_for_viewing(client, stocked):
 # ----------------------------------------------------------------------
 
 
-def test_ui_has_no_suggestion_or_revert_actions(client):
-    """Phase 6A/7 都沒有 suggestion 自動處理與 revert UI。"""
+def test_ui_has_no_suggestion_automation(client):
+    """Phase 6A–9 都沒有 suggestion 自動處理，也沒有批次復原。
+
+    逐筆 accept/reject 與單一事件復原是允許的（那是人按的），
+    被禁止的是「替人做決定」的流程。
+    """
     joined = "".join(ui_source(n) for n in UI_DIR.iterdir() if n.suffix in (".js", ".html"))
-    for forbidden in ("/accept", "/reject", "/api/events/", "/revert", "/void"):
+    for forbidden in ("/accept", "/reject", "acceptAll", "rejectAll", "/void"):
         assert forbidden not in joined, f"不該出現 {forbidden}"
+    # 單一復原要用既有端點，不自己開新的
+    assert '"/api/events/"' in joined
+    for forbidden in ("全部復原", "revertAll", "undoStack", "checkpoint"):
+        assert forbidden not in joined
 
 
 def test_ui_has_no_build_step_or_framework():
@@ -468,6 +476,12 @@ INTENTIONALLY_FAILING = {
     "接受成功但歷史載入失敗",
     "拒絕成功但歷史載入失敗",
     "欄位儲存成功但歷史載入失敗",
+    # Phase 9：這些情境是刻意讓復原失敗的
+    "復原失敗 400",
+    "復原失敗 409",
+    "復原失敗 500",
+    "復原成功但重載失敗",
+    "復原成功但歷史載入失敗",
 }
 
 
@@ -486,19 +500,19 @@ def test_render_events_does_not_show_item_not_found(item_view):
 def test_render_events_draws_one_row_per_event(item_view):
     """4 筆一般 event（含 prev_value 有值與 actor 為空兩種分支）→ 4 列。"""
     row = _normal(item_view)
-    assert row["eventRows"] == 4
+    assert row["eventRowCount"] == 4
     assert "GET /api/items/ITM-0001/events" in row["calls"]
 
 
 def test_render_events_handles_a_single_event(item_view):
-    assert item_view["一筆 events"]["eventRows"] == 1
+    assert item_view["一筆 events"]["eventRowCount"] == 1
 
 
 def test_render_events_handles_no_events(item_view):
     row = item_view["沒有 events"]
     assert row["error"] is None
     assert row["shownErrors"] == []
-    assert row["eventRows"] == 0
+    assert row["eventRowCount"] == 0
 
 
 def test_identifier_cell_renders_with_and_without_source_photo(item_view):

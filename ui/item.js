@@ -294,6 +294,101 @@ function renderObservations(observations, photosById) {
 
 /* -------------------------------------------------------------- 歷史 */
 
+/* 只有「把 prev_value 寫回去」有意義的事件才給復原。
+   條件和後端 shop/events.py 的 revert() 完全一致：type='field.changed'，
+   而且 field 與 prev_value 都在。用同一組條件才不會出現按下去必定 400 的
+   按鈕 —— item.created、suggestion.*、photo.created 都不該有。 */
+function canRevert(event) {
+  return event.type === "field.changed" &&
+         !!event.field &&
+         event.prev_value !== null;
+}
+
+function revertButton(event) {
+  return el("button", {
+    "data-action": "revert",
+    "data-id": event.id,
+    text: "復原",
+    onclick: () => revert(rowFor(event.id), event.id),
+  });
+}
+
+function rowFor(eventId) {
+  return document.querySelector('.event[data-event="' + eventId + '"]');
+}
+
+function eventRow(event) {
+  const what = el("div", { class: "what" }, [
+    el("b", { text: event.type }),
+    event.field ? " · " + fieldLabel(event.field) : "",
+  ]);
+  if (event.prev_value !== null || event.next_value !== null) {
+    what.appendChild(
+      el("div", { class: "val" }, [
+        JSON.stringify(event.prev_value),
+        " → ",
+        el("span", { class: "to", text: JSON.stringify(event.next_value) }),
+      ])
+    );
+  }
+
+  const errorSlot = el("div", { class: "event-error", hidden: true });
+  const row = el("div", { class: "event", "data-event": event.id }, [
+    el("div", { class: "when", text: shortTime(event.created_at) }),
+    el("div", { class: "event-body" }, [
+      what,
+      el("div", { class: "dim", style: "font-size:12px" }, [
+        [event.actor, event.entity_type].filter(Boolean).join(" · "),
+      ]),
+    ]),
+    canRevert(event) ? el("div", { class: "event-act" }, [revertButton(event)]) : null,
+    errorSlot,
+  ]);
+  row.errorSlot = errorSlot;
+  return row;
+}
+
+/* 復原是「對單一事件做反向操作」，不是回到某個時間點。
+   後端會把 prev_value 寫回並另記一筆 field.changed，原事件不動 ——
+   所以 A → B → 復原 會得到 A → B → A 的完整事件鏈。 */
+async function revert(row, eventId) {
+  const slot = row.errorSlot;
+  slot.hidden = true;
+  slot.textContent = "";
+  setRowBusy(row, true);
+
+  try {
+    await api("/api/events/" + encodeURIComponent(eventId) + "/revert",
+              { method: "POST" });
+  } catch (err) {
+    /* 伺服器沒動 → 歷史沒變，按鈕交回去讓人再試一次 */
+    setRowBusy(row, false);
+    slot.hidden = false;
+    slot.textContent = "復原失敗：" + err.message;
+    return;
+  }
+
+  /* 復原已經發生了。重載失敗不能說「復原失敗」，那會讓人再按一次。 */
+  try {
+    await refresh();
+  } catch (err) {
+    /* 訊息放頁面層級：refresh 可能已經把這列換掉，寫進舊節點等於沒寫。
+       按鈕維持鎖住 —— 別再對同一個事件按第二次。 */
+    showError(
+      "復原成功，但重新載入資料失敗（" + err.message +
+      "）。畫面可能不是最新的，請重新整理確認結果。"
+    );
+    const box = document.getElementById("error");
+    if (box && typeof box.scrollIntoView === "function") {
+      box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+}
+
+function setRowBusy(row, busy) {
+  row.querySelectorAll("button").forEach((button) => { button.disabled = busy; });
+}
+
 function renderEvents(events) {
   const box = document.getElementById("events");
   clear(box);
@@ -302,32 +397,7 @@ function renderEvents(events) {
     box.appendChild(el("div", { class: "dim", text: "沒有紀錄" }));
     return;
   }
-  events.forEach((event) => {
-    const what = el("div", { class: "what" }, [
-      el("b", { text: event.type }),
-      event.field ? " · " + event.field : "",
-    ]);
-    if (event.prev_value !== null || event.next_value !== null) {
-      what.appendChild(
-        el("div", { class: "val" }, [
-          JSON.stringify(event.prev_value),
-          " → ",
-          el("span", { class: "to", text: JSON.stringify(event.next_value) }),
-        ])
-      );
-    }
-    box.appendChild(
-      el("div", { class: "event" }, [
-        el("div", { class: "when", text: shortTime(event.created_at) }),
-        el("div", {}, [
-          what,
-          el("div", { class: "dim", style: "font-size:12px" }, [
-            [event.actor, event.entity_type].filter(Boolean).join(" · "),
-          ]),
-        ]),
-      ])
-    );
-  });
+  events.forEach((event) => box.appendChild(eventRow(event)));
 }
 
 /* -------------------------------------------------------------- 編輯 */

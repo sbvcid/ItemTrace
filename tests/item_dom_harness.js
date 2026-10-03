@@ -57,7 +57,7 @@ function detailPayload(options = {}) {
   };
 }
 
-function eventsPayload() {
+function eventsPayload(options = {}) {
   return [
     { id: "E1", entity_type: "item", entity_id: "ITM-0001",
       type: "item.created", actor: "user", field: null,
@@ -75,6 +75,34 @@ function eventsPayload() {
       type: "item.created", actor: "", field: null,
       prev_value: null, next_value: null, payload: {},
       created_at: "2026-10-02T15:00:00" },
+    ...(options.extraEvents || []),
+  ];
+}
+
+/* Phase 9：不可復原的事件 —— 沒有 field、prev_value 是 null、或不是 field.changed。
+   這些不該出現「復原」按鈕。 */
+function nonRevertibleEvents() {
+  return [
+    { id: "N1", entity_type: "item", entity_id: "ITM-0001",
+      type: "field.changed", actor: "user", field: null,
+      prev_value: "x", next_value: "y", payload: {},
+      created_at: "2026-10-02T16:00:00" },
+    { id: "N2", entity_type: "item", entity_id: "ITM-0001",
+      type: "field.changed", actor: "user", field: "brand",
+      prev_value: null, next_value: "y", payload: {},
+      created_at: "2026-10-02T16:01:00" },
+    { id: "N3", entity_type: "item", entity_id: "ITM-0001",
+      type: "item.created", actor: "user", field: null,
+      prev_value: null, next_value: null, payload: {},
+      created_at: "2026-10-02T16:02:00" },
+    { id: "N4", entity_type: "suggestion", entity_id: "S1",
+      type: "suggestion.accepted", actor: "user", field: "brand",
+      prev_value: "ASUS", next_value: "ASUS", payload: {},
+      created_at: "2026-10-02T16:03:00" },
+    { id: "N5", entity_type: "identifier", entity_id: "ID1",
+      type: "identifier.deleted", actor: "user", field: null,
+      prev_value: null, next_value: null, payload: {},
+      created_at: "2026-10-02T16:04:00" },
   ];
 }
 
@@ -124,6 +152,19 @@ async function mountPage(options = {}) {
       const method = (init && init.method) || "GET";
       calls.push(`${method} ${path}`);
 
+      /* Phase 9：復原單一事件。
+         必須排在下面 GET /events 的分支之前 ——
+         "/api/events/E2/revert" 也包含 "/events"。 */
+      const revert = path.match(/^\/api\/events\/([^/]+)\/revert$/);
+      if (revert) {
+        const [, id] = revert;
+        if (options.revertError) {
+          return fail(options.revertError, options.revertDetail || "只有 field.changed 事件可復原");
+        }
+        state.reverted = id;
+        if (options.onRevert) options.onRevert(state, id);
+        return ok(state.detail.item);
+      }
       if (path.includes("/events")) {
         if (options.failEventsAfterSave && state.saved) {
           return fail(503, "歷史服務暫時無法回應");
@@ -132,13 +173,16 @@ async function mountPage(options = {}) {
         if (state.decided && options.failEventsAfterDecide) {
           return fail(503, "歷史服務暫時無法回應");
         }
+        /* 復原已成功，但 events 掛掉 —— Phase 9 的對應情境 */
+        if (state.reverted && options.failEventsAfterRevert) {
+          return fail(503, "歷史服務暫時無法回應");
+        }
         return ok(state.events);
       }
       if (path === "/api/stats?limit=1") return ok({ counts: {}, categories: [], recent: [] });
       if (path === "/api/identifiers/lookup") {
         return ok({ value: "", normalized: "", matches: [] });
       }
-      /* accept / reject */
       const decision = path.match(/^\/api\/suggestions\/([^/]+)\/(accept|reject)$/);
       if (decision) {
         const [, id, action] = decision;
@@ -162,6 +206,10 @@ async function mountPage(options = {}) {
         if (options.failDetail) return ok({});
         /* 決定已經成功，但重新載入失敗 —— 8B.1 要驗的就是這個語義 */
         if (state.decided && options.failReloadAfterDecide) {
+          return fail(503, "服務暫時無法回應");
+        }
+        /* 復原已經成功，但 detail 載不回來 —— Phase 9 的對應情境 */
+        if (state.reverted && options.failReloadAfterRevert) {
           return fail(503, "服務暫時無法回應");
         }
         return ok(state.detail);
@@ -192,10 +240,25 @@ async function mountPage(options = {}) {
     shownErrors: shown,
     error,
     cards,
+    /* 歷史每一列 */
+    rows: view.element("events").childNodes,
     buttons: (card, action) =>
       card.querySelectorAll("button").filter((b) => b.dataset.action === action),
     cardText: (card) => card.textContent,
-    links: (card) => descendants(cards).length,
+    /* 點某一列上的復原鈕 */
+    async clickRevert(eventId) {
+      const row = view.element("events").childNodes
+        .find((r) => r.dataset.event === eventId);
+      if (!row) return { clicked: false };
+      const button = row.querySelectorAll("button")
+        .find((b) => b.dataset.action === "revert");
+      if (!button) return { clicked: false, noButton: true };
+      const flight = Promise.all((button.listeners.click || []).map((fn) => fn({})));
+      const busyDuring = button.disabled;
+      await flight;
+      await view.flush();
+      return { clicked: true, busyDuring };
+    },
     /* 點某一張卡上的按鈕。
        busyDuring 必須在「同步階段跑完、await 之前」量測 —— 等到 await 結束
        之後才看，成功的路徑會因為重新渲染而讀到已經被丟掉的舊節點。 */
@@ -246,7 +309,7 @@ async function scenario(label, options = {}) {
     cardCount: page.cards.length,
     /* 8A 的驗收用 */
     wallCells: page.view.element("wall").childNodes.length,
-    eventRows: page.view.element("events").countClass("event"),
+    eventRowCount: page.view.element("events").countClass("event"),
     cards: page.cards.map((card) => ({
       id: card.dataset.suggestion || null,
       text: page.cardText(card),
@@ -261,7 +324,38 @@ async function scenario(label, options = {}) {
       disabled: card.querySelectorAll("button").map((b) => b.disabled),
     })),
     calls: page.calls,
+    /* 歷史每一列的可復原性與文案 */
+    eventRows: (page.view.element("events").childNodes || []).map((row) => ({
+      id: row.dataset.event || null,
+      text: row.textContent,
+      actions: row.querySelectorAll("button").map((b) => b.dataset.action),
+      disabled: row.querySelectorAll("button").map((b) => b.disabled),
+      errorText: row.querySelector(".event-error")
+        ? row.querySelector(".event-error").textContent : null,
+      errorHidden: row.querySelector(".event-error")
+        ? row.querySelector(".event-error").hidden : null,
+    })),
   };
+
+  if (options.revertEvent) {
+    const result = await page.clickRevert(options.revertEvent);
+    const after = page.view.element("events").childNodes;
+    const target = after.find((r) => r.dataset.event === options.revertEvent);
+    return {
+      ...base,
+      reverted: result,
+      afterEventIds: after.map((r) => r.dataset.event),
+      afterRowActions: target
+        ? target.querySelectorAll("button").map((b) => b.dataset.action) : [],
+      afterRowDisabled: target
+        ? target.querySelectorAll("button").map((b) => b.disabled) : [],
+      afterRowError: target && target.querySelector(".event-error")
+        ? target.querySelector(".event-error").textContent : "",
+      afterPageError: page.view.element("error").childNodes.map((c) => c.textContent),
+      afterBrand: page.view.element("f-brand").value,
+      afterEventCount: page.view.element("event-count").textContent,
+    };
+  }
 
   if (options.click) {
     const index = options.click.card ?? 0;
@@ -428,6 +522,62 @@ async function scenario(label, options = {}) {
   results.push(await scenario("欄位儲存成功但歷史載入失敗", {
     failEventsAfterSave: true,
     submitForm: true,
+  }));
+
+  /* Phase 9 的復原情境 */
+  results.push(await scenario("復原按鈕只出現在可復原事件", {
+    events: eventsPayload({ extraEvents: nonRevertibleEvents() }),
+  }));
+  results.push(await scenario("復原成功", {
+    events: eventsPayload(),
+    brand: "華碩",
+    revertEvent: "E2",
+    onRevert: (state) => {
+      state.detail.item.brand = "";
+      /* 後端會另記一筆 field.changed，原事件不動 → A → B → A 完整鏈 */
+      state.events = [
+        { id: "E5", entity_type: "item", entity_id: "ITM-0001",
+          type: "field.changed", actor: "user", field: "brand",
+          prev_value: "華碩", next_value: "", payload: {},
+          created_at: "2026-10-02T17:00:00" },
+        ...state.events,
+      ];
+    },
+  }));
+  results.push(await scenario("復原失敗 400", {
+    events: eventsPayload(),
+    brand: "華碩",
+    revertError: 400,
+    revertDetail: "只有 field.changed 事件可復原（需同時有 field 與 prev_value）",
+    revertEvent: "E2",
+  }));
+  results.push(await scenario("復原失敗 409", {
+    events: eventsPayload(),
+    brand: "華碩",
+    revertError: 409,
+    revertDetail: "其他商品已有正規化後相同的識別碼",
+    revertEvent: "E3",
+  }));
+  results.push(await scenario("復原失敗 500", {
+    events: eventsPayload(),
+    brand: "華碩",
+    revertError: 500,
+    revertDetail: "boom",
+    revertEvent: "E2",
+  }));
+  results.push(await scenario("復原成功但重載失敗", {
+    events: eventsPayload(),
+    brand: "華碩",
+    failReloadAfterRevert: true,
+    revertEvent: "E2",
+    onRevert: (state) => { state.detail.item.brand = ""; },
+  }));
+  results.push(await scenario("復原成功但歷史載入失敗", {
+    events: eventsPayload(),
+    brand: "華碩",
+    failEventsAfterRevert: true,
+    revertEvent: "E2",
+    onRevert: (state) => { state.detail.item.brand = ""; },
   }));
 
   process.stdout.write(JSON.stringify(results, null, 2));
