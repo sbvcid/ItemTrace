@@ -43,32 +43,132 @@ function renderWall(photos) {
   });
 }
 
-/* ---------------------------------------------------------------- 建議 */
+/* ------------------------------------------------------------ 建議 */
 
-function renderSuggestions(items) {
+/* field 是 API 的欄位名，顯示給人看的用中文。 */
+const FIELD_LABELS = {
+  name: "品名",
+  brand: "品牌",
+  model: "型號",
+  category: "分類",
+  condition: "品況",
+  notes: "備註",
+};
+
+const IDENTIFIER_LABELS = {
+  serial: "序號",
+  imei: "IMEI",
+  barcode: "條碼",
+  custom: "識別碼",
+};
+
+function fieldLabel(field) {
+  if (isIdentifierField(field)) {
+    const kind = field.slice("identifier:".length);
+    return IDENTIFIER_LABELS[kind] || "識別碼";
+  }
+  return FIELD_LABELS[field] || field;
+}
+
+/* 注意：identifier_kind 是 Python dataclass 的 property，API 回應裡沒有這個
+   key，所以這裡要從 field 字串自己判斷。 */
+function isIdentifierField(field) {
+  return String(field).indexOf("identifier:") === 0;
+}
+
+function suggestionCard(suggestion, photosById) {
+  const source = suggestion.source_photo_id
+    ? photosById.get(suggestion.source_photo_id)
+    : null;
+  const meta = [
+    suggestion.confidence !== null ? "信心 " + suggestion.confidence : "",
+    suggestion.model_name ? suggestion.model_name : "",
+  ].filter(Boolean);
+
+  const errorSlot = el("div", { class: "sugg-error", hidden: true });
+  const card = el("div", { class: "sugg", "data-suggestion": suggestion.id }, [
+    el("div", { class: "sugg-line" }, [
+      el("span", { class: "badge", text: fieldLabel(suggestion.field) }),
+      el("span", { class: "sugg-value", text: suggestion.value }),
+    ]),
+    meta.length
+      ? el("div", { class: "dim", style: "font-size:12.5px", text: meta.join(" · ") })
+      : null,
+    el("div", { class: "sugg-foot" }, [
+      source
+        ? el("a", {
+            href: photoUrl(source.filename),
+            target: "_blank",
+            rel: "noopener",
+            text: "看來源照片",
+          })
+        : el("span", { class: "dim", text: "沒有來源照片" }),
+      suggestion.identifier_kind || isIdentifierField(suggestion.field)
+        ? el("span", { class: "dim", style: "font-size:12px", text: "接受後會建立識別碼" })
+        : null,
+      el("span", { style: "flex:1" }),
+      decisionButton(suggestion, "reject", "拒絕"),
+      decisionButton(suggestion, "accept", "接受"),
+    ]),
+    errorSlot,
+  ]);
+  card.errorSlot = errorSlot;
+  return card;
+}
+
+function decisionButton(suggestion, action, label) {
+  return el("button", {
+    class: action === "accept" ? "primary" : "",
+    "data-action": action,
+    "data-id": suggestion.id,
+    text: label,
+    onclick: () => decide(cardFor(suggestion.id), suggestion.id, action),
+  });
+}
+
+function cardFor(suggestionId) {
+  return document.querySelector('.sugg[data-suggestion="' + suggestionId + '"]');
+}
+
+/* 接受或拒絕。失敗時（例如 identifier 撞號回 409）卡片要留在畫面上並顯示
+   真實訊息 —— 絕不能看起來像成功，因為伺服器根本沒動。 */
+async function decide(card, suggestionId, action) {
+  const slot = card.errorSlot;
+  slot.hidden = true;
+  slot.textContent = "";
+  setCardBusy(card, true);
+
+  try {
+    await api(
+      "/api/suggestions/" + encodeURIComponent(suggestionId) + "/" + action,
+      { method: "POST" }
+    );
+    await refresh();
+  } catch (err) {
+    /* 伺服器沒動 → 建議仍是 pending，把按鈕交回去讓人再試一次 */
+    setCardBusy(card, false);
+    slot.hidden = false;
+    slot.textContent = (action === "accept" ? "接受失敗：" : "拒絕失敗：") + err.message;
+  }
+}
+
+function setCardBusy(card, busy) {
+  card.querySelectorAll("button").forEach((button) => { button.disabled = busy; });
+}
+
+function renderSuggestions(items, photosById) {
   const pending = items.filter((item) => item.status === "pending");
+  const decided = items.length - pending.length;
+
   document.getElementById("pending-sec").hidden = pending.length === 0;
-  document.getElementById("pending-count").textContent =
-    pending.length ? "（" + pending.length + " 筆）" : "";
+  document.getElementById("pending-count").textContent = pending.length
+    ? "（" + pending.length + " 筆待確認" +
+      (decided ? "，已決定 " + decided + " 筆" : "") + "）"
+    : "";
 
   const box = document.getElementById("pending");
   clear(box);
-  pending.forEach((item) => {
-    box.appendChild(
-      el("div", { class: "sugg" }, [
-        el("div", {}, [
-          el("b", { text: item.field }),
-          " → ",
-          el("span", { text: item.value }),
-        ]),
-        el("div", { class: "dim", style: "font-size:12.5px;margin-top:4px" }, [
-          item.confidence !== null ? "信心 " + item.confidence + " · " : "",
-          item.model_name ? item.model_name : "",
-          item.source_photo_id ? " · 有來源照片" : "",
-        ]),
-      ])
-    );
-  });
+  pending.forEach((item) => box.appendChild(suggestionCard(item, photosById)));
 }
 
 /* ------------------------------------------------------------ 識別碼 */
@@ -211,11 +311,13 @@ function renderEvents(events) {
 
 /* -------------------------------------------------------------- 編輯 */
 
-function fillForm(item) {
+function fillForm(item, keepDirty) {
   FIELDS.forEach((name) => {
+    /* 使用者可能正在這個欄位打字 —— 重載資料時不能蓋掉還沒存檔的內容 */
+    if (keepDirty && dirty.has(name)) return;
     field(name).value = item[name] === null ? "" : item[name];
   });
-  dirty = new Set();
+  if (!keepDirty) dirty = new Set();
 }
 
 async function save(event) {
@@ -273,40 +375,47 @@ FIELDS.forEach((name) => {
   field(name).addEventListener("input", () => dirty.add(name));
 });
 
+async function refresh() {
+  const data = await api("/api/items/" + encodeURIComponent(ITEM_ID));
+  current = data.item;
+  detail.hidden = false;
+
+  document.getElementById("head-id").textContent = current.id;
+  document.getElementById("head-status").replaceChildren(badge(current.status));
+  document.getElementById("updated").textContent =
+    "更新於 " + shortTime(current.updated_at);
+
+  /* 接受建議後會重載資料，但不要蓋掉還沒存檔的輸入 ——
+     使用者可能正在備註欄打字，順手點了接受，內容不能就這樣消失。
+     沒動過的欄位照常更新，所以接受的品牌還是會立刻顯示出來。 */
+  fillForm(current, true);
+  renderWall(data.photos);
+
+  const photosById = new Map(data.photos.map((photo) => [photo.id, photo]));
+  const byObservation = {};
+  data.photos.forEach((photo) => {
+    if (!photo.observation_id) return;
+    (byObservation[photo.observation_id] =
+      byObservation[photo.observation_id] || []).push(photo);
+  });
+
+  renderSuggestions(data.suggestions || [], photosById);
+  await renderIdentifiers(data.identifiers || [], photosById);
+  renderObservations(
+    (data.observations || []).map((observation) => ({
+      ...observation,
+      photos: byObservation[observation.id] || [],
+    })),
+    photosById
+  );
+  renderEvents(await api("/api/items/" + encodeURIComponent(ITEM_ID) + "/events"));
+  loadCategories();
+}
+
 (async function start() {
   showError("");
   try {
-    const data = await api("/api/items/" + encodeURIComponent(ITEM_ID));
-    current = data.item;
-    detail.hidden = false;
-
-    document.getElementById("head-id").textContent = current.id;
-    document.getElementById("head-status").replaceChildren(badge(current.status));
-    document.getElementById("updated").textContent =
-      "更新於 " + shortTime(current.updated_at);
-
-    fillForm(current);
-    renderWall(data.photos);
-
-    const photosById = new Map(data.photos.map((photo) => [photo.id, photo]));
-    const byObservation = {};
-    data.photos.forEach((photo) => {
-      if (!photo.observation_id) return;
-      (byObservation[photo.observation_id] =
-        byObservation[photo.observation_id] || []).push(photo);
-    });
-
-    renderSuggestions(data.suggestions || []);
-    await renderIdentifiers(data.identifiers || [], photosById);
-    renderObservations(
-      (data.observations || []).map((observation) => ({
-        ...observation,
-        photos: byObservation[observation.id] || [],
-      })),
-      photosById
-    );
-    renderEvents(await api("/api/items/" + encodeURIComponent(ITEM_ID) + "/events"));
-    loadCategories();
+    await refresh();
   } catch (err) {
     notFound.hidden = false;
     showError(err.message);

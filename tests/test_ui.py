@@ -167,7 +167,7 @@ def test_frontend_touches_only_the_endpoints_it_needs(client):
     assert seen <= {
         "/api/items", "/api/stats", "/api/identifiers/lookup",
         "/api/inbox", "/api/inbox/group", "/api/inbox/photos",
-        "/api/inbox/intake",
+        "/api/inbox/intake", "/api/suggestions",
     }, f"前端用到了範圍外的端點：{seen}"
     assert "/api/items" in spec and "/api/inbox/intake" in spec
 
@@ -447,7 +447,7 @@ def item_view():
 
 
 def _normal(item_view):
-    return item_view["一般情形（有照片、有來源照片、有 events）"]
+    return item_view["一般情形"]
 
 
 def test_item_page_renders_without_errors(item_view):
@@ -473,7 +473,7 @@ def test_render_events_draws_one_row_per_event(item_view):
     """4 筆一般 event（含 prev_value 有值與 actor 為空兩種分支）→ 4 列。"""
     row = _normal(item_view)
     assert row["eventRows"] == 4
-    assert "/api/items/ITM-0001/events" in row["called"]
+    assert "GET /api/items/ITM-0001/events" in row["calls"]
 
 
 def test_render_events_handles_a_single_event(item_view):
@@ -499,7 +499,7 @@ def test_identifier_cell_renders_with_and_without_source_photo(item_view):
 
 def test_identifiers_table_renders_when_there_are_identifiers(item_view):
     row = _normal(item_view)
-    assert row["called"][0] == "/api/items/ITM-0001"
+    assert row["calls"][0] == "GET /api/items/ITM-0001"
     assert row["detailShown"] is True
 
 

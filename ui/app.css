@@ -403,8 +403,32 @@ details > div { padding: 0 16px 14px; }
   background: rgba(76, 141, 255, .07);
   border: 1px solid rgba(76, 141, 255, .3);
   border-radius: 9px;
-  padding: 10px 12px;
-  margin-bottom: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.sugg-line {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.sugg-value { font-size: 16px; font-weight: 600; word-break: break-word; }
+.sugg-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 11px;
+}
+.sugg-foot button { padding: 8px 18px; }
+.sugg-error {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: rgba(242, 85, 90, .12);
+  border: 1px solid rgba(242, 85, 90, .5);
+  color: #ffc9cb;
+  font-size: 13px;
 }
 
 .saved { color: var(--ok); font-size: 13px; }
