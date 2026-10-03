@@ -79,7 +79,13 @@ dropzone.addEventListener("click", (event) => {
   if (event.target !== fileInput) fileInput.click();
 });
 fileInput.addEventListener("change", () => {
-  const picked = fileInput.files;
+  /* 先把 FileList 複製成 Array 再清 input —— 順序反過來會拿到 0 張。
+     input.files 是「活的」FileList：把 value 設成空字串會清空 selected
+     files，而 getter 在清單沒變時回傳同一個物件，所以先取參照再清空，
+     那個參照會跟著變空，upload() 的 `if (!files.length) return` 就直接
+     早退 —— 表面上不會報錯，實際上一張都沒上傳。
+     複製成 Array 是唯一能把這批 File 固定下來的做法。 */
+  const picked = Array.from(fileInput.files);
   fileInput.value = "";   // 清掉，讓同一批照片再選一次也會觸發 change
   upload(picked);
 });

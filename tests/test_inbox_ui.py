@@ -8,7 +8,11 @@
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -624,13 +628,19 @@ def test_dropzone_click_is_the_only_trigger(client):
     assert "fileInput.click()" in handler
 
 
-def test_change_handler_forwards_the_picked_files(client):
+def test_change_handler_copies_the_filelist_before_clearing(client):
+    """先把 FileList 複製成 Array，再清 input —— 順序反過來會拿到 0 張。
+
+    input.files 是活的 FileList：value = "" 會清空 selected files，
+    getter 又回傳同一個物件。所以先取參照再清空，那個參照會跟著變空，
+    upload() 的 `if (!files.length) return` 直接早退，一張都沒上傳。
+    """
     source = ui("inbox.js")
     change = source.split('fileInput.addEventListener("change"')[1].split("});")[0]
-    assert "upload(" in change
-    assert "fileInput.files" in change
-    # 選完要把 value 清掉，同一批照片再選一次才會再觸發
-    assert "fileInput.value = \"\"" in change
+    copy_at = change.index("Array.from(fileInput.files)")
+    clear_at = change.index('fileInput.value = ""')
+    assert copy_at < clear_at, "必須先複製 FileList 再清 input"
+    assert "upload(picked)" in change
 
 
 def test_upload_sends_multipart_field_named_files(client):
@@ -646,6 +656,66 @@ def test_upload_does_not_leave_the_start_button_enabled_by_accident(client):
     upload_body = source.split("async function upload(")[1].split("\nasync function")[0]
     assert "startBtn.disabled = true" in upload_body
     assert "if (!files || !files.length) return" in upload_body
+
+
+# ----------------------------------------------------------------------
+# 行為測試：在假的 DOM 上真的派發 change，看 upload 收到什麼
+#
+# 上面那些是原始碼比對，擋得住「忘了清 value」，擋不住「清 value 之後
+# FileList 被清空」。這組用 node 的 vm 跑真正的 ui/inbox.js，假造的 file
+# input 照 HTML Standard 建模（value="" 會清空 selected files、files
+# getter 回傳同一個活物件），所以真的會重現那個 bug。
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def harness():
+    """跑一次 tests/inbox_dom_harness.js，回傳每個張數情境的結果。"""
+    if shutil.which("node") is None:
+        pytest.skip("需要 node 才能做行為測試")
+    script = Path(__file__).resolve().parent / "inbox_dom_harness.js"
+    result = subprocess.run(
+        ["node", str(script)], capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    assert result.returncode == 0, f"harness 執行失敗：{result.stderr}"
+    return {row["requested"]: row for row in json.loads(result.stdout)}
+
+
+def test_picking_photos_actually_posts_them(harness):
+    """重點：選完照片要真的送出，不是安靜地什麼都沒做。"""
+    for count in (1, 3, 8):
+        row = harness[count]
+        assert row["posted"] is True, f"選 {count} 張卻沒有 POST"
+        assert row["method"] == "POST"
+        assert row["fieldNames"] == ["files"]
+        assert row["sentCount"] == count, f"選 {count} 張只送出 {row['sentCount']} 張"
+        assert row["sentNames"] == [f"IMG_{i}.jpg" for i in range(count)]
+
+
+def test_clearing_the_input_does_not_empty_the_upload(harness):
+    """input 被清空（為了讓同一批能再選一次）不影響已經抓到的檔案。"""
+    for count in (1, 3, 8):
+        row = harness[count]
+        assert row["fileInputCleared"] is True, "input 沒有被清空"
+        assert row["sentCount"] == count, "清空 input 把檔案清掉了"
+
+
+def test_multiple_photos_are_not_reduced_to_zero(harness):
+    """多張不會因為清 value 變成 0 張 —— 這正是 8d2d2b9 的症狀。"""
+    assert harness[8]["sentCount"] == 8
+    assert harness[3]["sentCount"] == 3
+
+
+def test_single_photo_upload_posts_one_file(harness):
+    assert harness[1]["sentNames"] == ["IMG_0.jpg"]
+    assert harness[1]["sentCount"] == 1
+
+
+def test_selecting_nothing_sends_no_request(harness):
+    """取消選取不該送出空請求。"""
+    assert harness[0]["posted"] is False
+    assert harness[0]["sentCount"] == 0
 
 
 def test_inbox_page_has_no_form_fields_before_building(client):
