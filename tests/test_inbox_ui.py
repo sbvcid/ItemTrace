@@ -436,6 +436,20 @@ def test_frontend_offers_to_build_the_untimed_group(client):
     assert source.count('api("/api/inbox/intake"') == 1
 
 
+def test_untimed_copy_does_not_promise_splitting(client):
+    """文案不能承諾 v1 沒有的功能。
+
+    SPEC-v1 §12 明確不做商品合併／拆分，所以不能寫「之後再拆」——
+    那會讓人以為之後能拆，其實拆不了。未分組那批會變成同一件商品，
+    文案要老實說清楚。
+    """
+    markup = ui("inbox.html")
+    for promised in ("之後再拆", "再拆開", "之後可以拆", "可以拆"):
+        assert promised not in markup, f"文案不該承諾拆分功能：{promised}"
+    # 反而要說清楚實際行為
+    assert "同一件商品" in markup
+
+
 def test_frontend_untimed_card_is_selectable_like_the_others(client):
     source = ui("inbox.js")
     assert "selectGroup(group.index)" in source
