@@ -413,13 +413,45 @@ details > div { padding: 0 16px 14px; }
   font-size: 12.5px;
 }
 
+/* SPEC §6：建議值與識別碼旁的「來源照片縮圖」。
+   直接用 original 檔（v1 的 derived/ 沒有縮圖產生器），靠 object-fit 裁方。
+   用 <a>：原生開新分頁、可 middle-click、鍵盤可用。 */
+.thumb {
+  position: relative;
+  display: block;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-2);
+  text-decoration: none;
+}
+.thumb:hover { border-color: var(--accent); text-decoration: none; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb-fail {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  font-size: 10.5px;
+}
+
 .sugg {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 11px;
+  align-items: start;
   background: rgba(76, 141, 255, .07);
   border: 1px solid rgba(76, 141, 255, .3);
   border-radius: 9px;
   padding: 12px;
   margin-bottom: 10px;
 }
+.sugg-main { min-width: 0; }
 .sugg-line {
   display: flex;
   align-items: baseline;
@@ -435,6 +467,9 @@ details > div { padding: 0 16px 14px; }
   margin-top: 11px;
 }
 .sugg-foot button { padding: 8px 18px; }
+
+.ident-value { display: flex; align-items: center; gap: 10px; }
+
 .sugg-error {
   margin-top: 10px;
   padding: 9px 11px;

@@ -49,6 +49,10 @@ function thumb(relative, caption) {
 /* ------------------------------------------------------------ 上傳 */
 
 async function upload(files) {
+  /* 兩種失敗必須分開講（和商品頁的 decide()／revert() 同一個道理）：
+       POST 失敗 → 檔案沒進來，說「上傳失敗」，使用者可以再試
+       重載失敗  → 檔案已經在 inbox 裡了，說「上傳失敗」會讓人重傳一遍，
+                   inbox 就會多一份重複檔 */
   if (!files || !files.length) return;
   showError("");
   const status = document.getElementById("upload-status");
@@ -59,13 +63,24 @@ async function upload(files) {
   const body = new FormData();
   Array.from(files).forEach((file) => body.append("files", file, file.name));
 
+  const verb = "上傳";
   try {
     await api("/api/inbox/photos", { method: "POST", body });
-    status.textContent = "上傳完成";
-    setTimeout(() => { status.hidden = true; }, 2000);
+  } catch (err) {
+    showError(verb + "失敗：" + err.message);
+    startBtn.disabled = false;
+    return;
+  }
+
+  status.textContent = "上傳完成";
+  setTimeout(() => { status.hidden = true; }, 2000);
+  try {
     await refresh();
   } catch (err) {
-    showError("上傳失敗：" + err.message);
+    showError(
+      verb + "成功，但重新載入待處理清單失敗（" + err.message +
+      "）。照片已經在 inbox 裡，請重新整理確認。"
+    );
   } finally {
     startBtn.disabled = false;
   }

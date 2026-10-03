@@ -76,6 +76,28 @@ function isIdentifierField(field) {
   return String(field).indexOf("identifier:") === 0;
 }
 
+/* SPEC-v1 §6：建議值與識別碼旁要顯示「來源照片縮圖」。縮圖直接用 original
+   檔（derived/ 在 v1 沒有縮圖產生器），靠 object-fit 裁成小方塊。
+   用 <a> 而不是 <button>：原生開新分頁、可 middle-click、鍵盤可用，
+   也不需要 onclick。沒有來源照片就明講，不顯示死掉的圖。 */
+function sourceThumb(photo, caption) {
+  const label = caption || photo.orig_name || "來源照片";
+  const link = el("a", {
+    class: "thumb",
+    "data-role": "source-thumb",
+    href: photoUrl(photo.filename),
+    target: "_blank",
+    rel: "noopener",
+    title: label,
+  });
+  const image = el("img", { src: photoUrl(photo.filename), alt: label, loading: "lazy" });
+  image.addEventListener("error", () => {
+    link.replaceChildren(el("span", { class: "thumb-fail", text: "讀不到" }));
+  });
+  link.appendChild(image);
+  return link;
+}
+
 function suggestionCard(suggestion, photosById) {
   const source = suggestion.source_photo_id
     ? photosById.get(suggestion.source_photo_id)
@@ -87,28 +109,31 @@ function suggestionCard(suggestion, photosById) {
 
   const errorSlot = el("div", { class: "sugg-error", hidden: true });
   const card = el("div", { class: "sugg", "data-suggestion": suggestion.id }, [
-    el("div", { class: "sugg-line" }, [
-      el("span", { class: "badge", text: fieldLabel(suggestion.field) }),
-      el("span", { class: "sugg-value", text: suggestion.value }),
-    ]),
-    meta.length
-      ? el("div", { class: "dim", style: "font-size:12.5px", text: meta.join(" · ") })
-      : null,
-    el("div", { class: "sugg-foot" }, [
-      source
-        ? el("a", {
-            href: photoUrl(source.filename),
-            target: "_blank",
-            rel: "noopener",
-            text: "看來源照片",
-          })
-        : el("span", { class: "dim", text: "沒有來源照片" }),
-      suggestion.identifier_kind || isIdentifierField(suggestion.field)
-        ? el("span", { class: "dim", style: "font-size:12px", text: "接受後會建立識別碼" })
+    source ? sourceThumb(source) : null,
+    el("div", { class: "sugg-main" }, [
+      el("div", { class: "sugg-line" }, [
+        el("span", { class: "badge", text: fieldLabel(suggestion.field) }),
+        el("span", { class: "sugg-value", text: suggestion.value }),
+      ]),
+      meta.length
+        ? el("div", { class: "dim", style: "font-size:12.5px", text: meta.join(" · ") })
         : null,
-      el("span", { style: "flex:1" }),
-      decisionButton(suggestion, "reject", "拒絕"),
-      decisionButton(suggestion, "accept", "接受"),
+      el("div", { class: "sugg-foot" }, [
+        source
+          ? el("a", {
+              href: photoUrl(source.filename),
+              target: "_blank",
+              rel: "noopener",
+              text: "看來源照片",
+            })
+          : el("span", { class: "dim", text: "沒有來源照片" }),
+        suggestion.identifier_kind || isIdentifierField(suggestion.field)
+          ? el("span", { class: "dim", style: "font-size:12px", text: "接受後會建立識別碼" })
+          : null,
+        el("span", { style: "flex:1" }),
+        decisionButton(suggestion, "reject", "拒絕"),
+        decisionButton(suggestion, "accept", "接受"),
+      ]),
     ]),
     errorSlot,
   ]);
@@ -225,22 +250,39 @@ async function renderIdentifiers(identifiers, photosById) {
     const source = photosById.get(identifier.source_photo_id);
     body.appendChild(
       el("tr", {}, [
-        el("td", {}, [el("span", { class: "badge", text: identifier.kind })]),
         el("td", {}, [
-          el("div", { text: identifier.value }),
-          identifier.confidence !== null
-            ? el("div", { class: "dim", style: "font-size:12px" }, [
-                "信心 " + identifier.confidence +
-                  (identifier.source === "accepted_suggestion" ? " · 來自建議" : ""),
-              ])
-            : null,
+          el("span", { class: "badge", text: identifier.kind }),
+        ]),
+        el("td", {}, [
+          el("div", { class: "ident-value" }, [
+            /* SPEC §6：識別碼欄位旁永遠顯示來源照片縮圖 */
+            source ? sourceThumb(source) : null,
+            el("div", {}, [
+              el("div", { text: identifier.value }),
+              identifier.confidence !== null
+                ? el("div", { class: "dim", style: "font-size:12px" }, [
+                    "信心 " + identifier.confidence +
+                      (identifier.source === "accepted_suggestion" ? " · 來自建議" : ""),
+                  ])
+                : null,
+            ]),
+          ]),
           conflict
-            ? el("div", { class: "badge warn", style: "margin-top:4px" }, [
-                "⚠ 撞號：" +
-                  conflict
-                    .map((row) => row.item_id + " 也有相同識別碼")
-                    .join("、"),
-              ])
+            ? el("div", { class: "badge warn", style: "margin-top:6px" },
+                conflict.map((row) =>
+                  /* SPEC §6：撞號提示附既有 item 的連結供比對。
+                     item_id 就在 lookup 的回應裡，不用另外開端點。 */
+                  el("span", { style: "margin-right:8px" }, [
+                    "⚠ 撞號：",
+                    el("a", {
+                      href: "/items/" + encodeURIComponent(row.item_id),
+                      "data-collision-link": row.item_id,
+                      text: row.item_id,
+                    }),
+                    " 也有相同識別碼",
+                  ])
+                )
+              )
             : null,
         ]),
         el("td", {}, [

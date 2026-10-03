@@ -223,8 +223,8 @@ async function mountPage(options = {}) {
         return ok(state.events);
       }
       if (path === "/api/stats?limit=1") return ok({ counts: {}, categories: [], recent: [] });
-      if (path === "/api/identifiers/lookup") {
-        return ok({ value: "", normalized: "", matches: [] });
+      if (path.includes("/api/identifiers/lookup")) {
+        return ok({ value: "", normalized: "", matches: options.collisionMatches || [] });
       }
       const decision = path.match(/^\/api\/suggestions\/([^/]+)\/(accept|reject)$/);
       if (decision) {
@@ -353,6 +353,20 @@ async function scenario(label, options = {}) {
     /* 8A 的驗收用 */
     wallCells: page.view.element("wall").childNodes.length,
     eventRowCount: page.view.element("events").countClass("event"),
+    /* Phase 10 §6：來源照片縮圖與撞號連結 */
+    thumbs: page.view
+      .all((n) => n.dataset && n.dataset.role === "source-thumb")
+      .map((n) => ({
+        src: n.querySelector("img")
+          ? n.querySelector("img").getAttribute("src") : null,
+        title: n.getAttribute("title") || null,
+      })),
+    collisionLinks: page.view
+      .all((n) => n.dataset && n.dataset.collisionLink)
+      .map((n) => ({
+        item: n.dataset.collisionLink,
+        href: n.getAttribute("href"),
+      })),
     cards: page.cards.map((card) => ({
       id: card.dataset.suggestion || null,
       text: page.cardText(card),
@@ -488,6 +502,40 @@ async function scenario(label, options = {}) {
   }));
   results.push(await scenario("沒有 pending 建議", {
     suggestions: [suggestion("S1", "brand", "華碩", { status: "accepted" })],
+  }));
+
+  /* Phase 10 §6：識別碼旁要有來源照片縮圖，撞號要有既有 item 的連結 */
+  results.push(await scenario("識別碼縮圖（沒有建議）", {
+    suggestions: [],
+    identifiers: [
+      { id: "ID1", item_id: "ITM-0001", kind: "serial", value: "BX-807 06_1234",
+        normalized: "BX807061234", confidence: 0.9, source: "human",
+        source_photo_id: "PHOTO1",
+        created_at: "2026-10-02T14:32:00", updated_at: "2026-10-02T14:32:00" },
+      { id: "ID2", item_id: "ITM-0001", kind: "imei", value: "990000862471854",
+        normalized: "990000862471854", confidence: null, source: "human",
+        source_photo_id: null,
+        created_at: "2026-10-02T14:33:00", updated_at: "2026-10-02T14:33:00" },
+    ],
+  }));
+  results.push(await scenario("識別碼縮圖與撞號連結", {
+    identifiers: [
+      { id: "ID1", item_id: "ITM-0001", kind: "serial", value: "BX-807 06_1234",
+        normalized: "BX807061234", confidence: 0.9, source: "human",
+        source_photo_id: "PHOTO1",
+        created_at: "2026-10-02T14:32:00", updated_at: "2026-10-02T14:32:00" },
+      { id: "ID2", item_id: "ITM-0001", kind: "imei", value: "990000862471854",
+        normalized: "990000862471854", confidence: null, source: "human",
+        source_photo_id: null,
+        created_at: "2026-10-02T14:33:00", updated_at: "2026-10-02T14:33:00" },
+    ],
+    collisionMatches: [
+      /* 另一件商品有正規化後相同的識別碼 */
+      { id: "ID9", item_id: "ITM-0007", kind: "serial", value: "BX-807 06_1234",
+        normalized: "BX807061234", confidence: 0.5, source: "human",
+        source_photo_id: null,
+        created_at: "2026-09-01T10:00:00", updated_at: "2026-09-01T10:00:00" },
+    ],
   }));
   results.push(await scenario("接受一般欄位", {
     onDecide: (state, id, action) => {

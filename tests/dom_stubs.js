@@ -129,6 +129,19 @@ function fakeElement(id, tagName = "div") {
     focus() {},
     querySelector(selector) { return queryTree(element, selector)[0] || null; },
     querySelectorAll(selector) { return queryTree(element, selector); },
+    /* 遞迴找出符合 data-role 的節點（Phase 10 的來源照片縮圖） */
+    findByRole(role) {
+      const out = [];
+      const walk = (node) => {
+        if (node && typeof node === "object" && node.dataset &&
+            node.dataset.role === role) {
+          out.push(node);
+        }
+        for (const child of (node && node.childNodes) || []) walk(child);
+      };
+      walk(element);
+      return out;
+    },
     /* 遞迴收集某個 class 的節點數 */
     countClass(name) {
       let total = classNames.has(name) ? 1 : 0;
@@ -199,10 +212,22 @@ function makeFileInput(files) {
   };
 }
 
+/* makeDocument 持有的所有根元素：getElementById 建立過的，以及
+   querySelector 找不到實體時回傳的穩定假元素（表格 tbody 就在這裡，
+   不把它們算進去等於掃不到識別碼那一列）。
+   注意 _roots / _selectors 是 Map，要用 .values() —— 直接展開會得到空陣列。 */
+function elementsIn(document) {
+  const roots = document._roots ? Array.from(document._roots.values()) : [];
+  const stubs = document._selectors ? Array.from(document._selectors.values()) : [];
+  return roots.concat(stubs);
+}
+
 function makeDocument(overrides = {}) {
   const elements = new Map();
   const selectors = new Map();
   return {
+    _roots: elements,
+    _selectors: selectors,
     getElementById(id) {
       if (overrides[id]) return overrides[id];
       if (!elements.has(id)) elements.set(id, fakeElement(id));
@@ -236,10 +261,21 @@ function mount({ scripts, documentOverrides = {}, windowProps = {}, fetchImpl })
     setTimeout: () => 0,
     clearTimeout: () => {},
     document,
-    window: Object.assign(
-      { location: { href: "", pathname: "/items" }, history: { replaceState() {} } },
-      windowProps
-    ),
+    /* location.origin 一定要在：api.js 的 url() 用它當 new URL() 的 base。
+       少了它 url() 會丟 TypeError，而 renderIdentifiers 的 lookup 剛好被
+       try/catch 吞掉 —— 撞號功能就這樣一路沒被任何測試真正執行過。 */
+    window: Object.assign({
+      location: {
+        href: "", pathname: "/items", origin: "http://127.0.0.1",
+        search: "", host: "127.0.0.1", protocol: "http:",
+      },
+      history: { replaceState() {} },
+    }, windowProps, {
+      location: Object.assign(
+        { href: "", pathname: "/items", origin: "http://127.0.0.1" },
+        (windowProps && windowProps.location) || {}
+      ),
+    }),
     fetch: fetchImpl || (async () => ({ ok: true, status: 200, text: async () => "{}" })),
   };
   sandbox.globalThis = sandbox;
@@ -252,9 +288,18 @@ function mount({ scripts, documentOverrides = {}, windowProps = {}, fetchImpl })
     document,
     element: (id) => document.getElementById(id),
     query: (selector) => document.querySelector(selector),
-    /* 等 await 鏈跑完（fetch 回傳的 promise 都已 resolve）。
-       refresh() 會串起 detail / identifiers lookup / events / stats 四段 await，
-       所以給多一點 tick。 */
+    /* 掃過所有已建立的根元素。渲染結果不一定掛在同一個根下面
+       （建議卡在 #pending、identifier 列在 tbody 的假元素裡）。 */
+    all(predicate) {
+      const out = [];
+      const walk = (node) => {
+        if (!node || typeof node !== "object") return;
+        if (predicate(node)) out.push(node);
+        for (const child of node.childNodes || []) walk(child);
+      };
+      for (const root of elementsIn(document)) walk(root);
+      return out;
+    },
     async flush(times = 40) {
       for (let i = 0; i < times; i += 1) await new Promise((r) => setImmediate(r));
     },
