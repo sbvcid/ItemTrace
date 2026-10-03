@@ -330,8 +330,110 @@ def test_intake_can_add_to_an_existing_item(client):
 
 
 # ----------------------------------------------------------------------
-# 錯誤：不能留下不一致的狀態
+# 沒有拍攝時間的照片：不能自動分組，但一定要能建檔
 # ----------------------------------------------------------------------
+
+
+def test_photo_without_capture_time_lands_ungrouped(client, config, monkeypatch):
+    """SPEC §14.4 的最後一階：EXIF、mtime、檔名都沒有 → 留空。"""
+    from shop import photos as photos_mod
+
+    monkeypatch.setattr(photos_mod, "_mtime_iso", lambda path: None)
+    (config.inbox_dir / "untimed.jpg").write_bytes(make_jpeg())
+
+    listing = client.get("/api/inbox").json()
+    assert listing["count"] == 1
+    assert listing["entries"][0]["captured_at"] is None
+    assert listing["entries"][0]["captured_from"] == "none"
+    # 後端刻意不把它放進任何 group
+    assert group_files(client) == []
+
+
+def test_untimed_photo_has_a_preview(client, config, monkeypatch):
+    from shop import photos as photos_mod
+
+    monkeypatch.setattr(photos_mod, "_mtime_iso", lambda path: None)
+    (config.inbox_dir / "untimed.jpg").write_bytes(make_jpeg())
+    relative = client.get("/api/inbox").json()["entries"][0]["relative"]
+    assert client.get(f"/files/{relative}").status_code == 200
+
+
+def test_untimed_photo_can_be_built_into_an_item(client, config, monkeypatch):
+    """缺口修補：沒有時間的照片也要走同一條 /api/inbox/intake。"""
+    from shop import photos as photos_mod
+
+    monkeypatch.setattr(photos_mod, "_mtime_iso", lambda path: None)
+    for index in range(2):
+        (config.inbox_dir / f"untimed{index}.jpg").write_bytes(
+            make_jpeg(width=1600 + index, height=1200)
+        )
+    relatives = [e["relative"] for e in client.get("/api/inbox").json()["entries"]]
+    assert relatives
+
+    response = client.post("/api/inbox/intake", json={"files": relatives})
+    assert response.status_code == 201, response.text
+    done = response.json()
+    assert done["item_id"] == "ITM-0001"
+    assert len(done["archived"]) == 2
+
+    detail = client.get(f"/api/items/{done['item_id']}").json()
+    assert [o["kind"] for o in detail["observations"]] == ["intake"]
+    # 時間留空，而不是填一個假時間
+    assert detail["observations"][0]["captured_at"] is None
+    assert all(p["captured_at"] is None for p in detail["photos"])
+    assert all(p["filename"].startswith(f"files/{done['item_id']}/original/")
+               for p in detail["photos"])
+    # 檔名沒有時間前綴，改用現在的時間戳
+    for photo in detail["photos"]:
+        assert len(config.resolve(photo["filename"]).name.split("_", 1)[0]) == 15
+
+    assert client.get("/api/inbox").json()["count"] == 0
+
+
+def test_untimed_and_timed_photos_are_separated(client, config, monkeypatch):
+    """有時間的自動分組，沒時間的另外一組，兩邊都能各自建檔。"""
+    from shop import photos as photos_mod
+
+    # 整段保持 mtime 不可用：EXIF 優先，所以有 EXIF 的那兩張不受影響
+    monkeypatch.setattr(photos_mod, "_mtime_iso", lambda path: None)
+    (config.inbox_dir / "untimed.jpg").write_bytes(make_jpeg())
+    upload_to_inbox(client, 2, tag="TIMED")
+
+    listing = client.get("/api/inbox").json()
+    timed = [e["relative"] for e in listing["entries"] if e["captured_at"]]
+    untimed = [e["relative"] for e in listing["entries"] if not e["captured_at"]]
+    assert len(timed) == 2 and len(untimed) == 1
+
+    groups = group_files(client)
+    assert [len(g["entries"]) for g in groups] == [2]
+
+    first = client.post("/api/inbox/intake", json={"files": timed}).json()
+    second = client.post("/api/inbox/intake", json={"files": untimed}).json()
+    assert first["item_id"] != second["item_id"]
+    assert client.get("/api/inbox").json()["count"] == 0
+
+
+def test_frontend_offers_to_build_the_untimed_group(client):
+    """未分組不能只是「顯示出來而已」，必須可選、可建檔。"""
+    markup = ui("inbox.html")
+    assert 'id="ungrouped"' in markup
+    assert "沒有拍攝時間" in markup
+    assert "時間讀不出來" in markup
+
+    source = ui("inbox.js")
+    # 未分組被當成一個可選的組合，走同一條 intake 路徑
+    assert "LOOSE_KEY" in source
+    assert "function choices()" in source
+    assert "groupCard(loose)" in source
+    assert "choices().find" in source
+    # 前端只有一條建檔路徑，不管有沒有時間都走它
+    assert source.count('api("/api/inbox/intake"') == 1
+
+
+def test_frontend_untimed_card_is_selectable_like_the_others(client):
+    source = ui("inbox.js")
+    assert "selectGroup(group.index)" in source
+    assert "group.captured_at ? timeRange(group)" in source
 
 
 def test_unknown_file_is_rejected_and_changes_nothing(client):

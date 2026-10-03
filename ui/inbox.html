@@ -51,14 +51,16 @@
     </div>
 
     <div class="groups" id="groups"></div>
+  </section>
 
-    <div id="ungrouped-wrap" hidden>
-      <h2>沒有拍攝時間 <span class="dim" id="ungrouped-count"></span></h2>
-      <p class="dim" style="font-size:13px;margin:-4px 0 10px">
-        這些照片的時間無法判斷，先不自動分組。要建檔請用上傳區重傳一次。
-      </p>
-      <div class="strip" id="ungrouped"></div>
-    </div>
+  <!-- 3b. 沒有時間的照片：不能自動分組，但一樣要能建檔 -->
+  <section id="ungrouped-sec" hidden>
+    <h2>沒有拍攝時間 <span class="dim" id="ungrouped-count"></span></h2>
+    <p class="dim" style="font-size:13px;margin:-4px 0 10px">
+      這些照片的時間讀不出來（EXIF、檔名都沒有），所以沒辦法自動分組。
+      可以整批建成一件商品，之後再拆。
+    </p>
+    <div class="groups" id="ungrouped"></div>
   </section>
 
   <!-- 4. 建檔：只有選好一組才有作用 -->

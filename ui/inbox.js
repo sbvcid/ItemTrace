@@ -14,10 +14,19 @@ const errorBox = document.getElementById("error");
 
 let entries = [];
 let groups = [];
+let loose = null;
 let selected = null;
+
+/* 沒有時間戳的組，用 key = -1 標示。key 是數字才不會和 group.index 撞。 */
+const LOOSE_KEY = -1;
 
 function inboxPhotoUrl(relative) {
   return "/files/" + relative;
+}
+
+/* 目前可以選的所有組合：自動分組的 + 沒有時間的那批。 */
+function choices() {
+  return loose ? groups.concat([loose]) : groups;
 }
 
 /* ------------------------------------------------------------ 縮圖 */
@@ -120,7 +129,10 @@ function groupCard(group) {
         }),
         el("div", { class: "grow" }, [
           el("div", { class: "group-count", text: group.entries.length + " 張照片" }),
-          el("div", { class: "group-time", text: timeRange(group) }),
+          el("div", {
+            class: "group-time",
+            text: group.captured_at ? timeRange(group) : "時間讀不出來",
+          }),
         ]),
       ]),
       el("div", { class: "strip" }, first.concat(
@@ -131,12 +143,12 @@ function groupCard(group) {
   return card;
 }
 
-function selectGroup(index) {
-  selected = index;
-  Array.from(groupsBox.querySelectorAll(".group")).forEach((card) => {
-    card.classList.toggle("on", Number(card.dataset.index) === index);
+function selectGroup(key) {
+  selected = key;
+  Array.from(document.querySelectorAll(".group")).forEach((card) => {
+    card.classList.toggle("on", Number(card.dataset.index) === key);
   });
-  const group = groups.find((g) => g.index === index);
+  const group = choices().find((g) => g.index === key);
   document.getElementById("build-label").textContent =
     "已選 " + group.entries.length + " 張，開始建檔？";
   buildBox.hidden = false;
@@ -160,8 +172,22 @@ async function refresh() {
   document.getElementById("nothing").hidden = entries.length > 0;
   document.getElementById("groups-sec").hidden = groups.length === 0;
 
-  // 選中的組若因為重新分組而消失，就清掉選擇
-  if (selected !== null && !groups.some((g) => g.index === selected)) {
+  // 沒被分到任何一組的檔案：時間解析不出來（EXIF、檔名都沒有）
+  const taken = new Set(
+    groups.flatMap((group) => group.entries.map((entry) => entry.relative))
+  );
+  const rest = entries.filter((entry) => !taken.has(entry.relative));
+  loose = rest.length
+    ? {
+        index: LOOSE_KEY,
+        captured_at: null,
+        captured_from: "none",
+        entries: rest,
+      }
+    : null;
+
+  // 選中的組合若因為重新分組而消失，就清掉選擇
+  if (selected !== null && !choices().some((g) => g.index === selected)) {
     selected = null;
     buildBox.hidden = true;
   }
@@ -169,19 +195,15 @@ async function refresh() {
   clear(groupsBox);
   groups.forEach((group) => groupsBox.appendChild(groupCard(group)));
 
-  // 沒被分到任何一組的檔案：通常是時間解析不出來
-  const taken = new Set(
-    groups.flatMap((group) => group.entries.map((entry) => entry.relative))
-  );
-  const loose = entries.filter((entry) => !taken.has(entry.relative));
-  document.getElementById("ungrouped-wrap").hidden = loose.length === 0;
-  document.getElementById("ungrouped-count").textContent =
-    loose.length ? "（" + loose.length + " 張）" : "";
-  const strip = document.getElementById("ungrouped");
-  clear(strip);
-  loose.forEach((entry) => strip.appendChild(thumb(entry.relative, entry.captured_at
-    ? entry.captured_at.slice(11, 16)
-    : "無時間")));
+  document.getElementById("ungrouped-sec").hidden = !loose;
+  const looseBox = document.getElementById("ungrouped");
+  clear(looseBox);
+  if (loose) {
+    document.getElementById("ungrouped-count").textContent =
+      "（" + loose.entries.length + " 張）";
+    // 沒有時間的那批也能建檔：走同一條 /api/inbox/intake
+    looseBox.appendChild(groupCard(loose));
+  }
 }
 
 gapSelect.addEventListener("change", () => {
@@ -194,7 +216,7 @@ gapSelect.addEventListener("change", () => {
 
 startBtn.addEventListener("click", async () => {
   if (selected === null) return;
-  const group = groups.find((g) => g.index === selected);
+  const group = choices().find((g) => g.index === selected);
   if (!group || !group.entries.length) return;
 
   startBtn.disabled = true;

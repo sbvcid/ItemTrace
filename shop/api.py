@@ -11,8 +11,9 @@ Repository 裡，交易與 rollback 的行為因此與 CLI、測試完全一致�
     ConflictError   → 409
     ConfigError     → 400
 
-靜態檔案只開放 `files/` 子樹：SPEC §5 寫「從 DATA_ROOT 提供原始照片」，
-但 DATA_ROOT 底下還有 catalog.db 與 config.json，不能一併端出去。
+檔案只開放 `files/` 與 `inbox/` 兩個子樹：`files/` 是已歸檔的原始照片，
+`inbox/` 是使用者剛上傳、還在建檔的待處理照片（Inbox 頁的預覽縮圖）。
+DATA_ROOT 底下還有 catalog.db 與 config.json，不能一併端出去。
 """
 
 from __future__ import annotations

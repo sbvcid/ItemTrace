@@ -131,13 +131,26 @@ def test_backup_creates_a_self_contained_snapshot(config, populated):
     assert (destination / config.database.name).exists()
     assert (destination / config.inbox_dir.name).is_dir()
     assert (destination / config.files_dir.name).is_dir()
-    for parent in (destination / "files").rglob("*"):
-        if parent.is_file():
-            assert config.resolve(populated["filename"]) == parent.resolve() or True
-    # 檔案庫的內容真的複製過去了
-    archived = list((destination / "files").rglob("*.jpg"))
-    assert archived
     assert (destination / "BACKUP.txt").exists()
+
+    # 原始照片要真的複製到快照裡，且路徑結構與來源一致 ——
+    # 快照是靠「整份資料夾複製回去」還原的，位置不對就等於沒有備份。
+    source = config.resolve(populated["filename"])
+    copied = destination / populated["filename"]
+    assert copied.is_file(), f"快照裡沒有 {populated['filename']}"
+    assert copied.read_bytes() == source.read_bytes()
+    assert copied.parent.is_relative_to(destination)
+
+    # 快照裡不該有任何多余的東西（統一用 / 比對，Windows 上分隔符不同）
+    copied_files = sorted(
+        path.relative_to(destination).as_posix()
+        for path in destination.rglob("*") if path.is_file()
+    )
+    assert copied_files == sorted([
+        config.database.name,
+        "BACKUP.txt",
+        Path(populated["filename"]).as_posix(),
+    ])
 
 
 def test_snapshot_database_can_be_opened_on_its_own(config, populated, tmp_path):
