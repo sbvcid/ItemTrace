@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from tests.conftest import make_jpeg
@@ -579,6 +581,71 @@ def test_upload_area_is_large_enough_for_thumbs(client):
     css = ui("app.css")
     assert "button.big" in css
     assert ".dropzone" in css
+
+
+# ----------------------------------------------------------------------
+# 選照片的觸發鏈
+#
+# 實機踩過的坑：#dropzone 原本是 <label> 包住 file input，點下去時
+# 瀏覽器原生觸發 input，JS 又呼叫一次 fileInput.click() → 雙重觸發 →
+# file picker 被開兩次又立刻收掉，change 沒發生，
+# POST /api/inbox/photos 從來沒送出。
+# ----------------------------------------------------------------------
+
+
+def test_dropzone_is_not_a_label(client):
+    """上傳區不能是 label：label 會原生觸發內部的 input。"""
+    markup = ui("inbox.html")
+    assert not re.search(r'<label[^>]*id="dropzone"', markup), (
+        "dropzone 必須是 div，不是 label"
+    )
+    assert '<div class="dropzone" id="dropzone">' in markup
+    # 整個上傳區裡不該還有別的 label 包 input
+    assert not re.search(r"<label[^>]*>\s*<input", markup)
+
+
+def test_file_input_is_still_hidden_inside_the_dropzone(client):
+    markup = ui("inbox.html")
+    block = markup.split('id="dropzone"')[1].split("</div>")[0]
+    assert 'id="file-input"' in block
+    assert 'type="file"' in block
+    assert "multiple" in block
+    assert "hidden" in block
+    assert 'accept="image/*"' in block
+
+
+def test_dropzone_click_is_the_only_trigger(client):
+    """fileInput.click() 只能被呼叫一次，且只在 dropzone 的 click handler 裡。"""
+    source = ui("inbox.js")
+    # 總數 1 就擋掉「任何地方多開一次 picker」
+    assert source.count("fileInput.click()") == 1
+
+    handler = source.split('dropzone.addEventListener("click"')[1].split("});")[0]
+    assert "fileInput.click()" in handler
+
+
+def test_change_handler_forwards_the_picked_files(client):
+    source = ui("inbox.js")
+    change = source.split('fileInput.addEventListener("change"')[1].split("});")[0]
+    assert "upload(" in change
+    assert "fileInput.files" in change
+    # 選完要把 value 清掉，同一批照片再選一次才會再觸發
+    assert "fileInput.value = \"\"" in change
+
+
+def test_upload_sends_multipart_field_named_files(client):
+    """multipart 欄位名必須是 files，和後端 /api/inbox/photos 一致。"""
+    source = ui("inbox.js")
+    assert 'body.append("files", file, file.name)' in source
+    assert 'api("/api/inbox/photos", { method: "POST", body })' in source
+
+
+def test_upload_does_not_leave_the_start_button_enabled_by_accident(client):
+    """上傳進行中要鎖住建檔按鈕，避免同時跑兩條流程。"""
+    source = ui("inbox.js")
+    upload_body = source.split("async function upload(")[1].split("\nasync function")[0]
+    assert "startBtn.disabled = true" in upload_body
+    assert "if (!files || !files.length) return" in upload_body
 
 
 def test_inbox_page_has_no_form_fields_before_building(client):

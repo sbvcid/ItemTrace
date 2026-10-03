@@ -71,12 +71,17 @@ async function upload(files) {
   }
 }
 
+/* 觸發路徑只有這一條。
+   #dropzone 是 div 不是 label：label 包住 file input 時點下去會由瀏覽器
+   原生觸發 input，這裡再 click 一次就是雙重觸發。實機結果是 file picker
+   被開兩次又立刻收掉，change 沒發，POST /api/inbox/photos 從來沒送出。 */
 dropzone.addEventListener("click", (event) => {
   if (event.target !== fileInput) fileInput.click();
 });
 fileInput.addEventListener("change", () => {
-  upload(fileInput.files);
-  fileInput.value = "";
+  const picked = fileInput.files;
+  fileInput.value = "";   // 清掉，讓同一批照片再選一次也會觸發 change
+  upload(picked);
 });
 
 /* 桌機拖放；手機上 click 才是主要入口 */

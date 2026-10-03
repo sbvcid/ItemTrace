@@ -17,14 +17,19 @@
 
 <div class="wrap">
 
-  <!-- 1. 上傳：手機優先，點一下就能選多張 -->
+  <!-- 1. 上傳：手機優先，點一下就能選多張
+       這裡刻意用 div 而不是 label：label 包住 file input 時，點 label 會
+       由瀏覽器原生觸發 input，再疊上 JS 的 fileInput.click() 就是雙重觸發。
+       實機測到的結果是選完照片完全沒有 POST /api/inbox/photos ——
+       file picker 被開兩次又立刻關掉，change 事件根本沒發生。
+       觸發只留 JS 這一條路徑。 -->
   <section id="upload-sec">
-    <label class="dropzone" id="dropzone">
+    <div class="dropzone" id="dropzone">
       <input id="file-input" type="file" accept="image/*" multiple hidden>
       <div class="dz-icon">＋</div>
       <div class="dz-title">點這裡選照片</div>
       <div class="dz-sub">可以一次選多張。照片先放進 inbox，還不會建立商品。</div>
-    </label>
+    </div>
     <div id="upload-status" class="saved" hidden></div>
   </section>
 
