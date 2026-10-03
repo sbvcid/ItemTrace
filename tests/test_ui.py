@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -418,3 +419,199 @@ def test_javascript_actually_parses():
             ["node", "--check", str(path)], capture_output=True, text=True,
         )
         assert result.returncode == 0, f"{path.name} 語法錯誤：{result.stderr}"
+
+
+# ----------------------------------------------------------------------
+# 商品詳細頁的行為測試
+#
+# renderEvents() 曾經把字串當成 el() 的第三引數（children 必須是 Array），
+# 丟出「(children || []).forEach is not a function」。因為 start() 整段被
+# try/catch 包住，例外被轉成「找不到這件商品」——真正的原因完全看不到。
+#
+# 這組用 node 的 vm 跑真正的 ui/item.js，看它有沒有例外、事件有沒有渲染。
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def item_view():
+    """跑一次 tests/item_dom_harness.js，回傳每個情境的結果。"""
+    if shutil.which("node") is None:
+        pytest.skip("需要 node 才能做行為測試")
+    script = Path(__file__).resolve().parent / "item_dom_harness.js"
+    result = subprocess.run(
+        ["node", str(script)], capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    assert result.returncode == 0, f"harness 執行失敗：{result.stderr}"
+    return {row["label"]: row for row in json.loads(result.stdout)}
+
+
+def _normal(item_view):
+    return item_view["一般情形（有照片、有來源照片、有 events）"]
+
+
+def test_item_page_renders_without_errors(item_view):
+    """一般 event（含 prev_value、actor/entity_type 兩者都有值）要能渲染。"""
+    row = _normal(item_view)
+    assert row["error"] is None, row["error"]
+    assert row["shownErrors"] == [], f"頁面報錯：{row['shownErrors']}"
+
+
+def test_render_events_does_not_show_item_not_found(item_view):
+    """renderEvents 出錯不該讓整頁變成「找不到這件商品」。
+
+    這正是那個 bug 的症狀：例外被 start() 的 catch 吃掉，顯示成 notFound。
+    """
+    for label, row in item_view.items():
+        if label == "detail 抓不到":
+            continue  # 這情境本來就該顯示 notFound
+        assert row["notFoundShown"] is False, f"{label} 顯示成找不到這件商品"
+        assert row["shownErrors"] == [], f"{label}：{row['shownErrors']}"
+
+
+def test_render_events_draws_one_row_per_event(item_view):
+    """4 筆一般 event（含 prev_value 有值與 actor 為空兩種分支）→ 4 列。"""
+    row = _normal(item_view)
+    assert row["eventRows"] == 4
+    assert "/api/items/ITM-0001/events" in row["called"]
+
+
+def test_render_events_handles_a_single_event(item_view):
+    assert item_view["一筆 events"]["eventRows"] == 1
+
+
+def test_render_events_handles_no_events(item_view):
+    row = item_view["沒有 events"]
+    assert row["error"] is None
+    assert row["shownErrors"] == []
+    assert row["eventRows"] == 0
+
+
+def test_identifier_cell_renders_with_and_without_source_photo(item_view):
+    """有來源照片與沒有來源照片兩個分支都要過（都是同類型的 el() 誤用）。"""
+    with_source = _normal(item_view)
+    without_source = item_view["identifier 沒有來源照片"]
+    for row in (with_source, without_source):
+        assert row["error"] is None
+        assert row["shownErrors"] == [], row["shownErrors"]
+        assert row["detailShown"] is True
+
+
+def test_identifiers_table_renders_when_there_are_identifiers(item_view):
+    row = _normal(item_view)
+    assert row["called"][0] == "/api/items/ITM-0001"
+    assert row["detailShown"] is True
+
+
+def test_page_without_photos_still_renders(item_view):
+    row = item_view["沒有照片"]
+    assert row["shownErrors"] == []
+    assert row["wallCells"] == 0
+    assert row["detailShown"] is True
+
+
+def test_page_without_identifiers_still_renders(item_view):
+    row = item_view["沒有 identifiers"]
+    assert row["shownErrors"] == []
+    assert row["detailShown"] is True
+
+
+def test_missing_item_still_shows_not_found(item_view):
+    """真的抓不到商品時才該顯示「找不到」，不能把這個訊息當成萬用的錯誤出口。"""
+    row = item_view["detail 抓不到"]
+    assert row["notFoundShown"] is True
+    assert row["shownErrors"], "抓不到商品應該要留下錯誤訊息"
+
+
+#: 會產生 Array 的運算式；這些當作第三引數是安全的。
+ARRAY_PRODUCING = re.compile(
+    r"(?:\.\s*(?:concat|map|filter|slice|flat|flatMap|sort|reverse|split|toSorted)\s*\()"
+    r"|^[A-Za-z_$][\w$]*\s*$"
+)
+
+
+def test_no_el_call_passes_a_bare_string_or_element_as_children():
+    """el(tag, attrs, children) 的第三引數必須是 Array。
+
+    這是第二道防護，抓的是「第三引數明擺著不是陣列」的情況
+    （裸字串、單一 Element）。它**抓不到**三元運算子尾巴不是陣列的情況 ——
+    例如 `[x].filter(Boolean).join(" · ")` 看起來以 `[` 開頭卻回傳字串，
+    那是 renderEvents 那個 bug，交给上面的行為測試擋。
+
+    只靠字串比對很容易漏掉「換個變數名就失效」的情況，所以這裡做結構
+    檢查：找出所有 el() 呼叫（跳過 el 自己的宣告），平衡括號切出第三引數。
+    """
+    offenders = []
+    for path in sorted(UI_DIR.glob("*.js")):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"\bel\(", text):
+            prefix = text[:match.start()].rstrip()
+            if prefix.endswith("function"):
+                continue  # el 的宣告本身，不是呼叫
+            end = _balanced_end(text, match.end())
+            if end is None:
+                continue
+            args = _split_args(text[match.end():end])
+            if len(args) < 3:
+                continue
+            third = args[2].strip()
+            if third.startswith("[") or third in ("", "null", "undefined"):
+                continue
+            if third.startswith("/*") or third.startswith("//"):
+                continue  # 註解接著才是陣列
+            if ARRAY_PRODUCING.search(third):
+                continue
+            offenders.append(
+                f"{path.name}:{text[:match.start()].count(chr(10)) + 1}: {third[:60]}"
+            )
+    assert offenders == [], "el() 第三引數必須是 Array：" + "; ".join(offenders)
+
+
+def _balanced_end(text: str, start: int) -> int | None:
+    """回傳對應右括號的位置（跳過字串與樣板字串，避免括號被字面值騙到）。"""
+    depth = 1
+    i = start
+    quote = None
+    while i < len(text) and depth:
+        char = text[i]
+        if quote:
+            if char == "\\":
+                i += 2
+                continue
+            if char == quote:
+                quote = None
+        elif char in "\"'`":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def _split_args(call: str) -> list[str]:
+    args, depth, current, quote = [], 0, "", None
+    for char in call:
+        if quote:
+            current += char
+            if char == quote:
+                quote = None
+            continue
+        if char in "\"'`":
+            quote = char
+            current += char
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        if char == "," and depth == 0:
+            args.append(current)
+            current = ""
+        else:
+            current += char
+    args.append(current)
+    return args

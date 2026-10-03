@@ -122,7 +122,7 @@ async function renderIdentifiers(identifiers, photosById) {
               ])
             : null,
         ]),
-        el("td", {},
+        el("td", {}, [
           source
             ? el("a", {
                 href: photoUrl(source.filename),
@@ -130,8 +130,8 @@ async function renderIdentifiers(identifiers, photosById) {
                 rel: "noopener",
                 text: "看來源照片",
               })
-            : el("span", { class: "dim", text: "—" })
-        ),
+            : el("span", { class: "dim", text: "—" }),
+        ]),
       ])
     );
   });
@@ -198,8 +198,12 @@ function renderEvents(events) {
     box.appendChild(
       el("div", { class: "event" }, [
         el("div", { class: "when", text: shortTime(event.created_at) }),
-        el("div", {}, [what, el("div", { class: "dim", style: "font-size:12px" },
-          [event.actor, event.entity_type].filter(Boolean).join(" · "))]),
+        el("div", {}, [
+          what,
+          el("div", { class: "dim", style: "font-size:12px" }, [
+            [event.actor, event.entity_type].filter(Boolean).join(" · "),
+          ]),
+        ]),
       ])
     );
   });
