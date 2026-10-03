@@ -128,6 +128,10 @@ async function mountPage(options = {}) {
         if (options.failEventsAfterSave && state.saved) {
           return fail(503, "歷史服務暫時無法回應");
         }
+        /* 決定已經成功，但 events 掛掉 —— refresh 中途失敗的那種 */
+        if (state.decided && options.failEventsAfterDecide) {
+          return fail(503, "歷史服務暫時無法回應");
+        }
         return ok(state.events);
       }
       if (path === "/api/stats?limit=1") return ok({ counts: {}, categories: [], recent: [] });
@@ -288,10 +292,14 @@ async function scenario(label, options = {}) {
         ? target.querySelector(".sugg-error").hidden : null,
       afterBrand: page.view.element("f-brand").value,
       afterNotes: page.field("f-notes"),
+      /* 頁面層級的提示區（#error）。reload 失敗的訊息必須落在這裡 ——
+         放在卡片上沒用，refresh() 可能已經把那張卡換掉了。 */
+      afterPageError: page.view.element("error").childNodes.map((c) => c.textContent),
       afterIdentifierRows: page.identifierRows(),
       afterSectionShown: page.view.element("pending-sec").hidden === false,
     };
   }
+
   if (options.submitForm) {
     const form = page.view.element("form");
     const input = page.view.element("f-brand");
@@ -303,7 +311,6 @@ async function scenario(label, options = {}) {
       ...base,
       savedText: page.view.element("saved").textContent,
       savedHidden: page.view.element("saved").hidden,
-      errorBoxText: (page.view.element("error") || {}).textContent || "",
       errorBoxChildren: page.view.element("error").childNodes.map((c) => c.textContent),
       saveButtonDisabled: page.view.element("save").disabled,
       afterBrand: page.view.element("f-brand").value,
@@ -401,6 +408,20 @@ async function scenario(label, options = {}) {
   }));
   results.push(await scenario("拒絕成功但重載失敗", {
     failReloadAfterDecide: true,
+    click: { card: 0, action: "reject", errorOn409: true },
+  }));
+  /* 8B.1 的第二種：detail 成功（卡片已被換掉）、events 才失敗 */
+  results.push(await scenario("接受成功但歷史載入失敗", {
+    failEventsAfterDecide: true,
+    onDecide: (state) => {
+      state.detail.item.brand = "華碩";
+      state.detail.suggestions[0].status = "accepted";
+    },
+    click: { card: 0, action: "accept", errorOn409: true },
+  }));
+  results.push(await scenario("拒絕成功但歷史載入失敗", {
+    failEventsAfterDecide: true,
+    onDecide: (state) => { state.detail.suggestions[0].status = "rejected"; },
     click: { card: 0, action: "reject", errorOn409: true },
   }));
   /* 對照組：PATCH 成功但歷史載入失敗 */

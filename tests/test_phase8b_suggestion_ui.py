@@ -245,49 +245,84 @@ def test_unsaved_form_edits_survive_a_decision(views):
 # ----------------------------------------------------------------------
 # 8B.1：決定成功但重載失敗 —— 不能說成「接受失敗」
 #
-# POST 之後 refresh() 也可能失敗（events 或 detail 請求掛掉）。那時候
-# 建議已經被接受了，說「接受失敗」會讓人再按一次，然後拿到 400。
-# 兩種失敗必須分開講。
+# POST 之後 refresh() 也可能失敗。而 refresh() 有兩種失敗點：
+#   detail 失敗 → 什麼都還沒渲染，卡片還在
+#   events 失敗 → 建議卡片可能已經被換掉，訊息寫進舊節點等於沒寫
+# 所以訊息一律放在頁面層級的 #error，不依賴任何一張卡片。
 # ----------------------------------------------------------------------
 
-
-def test_accept_succeeded_but_reload_failed_is_not_reported_as_failure(views):
-    row = views["接受成功但重載失敗"]
-    assert row["afterErrorHidden"] is False
-    assert "接受失敗" not in row["afterErrorText"]
-    assert "接受成功" in row["afterErrorText"]
-    assert "重新整理" in row["afterErrorText"]
-
-
-def test_reload_failure_message_quotes_the_underlying_error(views):
-    text = views["接受成功但重載失敗"]["afterErrorText"]
-    assert "服務暫時無法回應" in text
+RELOAD_FAILURES = [
+    "接受成功但重載失敗",
+    "拒絕成功但重載失敗",
+    "接受成功但歷史載入失敗",
+    "拒絕成功但歷史載入失敗",
+]
 
 
-def test_decided_card_stays_visible_when_reload_failed(views):
-    """畫面是舊的，卡片還在 —— 但要說清楚它已經被決定了。"""
-    row = views["接受成功但重載失敗"]
-    assert row["afterCardCount"] == 1
-    assert row["afterSectionShown"] is True
+@pytest.mark.parametrize("label", RELOAD_FAILURES)
+def test_reload_failure_is_not_reported_as_a_failed_decision(views, label):
+    messages = " ".join(views[label]["afterPageError"])
+    assert "接受失敗" not in messages and "拒絕失敗" not in messages
+    verb = "接受" if label.startswith("接受") else "拒絕"
+    assert f"{verb}成功" in messages
 
 
-def test_decided_card_is_not_decidable_again_after_reload_failure(views):
+@pytest.mark.parametrize("label", RELOAD_FAILURES)
+def test_reload_failure_warning_is_actually_visible(views, label):
+    """訊息必須落在頁面層級的提示區。
+
+    只寫進建議卡片是不行的：refresh() 可能已經把那張卡換掉，
+    寫進被移除的節點，使用者什麼都看不到。
+    """
+    row = views[label]
+    assert row["afterPageError"], "頁面層級提示區是空的，使用者看不到任何警告"
+    message = " ".join(row["afterPageError"])
+    assert "請重新整理" in message
+    assert "載入" in message or "無法回應" in message
+
+
+@pytest.mark.parametrize("label", RELOAD_FAILURES)
+def test_reload_failure_does_not_rely_on_the_card(views, label):
+    """卡片上的 slot 不該是唯一載體。"""
+    assert views[label]["afterErrorText"] in ("", None)
+
+
+@pytest.mark.parametrize("label", RELOAD_FAILURES)
+def test_decided_suggestion_is_not_decidable_again(views, label):
     """決定已經發生，再按一次只會拿到 400。卡片必須鎖住。"""
-    row = views["接受成功但重載失敗"]
-    assert row["afterDisabled"] == [True, True]
+    assert views[label]["afterDisabled"] == [True, True]
 
 
-def test_reject_succeeded_but_reload_failed_is_also_not_a_failure(views):
-    row = views["拒絕成功但重載失敗"]
-    assert "拒絕失敗" not in row["afterErrorText"]
-    assert "拒絕成功" in row["afterErrorText"]
-    assert row["afterDisabled"] == [True, True]
+@pytest.mark.parametrize("label", RELOAD_FAILURES)
+def test_reload_failure_does_not_wedge_the_whole_page(views, label):
+    """只是提示出問題，不該讓整頁變成「找不到這件商品」。"""
+    assert views[label]["notFoundShown"] is False
 
 
-def test_reload_failure_does_not_wedge_the_whole_page(views):
-    """只是這張卡的訊息出問題，不該讓整頁變成「找不到這件商品」。"""
-    for label in ("接受成功但重載失敗", "拒絕成功但重載失敗"):
-        assert views[label]["notFoundShown"] is False, label
+@pytest.mark.parametrize("label", RELOAD_FAILURES)
+def test_reload_failure_leaves_nothing_half_rendered(views, label):
+    """refresh 失敗時要嘛整個更新、要嘛完全不動，不能更新一半。
+
+    先渲染建議卡片才抓 events 的話，events 失敗會留下「卡片已被換掉、
+    欄位還是舊的」半套畫面 —— 而且訊息還得寫在一個已被丟掉的節點裡。
+    """
+    row = views[label]
+    if label.endswith("歷史載入失敗"):
+        # detail 成功、events 失敗：正確行為是什麼都還沒渲染
+        assert row["afterCardCount"] == 1, "有卡片被換掉了，代表渲染跑到一半"
+    # 兩種失敗都不該讓整頁變成「找不到這件商品」
+    assert row["notFoundShown"] is False
+
+
+def test_reload_failure_does_not_leave_a_half_rendered_page(views):
+    """refresh 必須先拿到全部資料再動畫面。"""
+    source = (Path(__file__).resolve().parents[1] / "ui" / "item.js").read_text(
+        encoding="utf-8"
+    )
+    body = source.split("async function refresh()")[1].split("\n}")[0]
+    fetch_at = body.index("await Promise.all([")
+    render_at = body.index("renderSuggestions(")
+    assert fetch_at < render_at, "必須先取齊資料再開始渲染"
 
 
 def test_field_save_success_is_not_reported_as_failure_when_history_fails(views):
@@ -306,17 +341,12 @@ def test_field_save_button_is_re_enabled_after_a_history_failure(views):
     assert views["欄位儲存成功但歷史載入失敗"]["saveButtonDisabled"] is False
 
 
-def test_reload_failure_uses_the_warning_style(views):
-    """決定已生效只是畫面過期 —— 用警示色而不是錯誤色，
-    免得看起來像「再試一次」。"""
-    css = (Path(__file__).resolve().parents[1] / "ui" / "app.css").read_text(
+def test_reload_failure_message_is_announced_to_screen_readers():
+    """頁面層級提示區要有 role=alert，螢幕閱讀器才會唸出來。"""
+    markup = (Path(__file__).resolve().parents[1] / "ui" / "item.html").read_text(
         encoding="utf-8"
     )
-    assert ".sugg-error.sugg-warn" in css
-    source = (Path(__file__).resolve().parents[1] / "ui" / "item.js").read_text(
-        encoding="utf-8"
-    )
-    assert 'classList.add("sugg-warn")' in source
+    assert 'id="error" role="alert"' in markup
 
 
 def test_decision_and_reload_failures_are_separate_code_paths(client):
@@ -333,6 +363,8 @@ def test_decision_and_reload_failures_are_separate_code_paths(client):
     assert post_at < first_catch < refresh_at, (
         "refresh 必須在 POST 的 try/catch 之外，才不會被混為一談"
     )
+    # 重載失敗的訊息走頁面層級的 showError，不是寫進卡片
+    assert "showError(" in body.split("await refresh()")[1]
 
 
 def test_source_text_has_no_ai_client_and_no_bulk_action():

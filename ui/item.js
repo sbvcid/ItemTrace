@@ -159,13 +159,17 @@ async function decide(card, suggestionId, action) {
   try {
     await refresh();
   } catch (err) {
-    /* 畫面是舊的，不能讓人再對同一筆建議按一次 —— 決定已經發生了。
-       訊息說清楚「已接受但沒載回來」，並叫他自己重新整理。 */
-    slot.hidden = false;
-    slot.classList.add("sugg-warn");
-    slot.textContent =
+    /* 訊息放在頁面層級的提示區，不放在那張卡上 ——
+       refresh() 可能已經換掉卡片，寫進被移除的節點等於沒寫。
+       提示區在 .wrap 頂端、不受 render 影響，而且會捲進視線。 */
+    showError(
       verb + "成功，但重新載入資料失敗（" + err.message +
-      "）。請重新整理頁面確認結果。";
+      "）。畫面可能不是最新的，請重新整理確認結果。"
+    );
+    const box = document.getElementById("error");
+    if (box && typeof box.scrollIntoView === "function") {
+      box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
   }
 }
 
@@ -404,7 +408,15 @@ FIELDS.forEach((name) => {
 });
 
 async function refresh() {
-  const data = await api("/api/items/" + encodeURIComponent(ITEM_ID));
+  /* 資料先全部拿到手，再動畫面。
+     先渲染建議卡片、才去抓 events 的話，events 失敗會留下半套畫面：
+     卡片已被換掉、欄位還是舊的，錯誤訊息又被寫進一個已經從 DOM 移除的
+     節點裡，使用者什麼都看不到。 */
+  const [data, events] = await Promise.all([
+    api("/api/items/" + encodeURIComponent(ITEM_ID)),
+    api("/api/items/" + encodeURIComponent(ITEM_ID) + "/events"),
+  ]);
+
   current = data.item;
   detail.hidden = false;
 
@@ -436,7 +448,7 @@ async function refresh() {
     })),
     photosById
   );
-  renderEvents(await api("/api/items/" + encodeURIComponent(ITEM_ID) + "/events"));
+  renderEvents(events);
   loadCategories();
 }
 
