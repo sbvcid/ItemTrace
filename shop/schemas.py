@@ -249,6 +249,28 @@ class InboxListing(BaseModel):
     count: int
 
 
+class InboxIntakeRequest(BaseModel):
+    """選定要建檔的檔案。files 是 GET /api/inbox 回傳的 relative 路徑。"""
+
+    files: list[str] = Field(min_length=1)
+    #: 傳入就加到既有商品（重新觀測），不傳則開新的 Item。
+    item_id: str | None = None
+    kind: str = "intake"
+    note: str = ""
+    actor: str = "user"
+
+
+class SkippedFile(BaseModel):
+    relative: str
+
+
+class InboxIntakeOut(BaseModel):
+    item_id: str | None
+    observation_id: str | None
+    archived: list[PhotoOut]
+    skipped: list[SkippedFile] = Field(default_factory=list)
+
+
 class HealthOut(BaseModel):
     status: str
     schema_version: str

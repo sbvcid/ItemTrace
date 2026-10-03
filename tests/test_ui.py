@@ -68,10 +68,12 @@ def stocked(client):
 # ----------------------------------------------------------------------
 
 
-def test_root_redirects_to_items(client):
-    response = client.get("/", follow_redirects=False)
-    assert response.status_code in (302, 307)
-    assert response.headers["location"] == "/items"
+def test_root_is_the_inbox_page(client):
+    """Phase 7 起 / 是 inbox，商品列表在 /items。"""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "/static/inbox.js" in response.text
 
 
 def test_items_page_loads(client):
@@ -102,6 +104,7 @@ def test_detail_page_loads_the_assets_it_needs(client):
         ("/static/api.js", "javascript"),
         ("/static/list.js", "javascript"),
         ("/static/item.js", "javascript"),
+        ("/static/inbox.js", "javascript"),
     ],
 )
 def test_static_assets_are_served(client, path, kind):
@@ -139,19 +142,33 @@ def test_frontend_only_calls_endpoints_that_exist(client):
     """前端呼叫的端點必須在 OpenAPI 契約裡 —— 這是防契約漂移的主要測試。"""
     spec = client.get("/openapi.json").json()["paths"]
     seen: set[str] = set()
-    for name in ("api.js", "list.js", "item.js"):
+    for name in ("api.js", "list.js", "item.js", "inbox.js"):
         for call in API_CALL.findall(ui_source(name)):
             call = call.split("?")[0]
             if "{" in call:
                 continue  # 動態拼湊，出現佔位符就當是識別碼不是路由
             seen.add(call)
-    # 這三個就是這個階段會用到的全部端點；尾斜線代表後面接識別碼
-    # （例如 "/api/items/" + id），用起始比對確認契約上有那條路由。
     plain = {path for path in seen if not path.endswith("/")}
     assert plain <= set(spec), f"前端呼叫了契約外的端點：{plain - set(spec)}"
     for prefix in (path for path in seen if path.endswith("/")):
         assert any(p.startswith(prefix) for p in spec), f"契約上沒有 {prefix}*"
-    assert plain == {"/api/items", "/api/stats", "/api/identifiers/lookup"}
+
+
+def test_frontend_touches_only_the_endpoints_it_needs(client):
+    """這個階段的前端只該用到這些端點 —— 超出就是範圍蔓延。"""
+    spec = client.get("/openapi.json").json()["paths"]
+    seen: set[str] = set()
+    for name in ("api.js", "list.js", "item.js", "inbox.js"):
+        for call in API_CALL.findall(ui_source(name)):
+            if "{" in call:
+                continue
+            seen.add(call.split("?")[0].rstrip("/"))
+    assert seen <= {
+        "/api/items", "/api/stats", "/api/identifiers/lookup",
+        "/api/inbox", "/api/inbox/group", "/api/inbox/photos",
+        "/api/inbox/intake",
+    }, f"前端用到了範圍外的端點：{seen}"
+    assert "/api/items" in spec and "/api/inbox/intake" in spec
 
 
 def test_frontend_sends_the_search_and_filter_params_the_api_accepts(client):
@@ -333,15 +350,14 @@ def test_patch_rejects_bad_values(client):
 
 def test_frontend_never_deletes_a_photo(client):
     """UI 不得提供刪除照片的操作。"""
-    for name in ("api.js", "list.js", "item.js"):
+    for name in ("api.js", "list.js", "item.js", "inbox.js"):
         source = ui_source(name)
         assert "DELETE" not in source, f"{name} 有 DELETE 呼叫"
         assert "delete_photo" not in source
 
 
 def test_frontend_has_no_delete_controls_at_all(client):
-    joined = "".join(ui_source(n) for n in ("index.html", "item.html", "api.js",
-                                            "list.js", "item.js"))
+    joined = "".join(ui_source(n) for n in UI_DIR.iterdir() if n.suffix in (".js", ".html"))
     assert "刪除" not in joined
     assert "永久刪除" not in joined
 
@@ -365,20 +381,20 @@ def test_photos_are_only_opened_for_viewing(client, stocked):
 # ----------------------------------------------------------------------
 
 
-def test_ui_has_no_inbox_or_suggestion_actions(client):
-    """Phase 6A 範圍：只做商品列表與詳細頁。"""
-    joined = "".join(ui_source(n) for n in ("index.html", "item.html", "list.js",
-                                            "item.js"))
-    for forbidden in ("/api/inbox", "/api/suggestions", "/accept", "/reject",
-                      "/api/events/", "/void"):
+def test_ui_has_no_suggestion_or_revert_actions(client):
+    """Phase 6A/7 都沒有 suggestion 自動處理與 revert UI。"""
+    joined = "".join(ui_source(n) for n in UI_DIR.iterdir() if n.suffix in (".js", ".html"))
+    for forbidden in ("/accept", "/reject", "/api/events/", "/revert", "/void"):
         assert forbidden not in joined, f"不該出現 {forbidden}"
 
 
 def test_ui_has_no_build_step_or_framework():
     """原生 HTML/CSS/JS：不引入框架、不需要 npm build。"""
     files = sorted(p.name for p in UI_DIR.iterdir())
-    assert files == ["api.js", "app.css", "index.html", "item.html",
-                     "item.js", "list.js"]
+    assert files == [
+        "api.js", "app.css", "inbox.html", "inbox.js",
+        "item.html", "item.js", "items.html", "list.js",
+    ]
     for path in UI_DIR.iterdir():
         text = path.read_text(encoding="utf-8")
         assert "import " not in text
@@ -387,7 +403,7 @@ def test_ui_has_no_build_step_or_framework():
 
 
 def test_ui_scripts_declare_their_tags(client):
-    for name in ("api.js", "list.js", "item.js"):
+    for name in ("api.js", "list.js", "item.js", "inbox.js"):
         assert ui_source(name).lstrip().startswith("/*")
 
 

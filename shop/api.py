@@ -31,7 +31,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, config as config_mod, db as db_mod, ids
@@ -49,6 +49,8 @@ from .schemas import (
     IdentifierPatch,
     InboxEntryOut,
     InboxGroupOut,
+    InboxIntakeOut,
+    InboxIntakeRequest,
     InboxListing,
     ItemCreate,
     ItemDetail,
@@ -62,6 +64,7 @@ from .schemas import (
     PhotoPatch,
     PhotoSkipped,
     PhotoUploadResult,
+    SkippedFile,
     StatsOut,
     SuggestionCreate,
     SuggestionOut,
@@ -115,22 +118,24 @@ UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
 
 def _register_ui(app: FastAPI) -> None:
-    """掛上 Phase 6A 的兩個頁面。
+    """掛上 Phase 6A／7 的頁面。
 
-    這些不是 API，所以不放進 OpenAPI（/docs 保持純 API 契約）。
-    頁面是靜態 HTML，資料全部由前端的 fetch 打 /api/*，後端不多做一層模板。
-    """
+這些不是 API，所以不放進 OpenAPI（/docs 保持純 API 契約）。
+頁面是靜態 HTML，資料全部由前端的 fetch 打 /api/*，後端不多做一層模板。
+
+路由：/ 是 inbox（Phase 7）、/items 是列表、/items/{id} 是詳細頁。
+"""
     if not UI_DIR.is_dir():  # 測試環境或未 checkout UI 時不影響 API
         return
     app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
     @app.get("/", include_in_schema=False)
-    def home() -> RedirectResponse:
-        return RedirectResponse("/items")
+    def home() -> FileResponse:
+        return FileResponse(UI_DIR / "inbox.html")
 
     @app.get("/items", include_in_schema=False)
     def items_page() -> FileResponse:
-        return FileResponse(UI_DIR / "index.html")
+        return FileResponse(UI_DIR / "items.html")
 
     @app.get("/items/{item_id}", include_in_schema=False)
     def item_page(item_id: str) -> FileResponse:
@@ -579,6 +584,44 @@ async def upload_to_inbox(
     )
 
 
+@router.post(
+    "/api/inbox/intake",
+    response_model=InboxIntakeOut,
+    status_code=201,
+    tags=["inbox"],
+)
+def start_intake(
+    body: InboxIntakeRequest,
+    repo: Repo,
+    cfg: Annotated[Config, Depends(get_config)],
+) -> InboxIntakeOut:
+    """選定一組 → 建立 Item + Observation → 照片歸檔（SPEC-v1 §4.1 步驟 2-4）。
+
+    這是 Phase 7 唯一新增的端點。`shop.inbox.intake()` 從階段 3 就已經能
+    做這件事（搬檔 + 建檔 + 交易），缺的是一個能把「選好的檔名」餵進去的
+    HTTP 介面 —— 既有端點都只吃新上傳的 multipart 位元組。
+
+    全有全無：任一張失敗則整批撤銷，已搬走的檔案搬回 inbox。既有 original
+    不會被覆寫（目標同名時加流水號）。
+    """
+    paths = inbox_mod.resolve_inbox_paths(cfg, body.files)
+    result = inbox_mod.intake(
+        cfg,
+        repo,
+        paths,
+        item_id=body.item_id,
+        kind=body.kind,
+        note=body.note,
+        actor=body.actor,
+    )
+    return InboxIntakeOut(
+        item_id=result.item.id if result.item else None,
+        observation_id=result.observation.id if result.observation else None,
+        archived=[row.photo for row in result.archived],
+        skipped=[SkippedFile(relative=row.relative) for row in result.skipped],
+    )
+
+
 @router.post("/api/inbox/group", response_model=list[InboxGroupOut], tags=["inbox"])
 def group_inbox(
     cfg: Annotated[Config, Depends(get_config)],
@@ -641,16 +684,18 @@ def stats(repo: Repo, limit: Annotated[int, Query(ge=1, le=200)] = 10) -> StatsO
 
 
 def _serve_file(cfg: Config, path: str) -> FileResponse:
-    """提供 files/ 底下的檔案。
+    """提供已歸檔照片與 inbox 待處理照片。
 
-    photos.filename 存的是相對 DATA_ROOT 的路徑（SPEC-v1 §3），所以網址要
-    寫成 /files/files/ITM-0001/original/a.jpg —— 前段 /files/ 是掛載點，
-    後段才是資料庫存的相對路徑。DATA_ROOT 底下還有 catalog.db 與
-    config.json，所以解析後必須仍在 files/ 之內才准取。
+    photos.filename 與 InboxEntry.relative 存的都是相對 DATA_ROOT 的路徑
+    （SPEC-v1 §3），所以網址要寫成 /files/files/ITM-0001/original/a.jpg、
+    /files/inbox/a.jpg —— 前段 /files/ 是掛載點，後段才是資料庫存的相對路徑。
+
+    只開放 files/ 與 inbox/ 兩個子樹：DATA_ROOT 底下還有 catalog.db 與
+    config.json，解析後不在這兩個目錄內一律 404。
     """
-    files_root = cfg.files_dir.resolve()
     target = (cfg.data_root / path).resolve()
-    if not target.is_relative_to(files_root) or not target.is_file():
+    roots = (cfg.files_dir.resolve(), cfg.inbox_dir.resolve())
+    if not any(target.is_relative_to(root) for root in roots) or not target.is_file():
         raise NotFoundError(f"找不到檔案：{path}")
     return FileResponse(target)
 

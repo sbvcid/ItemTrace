@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inbox · ItemTrace</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <strong>Inbox</strong>
+  <span class="grow"></span>
+  <span class="sub" id="count"></span>
+  <a class="sub" href="/items">商品列表 &rarr;</a>
+</header>
+
+<div class="wrap">
+
+  <!-- 1. 上傳：手機優先，點一下就能選多張 -->
+  <section id="upload-sec">
+    <label class="dropzone" id="dropzone">
+      <input id="file-input" type="file" accept="image/*" multiple hidden>
+      <div class="dz-icon">＋</div>
+      <div class="dz-title">點這裡選照片</div>
+      <div class="dz-sub">可以一次選多張。照片先放進 inbox，還不會建立商品。</div>
+    </label>
+    <div id="upload-status" class="saved" hidden></div>
+  </section>
+
+  <div id="error"></div>
+
+  <!-- 2. 沒有東西時的說明 -->
+  <div class="empty" id="nothing" hidden>
+    inbox 是空的。<br>從手機相簿選幾張照片丟進來。
+  </div>
+
+  <!-- 3. 分組 -->
+  <section id="groups-sec" hidden>
+    <div class="group-head">
+      <h2>依拍攝時間分組</h2>
+      <label class="gap">間隔
+        <select id="gap">
+          <option value="10">10 分鐘</option>
+          <option value="30" selected>30 分鐘</option>
+          <option value="60">1 小時</option>
+          <option value="180">3 小時</option>
+          <option value="1440">同一天</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="groups" id="groups"></div>
+
+    <div id="ungrouped-wrap" hidden>
+      <h2>沒有拍攝時間 <span class="dim" id="ungrouped-count"></span></h2>
+      <p class="dim" style="font-size:13px;margin:-4px 0 10px">
+        這些照片的時間無法判斷，先不自動分組。要建檔請用上傳區重傳一次。
+      </p>
+      <div class="strip" id="ungrouped"></div>
+    </div>
+  </section>
+
+  <!-- 4. 建檔：只有選好一組才有作用 -->
+  <div class="build" id="build" hidden>
+    <div class="build-label" id="build-label">選一組照片開始建檔</div>
+    <button class="primary big" id="start">開始建檔</button>
+    <div class="dim" style="font-size:12.5px;margin-top:8px">
+      建檔後商品欄位會先留空，照片與紀錄會立刻進去，細節到商品頁再補。
+    </div>
+  </div>
+
+</div>
+
+<script src="/static/api.js"></script>
+<script src="/static/inbox.js"></script>
+</body>
+</html>

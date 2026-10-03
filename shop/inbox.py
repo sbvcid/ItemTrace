@@ -25,7 +25,7 @@ from pathlib import Path
 
 from . import db, ids, photos
 from .config import Config
-from .errors import ConflictError, ValidationError
+from .errors import ConflictError, NotFoundError, ValidationError
 from .models import Item, Observation, Photo
 from .repo import Repository
 
@@ -104,6 +104,31 @@ def scan_inbox(config: Config, *, recursive: bool = True) -> list[InboxEntry]:
             )
         )
     return entries
+
+
+def resolve_inbox_paths(config: Config, relatives: list[str]) -> list[Path]:
+    """把 DATA_ROOT 相對路徑解析成安全的實體路徑，只接受 inbox/ 底下的。
+
+    為什麼要自己擋：intake() 會把來源檔案搬到 items/ 的資料夾，所以要是
+    有人送出 `files/ITM-0001/original/a.jpg`，那張已被歸檔的原始照片就會被
+    搬到另一件商品底下 —— 等於毀掉既有證據。HTTP 介面只暴露 inbox/ 的檔名。
+
+    解析後一律再確認仍在 inbox/ 內，擋掉 `inbox/../../etc/passwd` 這種。
+    """
+    inbox_root = config.inbox_dir.resolve()
+    paths: list[Path] = []
+    for raw in relatives:
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValidationError("檔名必須是非空字串")
+        candidate = (config.data_root / raw).resolve()
+        if not candidate.is_relative_to(inbox_root):
+            raise ValidationError(f"只能處理 inbox/ 底下的檔案：{raw}")
+        if not candidate.is_file():
+            raise NotFoundError(f"inbox 裡沒有這個檔案：{raw}")
+        paths.append(candidate)
+    if not paths:
+        raise ValidationError("沒有選任何檔案")
+    return paths
 
 
 def intake(

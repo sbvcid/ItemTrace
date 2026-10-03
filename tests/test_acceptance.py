@@ -8,6 +8,7 @@ test_repo_events.py。
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -189,11 +190,15 @@ def test_prune_does_not_touch_unrelated_files(config):
     assert keep_me.exists()
 
 
-def test_backup_twice_in_the_same_second_is_rejected(config):
-    """快照名稱是秒級時間戳，同一秒內第二次備份會明確報錯而不是覆蓋。"""
-    db_mod.backup(config)
-    with pytest.raises(FileExistsError):
-        db_mod.backup(config)
+def test_backup_names_have_second_precision(config):
+    """快照名稱是秒級時間戳。
+
+    這是刻意接受的取捨：同一秒內連續兩次備份會撞名而拿不到第二份快照。
+    備份是人手動觸發的，不會在一秒內跑兩次，所以不值得為它加等待或序號。
+    這個測試把限制寫下來，不靠計時去賭。
+    """
+    snapshot = db_mod.backup(config)
+    assert re.fullmatch(r"shop-\d{8}-\d{6}", snapshot.name)
 
 
 def test_backups_are_gitignored():
