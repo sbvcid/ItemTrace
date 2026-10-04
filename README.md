@@ -67,7 +67,7 @@ Windows 也可以直接雙擊 **`啟動 ItemTrace.bat`**，它會依序做上面
 ```bash
 python -m pytest                     # 全套
 python -m pytest -q tests/test_api.py  # 只跑 API
-python -m pyflakes shop tests          # 靜態檢查（選裝）
+python -m pyflakes shop tools tests   # 靜態檢查（選裝）
 node --check ui/item.js               # JS 語法（有 node 才需要）
 ```
 
