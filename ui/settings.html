@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>設定 · ItemTrace</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a href="/items">&larr;</a>
+  <strong>設定</strong>
+  <span class="grow"></span>
+  <a class="sub" href="/">Inbox</a>
+</header>
+
+<div class="wrap">
+
+  <div id="error"></div>
+
+  <!-- 只有本機可以改；區網內看得到但按鈕會被停用並說明原因 -->
+  <div class="card" id="lan-warning" hidden>
+    <b>這台不是本機。</b>
+    <p class="muted" style="margin:6px 0 0">
+      設定可以在任何裝置查看，但<strong>修改 API key、清除、測試 API</strong>
+      只能從電腦本機（<code>127.0.0.1</code>）操作。
+      請在電腦上開這個頁面。
+    </p>
+  </div>
+
+  <section class="card" style="margin-top:16px">
+    <h2>AI 設定</h2>
+
+    <div class="field">
+      <label>Provider</label>
+      <input id="provider" value="OpenRouter" readonly>
+    </div>
+
+    <div class="field">
+      <label>API Key</label>
+      <div class="key-row">
+        <input id="api-key" type="password" autocomplete="off" spellcheck="false"
+               placeholder="貼上 OpenRouter API key">
+        <button id="toggle" type="button" title="顯示／隱藏">顯示</button>
+      </div>
+      <small id="key-state" class="muted">載入中…</small>
+      <small class="muted" style="display:block">
+        留空不會清除已設定的 key。要清除請按下方「清除 API Key」。
+      </small>
+    </div>
+
+    <div class="field">
+      <label for="model">Model</label>
+      <input id="model" spellcheck="false" autocomplete="off"
+             placeholder="qwen/qwen3.8-27b:free">
+      <small class="muted">
+        要自己確認過的模型 ID。建議使用標示 <code>:free</code> 的免費模型；
+        adapter 不會自動換模型。
+      </small>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="save">儲存</button>
+      <button id="test">測試 API</button>
+      <button id="clear" class="danger">清除 API Key</button>
+    </div>
+
+    <div class="status" id="status"></div>
+  </section>
+
+  <section class="card" style="margin-top:16px">
+    <h2>接下來</h2>
+    <p class="muted" style="margin:0 0 8px">
+      設定好之後，在商品頁或命令列執行 AI adapter，照片會變成
+      <em>待確認建議</em>，要逐筆看過、按接受才會寫進商品資料。
+    </p>
+    <pre class="cmd">python tools/analyze_item.py ITM-0001</pre>
+    <p class="muted" style="margin:8px 0 0">
+      設定存在 <code id="config-file">tools/ai_config.local.json</code>
+      （已加入 .gitignore，不會被 commit）。這個頁面只是它的一個前端。
+    </p>
+  </section>
+
+</div>
+
+<script src="/static/api.js"></script>
+<script src="/static/settings.js"></script>
+</body>
+</html>

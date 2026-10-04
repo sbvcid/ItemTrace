@@ -41,6 +41,7 @@ from . import photos as photos_mod
 from .config import Config, ConfigError
 from .errors import ConflictError, NotFoundError, ValidationError
 from .repo import Repository
+from .settings import router as settings_router
 from .schemas import (
     EventOut,
     HealthOut,
@@ -106,6 +107,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.state.config = cfg
     _register_error_handlers(app)
     app.include_router(router)
+    app.include_router(settings_router)
     _register_ui(app)
 
     @app.get("/files/{path:path}", include_in_schema=False)
@@ -124,7 +126,8 @@ def _register_ui(app: FastAPI) -> None:
 這些不是 API，所以不放進 OpenAPI（/docs 保持純 API 契約）。
 頁面是靜態 HTML，資料全部由前端的 fetch 打 /api/*，後端不多做一層模板。
 
-路由：/ 是 inbox（Phase 7）、/items 是列表、/items/{id} 是詳細頁。
+路由：/ 是 inbox（Phase 7）、/items 是列表、/items/{id} 是詳細頁、
+/settings 是 AI 設定頁（Post-v1 / AI-2）。
 """
     if not UI_DIR.is_dir():  # 測試環境或未 checkout UI 時不影響 API
         return
@@ -137,6 +140,10 @@ def _register_ui(app: FastAPI) -> None:
     @app.get("/items", include_in_schema=False)
     def items_page() -> FileResponse:
         return FileResponse(UI_DIR / "items.html")
+
+    @app.get("/settings", include_in_schema=False)
+    def settings_page() -> FileResponse:
+        return FileResponse(UI_DIR / "settings.html")
 
     @app.get("/items/{item_id}", include_in_schema=False)
     def item_page(item_id: str) -> FileResponse:

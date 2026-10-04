@@ -271,6 +271,49 @@ class InboxIntakeOut(BaseModel):
     skipped: list[SkippedFile] = Field(default_factory=list)
 
 
+class AiSettingsOut(BaseModel):
+    """GET /api/settings/ai 的回應。
+
+    刻意沒有 api_key 欄位，也不放任何可以反推出 key 的片段。要看有沒有設定
+    看 configured；要真的用 key 請在 server 端讀檔。
+    """
+
+    provider: str
+    configured: bool
+    model: str
+    default_model: str
+    #: 這台機器上，請求來自 loopback 才允許改設定。
+    can_edit: bool
+    #: 僅供使用者知道設定存在哪，不是秘密。
+    config_file: str
+
+
+class AiSettingsUpdate(BaseModel):
+    """POST /api/settings/ai 的請求。
+
+    `api_key` 留空或 None → **保留原本的 key**（密碼欄留白不是清除）。
+    要清除請呼叫 POST /api/settings/ai/clear-key。
+    """
+
+    model: str | None = None
+    api_key: str | None = None
+
+
+class AiSettingsSaved(BaseModel):
+    provider: str
+    configured: bool
+    model: str
+    #: 存了什麼，不存 key 本身。
+    api_key_changed: bool = False
+    model_changed: bool = False
+
+
+class AiApiTestResult(BaseModel):
+    ok: bool
+    model: str
+    detail: str = ""
+
+
 class HealthOut(BaseModel):
     status: str
     schema_version: str

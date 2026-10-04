@@ -95,6 +95,10 @@ function fakeElement(id, tagName = "div") {
       toggle(c, force) { (force ? classNames.add : classNames.delete).call(this, c); },
     },
     value: "",
+    /* 真 DOM 的 input 預設是 text；密碼欄的 password 由 markup 決定，
+       harness 會照 settings.html 設定。這裡給一個明確的值，避免 undefined
+       讓邏輯判斷反向。 */
+    type: "text",
     hidden: false,
     disabled: false,
     innerHTML: "",

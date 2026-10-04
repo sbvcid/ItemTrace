@@ -403,6 +403,7 @@ def test_ui_has_no_build_step_or_framework():
     assert files == [
         "api.js", "app.css", "inbox.html", "inbox.js",
         "item.html", "item.js", "items.html", "list.js",
+        "settings.html", "settings.js",
     ]
     for path in UI_DIR.iterdir():
         text = path.read_text(encoding="utf-8")

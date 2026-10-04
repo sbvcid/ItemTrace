@@ -31,8 +31,45 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
+
+# 設定檔的格式、驗證、遮蔽只有 shop/ai_config.py 一份，這裡直接共用，
+# 不再自己刻一遍 —— 兩邊規則漂移過好幾次了。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from shop.ai_config import (  # noqa: E402
+    DEFAULT_MODEL,
+    MISSING_CONFIG,
+    AiConfig,
+    AiConfigError,
+    config_path,
+    example_path,
+    load_config,
+    read_settings,
+    redact,
+    save_settings,
+)
+
+AnalyzerError = AiConfigError
+
+# 這些是從 shop.ai_config 轉出來的名字。analyze_item 是外部工具，
+# 測試與其他呼叫端仍然用 analyze_item.load_config / .redact 這些名字，
+# 轉出來就不必到處改匯入來源。實際定義只有 shop/ai_config.py 一份。
+__all__ = [
+    "AiConfig",
+    "AnalyzerError",
+    "DEFAULT_MODEL",
+    "MISSING_CONFIG",
+    "ItemTraceClient",
+    "analyze",
+    "example_path",
+    "call_openrouter",
+    "config_path",
+    "load_config",
+    "main",
+    "read_settings",
+    "redact",
+    "save_settings",
+]
 
 #: 這一輪只認這些欄位。不確定就不輸出 —— 空陣列比猜測好。
 ALLOWED_FIELDS = (
@@ -58,7 +95,7 @@ ALLOWED_FIELDS = (
 #:
 #: 刻意不設自動 fallback：不能因為免費模型失敗就改用付費的。要換模型請用
 #: --model 明確指定，而且必須自己確認那是免費的。
-DEFAULT_MODEL = "qwen/qwen3.8-27b:free"
+# DEFAULT_MODEL 由 shop.ai_config 提供，這裡不再重複定義。
 
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_BASE_URL = "http://127.0.0.1:8731"
@@ -91,73 +128,6 @@ PROMPT = """\
 5. 照片順序就是給定的順序，不要重新編號。
 6. 完全讀不到就回傳空的 suggestions 陣列。不要解釋，不要客套。
 """
-
-
-class AnalyzerError(Exception):
-    """使用者可以自己處理掉的問題（設定、網路、模型輸出不合規）。"""
-
-
-# ----------------------------------------------------------------------
-# 設定：只從 tools/ai_config.local.json
-# ----------------------------------------------------------------------
-
-TOOLS_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = TOOLS_DIR / "ai_config.local.json"
-EXAMPLE_PATH = TOOLS_DIR / "ai_config.example.json"
-
-MISSING_CONFIG = f"""\
-找不到 {CONFIG_PATH.name}（預期在 {CONFIG_PATH}）
-
-第一次使用請先建立設定檔：
-    複製 tools/ai_config.example.json
-      → tools/ai_config.local.json
-    把裡面的 api_key 換成自己的 OpenRouter API key
-    （model 不填就用預設值）
-
-這個檔案已被 .gitignore 排除，不會被 commit。"""
-
-
-@dataclass(frozen=True)
-class AiConfig:
-    api_key: str
-    model: str
-
-
-def load_config(path: Path | str = CONFIG_PATH) -> AiConfig:
-    """讀本機設定。沒有就明確停下來 —— 不 fallback 到任何其他地方。"""
-    path = Path(path)
-    if not path.exists():
-        raise AnalyzerError(MISSING_CONFIG)
-
-    try:
-        raw = path.read_text(encoding="utf-8-sig")
-    except OSError as exc:
-        raise AnalyzerError(f"讀不到 {path}：{exc.strerror}") from None
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        # 整份內容可能含 key，只報錯不行銷毀它
-        raise AnalyzerError(
-            f"{path.name} 不是合法 JSON（第 {exc.lineno} 行）：{exc.msg}"
-        ) from None
-
-    if not isinstance(data, dict):
-        raise AnalyzerError(f"{path.name} 的內容必須是 JSON 物件")
-
-    api_key = data.get("api_key")
-    if not isinstance(api_key, str) or not api_key.strip():
-        raise AnalyzerError(f"{path.name} 缺少 api_key（或不是非空字串）")
-
-    model = data.get("model")
-    if model is not None and not isinstance(model, str):
-        raise AnalyzerError(
-            f"{path.name} 的 model 必須是字串（或留空用預設值），"
-            f"得到 {type(model).__name__}"
-        )
-    filled = (model or "").strip()
-
-    return AiConfig(api_key=api_key.strip(), model=filled or DEFAULT_MODEL)
 
 
 # ----------------------------------------------------------------------
@@ -324,13 +294,6 @@ def build_request_body(model: str, data_urls: list[str]) -> dict:
             },
         },
     }
-
-
-def redact(text: str, secret: str | None) -> str:
-    """任何要顯示給使用者的文字都先過這裡。"""
-    if secret and secret in text:
-        text = text.replace(secret, "***")
-    return re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-***", text)
 
 
 def call_openrouter(api_key: str, model: str, data_urls: list[str],

@@ -294,6 +294,46 @@ button.big {
   border-radius: 14px;
 }
 
+/* ---------- 設定頁 ---------- */
+
+.key-row { display: flex; gap: 8px; }
+.key-row input { flex: 1; min-width: 0; }
+
+.field { margin-bottom: 14px; }
+.field input[readonly] { color: var(--muted); background: var(--panel-2); }
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+button.danger {
+  border-color: rgba(242, 85, 90, .5);
+  color: #ffb4b7;
+}
+button.danger:hover:not(:disabled) { border-color: var(--bad); }
+
+.status { margin-top: 12px; font-size: 13.5px; min-height: 20px; }
+.status-ok { color: var(--ok); }
+.status-bad { color: var(--bad); }
+.status-info { color: var(--muted); }
+
+pre.cmd {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  overflow-x: auto;
+  margin: 0;
+}
+
+#lan-warning {
+  border-color: rgba(240, 180, 41, .55);
+  background: rgba(240, 180, 41, .08);
+}
+
 /* ---------- 詳細頁 ---------- */
 
 .detail-head {

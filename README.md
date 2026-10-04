@@ -113,15 +113,28 @@ node --check ui/item.js               # JS 語法（有 node 才需要）
 結果以 **pending 建議**寫回來。它不會動商品資料 —— 要人工在商品頁逐筆
 看過、按接受才會生效。
 
-第一次使用：
+### 設定（用網頁）
 
-1. 複製 `tools/ai_config.example.json` → `tools/ai_config.local.json`
-2. 把 `api_key` 換成自己的 OpenRouter API key
-3. `model` 不填就用預設值，也可以改成自己確認過的**免費**模型
-4. 執行：`python tools/analyze_item.py ITM-0001`
+1. 啟動 ItemTrace，開 **<http://127.0.0.1:8731/settings>**
+2. 填入 OpenRouter API key
+3. 設定 model（不填就用預設值 `qwen/qwen3.8-27b:free`）
+4. 按「測試 API」確認連得上
+5. 回到商品頁執行 AI adapter
 
-`tools/ai_config.local.json` 已被 `.gitignore` 排除，不會被 commit。
-這支腳本只從這個檔案讀憑證，不使用環境變數，也不共用其他工具的 key。
+設定存在 **`tools/ai_config.local.json`** —— 那是後台實作細節，你平常
+不需要碰它。也可以直接複製 `tools/ai_config.example.json` 改名成
+`ai_config.local.json` 編輯。該檔案已被 `.gitignore` 排除，不會被 commit。
+
+> **只有本機可以改。** `/settings` 的讀取（看有無設定、model）是任何來源
+> 都能做，但**寫入 API key、清除、測試**只接受來自 `127.0.0.1` /
+> `::1` 的請求。同一個 Wi-Fi 裡的其他裝置看得到設定頁，但改不了你的
+> OpenRouter 帳號。
+
+### 執行
+
+```bash
+python tools/analyze_item.py ITM-0001
+```
 
 ## 舊概念驗證程式
 v1 之前的概念驗證版本（交易紀錄）**已從 repo 移除**，v1 不需要它們。

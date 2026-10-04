@@ -49,6 +49,30 @@ def client(config: config_mod.Config):
         yield test_client
 
 
+@pytest.fixture()
+def client_factory(config: config_mod.Config):
+    """建立指定「來源位址」的 HTTP 測試客戶端。
+
+    /settings 只允許 loopback 修改 secret，所以測試必須能假裝自己來自
+    127.0.0.1 或區網 IP。TestClient(client=...) 設定的是 scope["client"]，
+    也就是 server 從 socket 對端看到的那個位址。
+    """
+    from contextlib import contextmanager
+
+    from fastapi.testclient import TestClient
+
+    from shop.api import create_app
+
+    app = create_app(config)
+
+    @contextmanager
+    def make(address):
+        with TestClient(app, client=tuple(address)) as test_client:
+            yield test_client
+
+    return make
+
+
 # ----------------------------------------------------------------------
 # 合成 JPEG
 #
