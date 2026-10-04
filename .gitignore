@@ -39,6 +39,11 @@ htmlcov/
 .tox/
 
 # ── 憑證與本機機密 ────────────────────────────────────────────────
+
+# AI adapter 的本機設定（放 OpenRouter API key）。絕對不能進 Git。
+tools/ai_config.local.json
+tools/*.local.json
+
 .env
 .env.*
 *.pem

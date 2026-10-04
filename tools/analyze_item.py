@@ -9,11 +9,15 @@ AI 只是 suggestion producer（SPEC-v1 §1、§13）。
 （讀商品、讀照片、建立 suggestion）。accept / reject / PATCH 沒有對應的
 呼叫途徑，想呼叫也沒地方調。
 
+設定只來自 tools/ai_config.local.json。刻意**不**讀環境變數
+OPENROUTER_API_KEY、也不找 ~/.config 或 Windows credential —— 這支
+adapter 的憑證來源只有它自己那個檔案，免得和同機器上其他 agent 共用同一把
+key。該檔案已被 .gitignore 排除。
+
 用法：
+    複製 tools/ai_config.example.json → tools/ai_config.local.json，填入 api_key
     python tools/analyze_item.py ITM-0001
     python tools/analyze_item.py ITM-0001 --base-url http://192.168.1.10:8731
-
-API key 從環境變數 OPENROUTER_API_KEY 讀，不從命令列參數、不寫檔。
 """
 
 from __future__ import annotations
@@ -22,12 +26,13 @@ import argparse
 import base64
 import json
 import mimetypes
-import os
 import re
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
 
 #: 這一輪只認這些欄位。不確定就不輸出 —— 空陣列比猜測好。
 ALLOWED_FIELDS = (
@@ -90,6 +95,69 @@ PROMPT = """\
 
 class AnalyzerError(Exception):
     """使用者可以自己處理掉的問題（設定、網路、模型輸出不合規）。"""
+
+
+# ----------------------------------------------------------------------
+# 設定：只從 tools/ai_config.local.json
+# ----------------------------------------------------------------------
+
+TOOLS_DIR = Path(__file__).resolve().parent
+CONFIG_PATH = TOOLS_DIR / "ai_config.local.json"
+EXAMPLE_PATH = TOOLS_DIR / "ai_config.example.json"
+
+MISSING_CONFIG = f"""\
+找不到 {CONFIG_PATH.name}（預期在 {CONFIG_PATH}）
+
+第一次使用請先建立設定檔：
+    複製 tools/ai_config.example.json
+      → tools/ai_config.local.json
+    把裡面的 api_key 換成自己的 OpenRouter API key
+    （model 不填就用預設值）
+
+這個檔案已被 .gitignore 排除，不會被 commit。"""
+
+
+@dataclass(frozen=True)
+class AiConfig:
+    api_key: str
+    model: str
+
+
+def load_config(path: Path | str = CONFIG_PATH) -> AiConfig:
+    """讀本機設定。沒有就明確停下來 —— 不 fallback 到任何其他地方。"""
+    path = Path(path)
+    if not path.exists():
+        raise AnalyzerError(MISSING_CONFIG)
+
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        raise AnalyzerError(f"讀不到 {path}：{exc.strerror}") from None
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        # 整份內容可能含 key，只報錯不行銷毀它
+        raise AnalyzerError(
+            f"{path.name} 不是合法 JSON（第 {exc.lineno} 行）：{exc.msg}"
+        ) from None
+
+    if not isinstance(data, dict):
+        raise AnalyzerError(f"{path.name} 的內容必須是 JSON 物件")
+
+    api_key = data.get("api_key")
+    if not isinstance(api_key, str) or not api_key.strip():
+        raise AnalyzerError(f"{path.name} 缺少 api_key（或不是非空字串）")
+
+    model = data.get("model")
+    if model is not None and not isinstance(model, str):
+        raise AnalyzerError(
+            f"{path.name} 的 model 必須是字串（或留空用預設值），"
+            f"得到 {type(model).__name__}"
+        )
+    filled = (model or "").strip()
+
+    return AiConfig(api_key=api_key.strip(), model=filled or DEFAULT_MODEL)
 
 
 # ----------------------------------------------------------------------
@@ -441,36 +509,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("item_id", help="例如 ITM-0001")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL,
                         help=f"ItemTrace 服務位置（預設 {DEFAULT_BASE_URL}）")
-    parser.add_argument("--model", default=DEFAULT_MODEL,
-                        help=f"OpenRouter 模型（預設 {DEFAULT_MODEL}，不會自動 fallback）")
+    parser.add_argument("--model", default=None,
+                        help="覆蓋設定檔裡的 model（預設用 ai_config.local.json 的值）")
     parser.add_argument("--max-photos", type=int, default=MAX_PHOTOS,
                         help=f"最多送幾張照片（預設 {MAX_PHOTOS}）")
     parser.add_argument("--quiet", action="store_true", help="不輸出進度")
     args = parser.parse_args(argv)
 
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
-        print(
-            "找不到 OPENROUTER_API_KEY。\n"
-            "  設定方式（不要把 key 寫進檔案或 commit）：\n"
-            "    PowerShell  $env:OPENROUTER_API_KEY = '...'\n"
-            "    cmd        set OPENROUTER_API_KEY=...",
-            file=sys.stderr,
-        )
+    try:
+        config = load_config()
+    except AnalyzerError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
 
+    model = args.model or config.model
     echo = (lambda message: None) if args.quiet else (lambda message: print(message))
     try:
         created = analyze(
             ItemTraceClient(args.base_url),
-            api_key,
+            config.api_key,
             args.item_id,
-            model=args.model,
+            model=model,
             max_photos=args.max_photos,
             echo=echo,
         )
     except AnalyzerError as exc:
-        print(redact(str(exc), api_key), file=sys.stderr)
+        print(redact(str(exc), config.api_key), file=sys.stderr)
         return 1
     echo(f"\n{args.item_id}：{len(created)} 筆 pending 建議已送出。")
     echo("接著到 ItemTrace 商品頁逐筆看過再接受 —— AI 不會自己決定。")

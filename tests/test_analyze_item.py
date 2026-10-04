@@ -438,26 +438,31 @@ def test_unexpected_provider_shape_is_reported():
 
 
 def test_missing_api_key_message_is_clear(monkeypatch, capsys):
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    """缺設定檔時要明確停下來，並說明怎麼建立。"""
+    monkeypatch.setattr(analyzer, "load_config",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            analyzer.AnalyzerError(analyzer.MISSING_CONFIG)))
     code = analyzer.main(["ITM-0001"])
     captured = capsys.readouterr()
     assert code == 2
-    assert "OPENROUTER_API_KEY" in captured.err
+    assert "ai_config.local.json" in captured.err
+    assert "ai_config.example.json" in captured.err
 
 
 def test_api_key_is_never_printed(monkeypatch, capsys):
-    monkeypatch.setenv("OPENROUTER_API_KEY", SECRET)
+    config = analyzer.AiConfig(api_key=SECRET, model="m:free")
+    monkeypatch.setattr(analyzer, "load_config", lambda *a, **k: config)
 
-    def failing(api_key, model, data_urls):
+    def failing(client, api_key, item_id, *, model, max_photos, echo):
         raise analyzer.AnalyzerError(f"provider 回應包含 {api_key} 這段文字")
 
-    with pytest.raises(analyzer.AnalyzerError):
-        analyzer.analyze(FakeItemTrace(), SECRET, "ITM-0001", provider=failing)
+    monkeypatch.setattr(analyzer, "analyze", failing)
 
-    analyzer.main(["ITM-0001"])
+    assert analyzer.main(["ITM-0001"]) == 1
     captured = capsys.readouterr()
     assert SECRET not in captured.out
     assert SECRET not in captured.err
+    assert "***" in captured.err
 
 
 def test_redact_removes_the_key():
@@ -472,10 +477,7 @@ def test_redact_also_catches_keys_it_was_not_told_about():
 
 
 def test_provider_error_path_redacts(capsys, monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", SECRET)
-
-    class FakeResponse:
-        status = 401
+    secret = analyzer.AiConfig(api_key=SECRET, model="m:free")
 
     def fake_urlopen(request, timeout=None):
         raise analyzer.urllib.error.HTTPError(
@@ -485,7 +487,7 @@ def test_provider_error_path_redacts(capsys, monkeypatch):
 
     monkeypatch.setattr(analyzer.urllib.request, "urlopen", fake_urlopen)
     with pytest.raises(analyzer.AnalyzerError) as excinfo:
-        analyzer.call_openrouter(SECRET, "m", [])
+        analyzer.call_openrouter(secret.api_key, "m", [])
     assert SECRET not in str(excinfo.value)
 
 

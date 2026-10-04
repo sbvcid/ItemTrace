@@ -107,8 +107,23 @@ node --check ui/item.js               # JS 語法（有 node 才需要）
 
 衍生檔案（縮圖）在 `derived/`，可以整個刪掉重生。
 
-## 舊概念驗證程式
+## AI 辨識（選用，core 之外）
 
+`tools/analyze_item.py` 是一支**外部**腳本：把商品照片送到 Vision 模型，
+結果以 **pending 建議**寫回來。它不會動商品資料 —— 要人工在商品頁逐筆
+看過、按接受才會生效。
+
+第一次使用：
+
+1. 複製 `tools/ai_config.example.json` → `tools/ai_config.local.json`
+2. 把 `api_key` 換成自己的 OpenRouter API key
+3. `model` 不填就用預設值，也可以改成自己確認過的**免費**模型
+4. 執行：`python tools/analyze_item.py ITM-0001`
+
+`tools/ai_config.local.json` 已被 `.gitignore` 排除，不會被 commit。
+這支腳本只從這個檔案讀憑證，不使用環境變數，也不共用其他工具的 key。
+
+## 舊概念驗證程式
 v1 之前的概念驗證版本（交易紀錄）**已從 repo 移除**，v1 不需要它們。
 
 其中出貨單的排版技術 —— SPEC-v1 §9 指名要保留的可攜資產 —— 現已單獨放在
