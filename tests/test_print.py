@@ -26,10 +26,7 @@
 from __future__ import annotations
 
 import html as html_mod
-import json
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -141,27 +138,6 @@ def browser_or_skip():
         pytest.skip(str(exc))
 
 
-def zh_translations() -> dict:
-    """讀 ui/i18n.js 的繁體中文字典。
-
-    用 node 而不是 Python 解析：i18n.js 是 JavaScript，用 regex 硬 parse
-    會在格式一改就出錯。node 已是 UI 測試的既有依賴（*_dom_harness.js）。
-    """
-    if shutil.which("node") is None:
-        pytest.skip("需要 node 才能讀 ui/i18n.js 的翻譯字典")
-    script = (
-        "const fs=require('fs'),vm=require('vm');"
-        "const s={console};vm.createContext(s);"
-        "const src=fs.readFileSync(process.argv[1],'utf8');"
-        "vm.runInContext(src+';globalThis.__T=I18N_TRANSLATIONS;',s);"
-        "process.stdout.write(JSON.stringify(s.__T['zh-TW']));"
-    )
-    result = subprocess.run(
-        ["node", "-e", script, str(ROOT / "ui" / "i18n.js")],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
 
 
 # ----------------------------------------------------------------------
@@ -387,46 +363,6 @@ def test_print_uses_the_same_rendered_html_as_preview(
     assert preview == printed
 
 
-def test_no_page_chrome_appears_in_the_output(
-    repo, config, label_template, full_item
-):
-    """網頁的 UI（標題、按鈕文字、商品資訊區）不會出現在列印輸出。
-
-    列印輸入只有 Template 渲染結果，所以頁面 chrome 在架構上就不可能
-    進來；這個測試是把它釘住，避免日後有人改成送整頁。
-
-    對照的頁面是商品頁與「設定 → 列印」：Template 管理與列印都在那裡，
-    商品頁只有「挑範本 → 預覽 → 列印」。
-
-    UI 的可見文字來自翻譯字典（ui/i18n.js），不在 markup 上 —— 所以要
-    從字典取值，不在這裡寫一份中文字串。寫一份的話，字典改了這條測試
-    不會跟著動，會出現「測試通過但頁面上根本沒有那句話」。
-    """
-    browser_or_skip()
-    ui_text = zh_translations()
-
-    pages = {
-        name: (ROOT / "ui" / name).read_text(encoding="utf-8")
-        for name in ("item.html", "printing_settings.html")
-    }
-    # 每個 key 都要真的出現在某個頁面上（測試前提），且不能出現在輸出裡。
-    chrome_keys = [
-        "item.item_status_label", "item.data_title", "identifier.title",
-        "observation.title", "event.title",
-        "printing.settings_title", "template.manager_title",
-        "template.create_title", "printing.default_printer",
-        "printing.default_template",
-    ]
-    rendered = render_template_preview(label_template, full_item, repo, config)
-    actual = pdf_text(build(repo, config, label_template, full_item))
-    for key in chrome_keys:
-        phrase = ui_text[key]
-        assert phrase, key
-        assert any(
-            phrase in markup for markup in pages.values()
-        ), f"測試前提失效：{phrase}（{key}）不在任何頁面上"
-        assert phrase not in rendered, f"UI 文字漏進渲染結果：{phrase}"
-        assert phrase not in actual, f"UI 文字出現在標籤上：{phrase}"
 
 
 def test_print_style_overrides_a_template_without_page_size(repo, config):
@@ -755,10 +691,3 @@ def test_print_does_not_modify_items_or_write_events(
 
     after = repo.get_item(full_item.id)
     assert after == before
-
-
-def test_print_endpoint_is_reachable_from_the_ui_string():
-    """ui/*.js 引用的 /api 路徑必須存在（tests/test_ui.py 也會掃）。"""
-    source = (ROOT / "ui" / "printing_settings.js").read_text(encoding="utf-8")
-    assert "/print" in source
-    assert "/printers" in source

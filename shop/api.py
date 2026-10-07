@@ -144,7 +144,7 @@ def _register_ui(app: FastAPI) -> None:
     注意：Template 的上傳／預覽／CRUD 集中在 /settings/printing，
     商品頁只留「挑範本 → 預覽 → 列印」。
     """
-    if not UI_DIR.is_dir():  # 測試環境或未 checkout UI 時不影響 API
+    if not UI_DIR.is_dir() or not (UI_DIR / "inbox.html").is_file():  # 舊 UI 已移除或未 checkout 時不掛載舊頁面
         return
     app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 

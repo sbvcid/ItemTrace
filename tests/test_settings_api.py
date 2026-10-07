@@ -88,10 +88,6 @@ def fake_provider(monkeypatch):
 # ----------------------------------------------------------------------
 
 
-def test_settings_page_loads(client):
-    response = client.get("/settings")
-    assert response.status_code == 200
-    assert "/static/settings.js" in response.text
 
 
 def test_settings_page_is_not_in_the_api_contract(client):

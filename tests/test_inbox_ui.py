@@ -8,23 +8,10 @@
 
 from __future__ import annotations
 
-import json
-import re
-import shutil
-import subprocess
-from pathlib import Path
-
 import pytest
 
+
 from tests.conftest import make_jpeg
-
-
-def ui(name: str) -> str:
-    from pathlib import Path
-
-    return (Path(__file__).resolve().parents[1] / "ui" / name).read_text(
-        encoding="utf-8"
-    )
 
 
 def upload_to_inbox(client, count=1, *, start_minute=30, tag="IMG"):
@@ -54,13 +41,6 @@ def group_files(client, gap_minutes=30):
 def test_inbox_starts_empty(client):
     assert client.get("/api/inbox").json() == {"entries": [], "count": 0}
     assert group_files(client) == []
-
-
-def test_empty_inbox_renders_the_page(client):
-    body = client.get("/").text
-    assert "/static/inbox.js" in body
-    assert 'id="file-input"' in body
-    assert "multiple" in body
 
 
 # ----------------------------------------------------------------------
@@ -177,24 +157,6 @@ def test_group_carries_enough_for_the_card(client):
     assert all(e["bytes"] > 0 for e in group["entries"])
 
 
-def test_frontend_does_not_reimplement_grouping(client):
-    """分組交給後端，前端不自己讀 EXIF、不自己切時間。"""
-    source = ui("inbox.js")
-    assert "/api/inbox/group" in source
-    assert "gap_minutes" in source
-    for forbidden in ("DateTimeOriginal", "exif", "Date.parse"):
-        assert forbidden not in source, f"前端不該自己做 {forbidden}"
-
-
-def test_frontend_shows_the_gap_in_use(client):
-    source = ui("inbox.js")
-    assert "gapSelect.value" in source
-    markup = ui("inbox.html")
-    assert 'id="gap"' in markup
-    # 預設 30 分鐘，且和後端常數一致
-    from shop.api import DEFAULT_GROUP_GAP_MINUTES
-
-    assert f'value="{DEFAULT_GROUP_GAP_MINUTES}" selected' in markup
 
 
 # ----------------------------------------------------------------------
@@ -419,41 +381,6 @@ def test_untimed_and_timed_photos_are_separated(client, config, monkeypatch):
     assert client.get("/api/inbox").json()["count"] == 0
 
 
-def test_frontend_offers_to_build_the_untimed_group(client):
-    """未分組不能只是「顯示出來而已」，必須可選、可建檔。"""
-    markup = ui("inbox.html")
-    assert 'id="ungrouped"' in markup
-    assert "沒有拍攝時間" in markup
-    assert "時間讀不出來" in markup
-
-    source = ui("inbox.js")
-    # 未分組被當成一個可選的組合，走同一條 intake 路徑
-    assert "LOOSE_KEY" in source
-    assert "function choices()" in source
-    assert "groupCard(loose)" in source
-    assert "choices().find" in source
-    # 前端只有一條建檔路徑，不管有沒有時間都走它
-    assert source.count('api("/api/inbox/intake"') == 1
-
-
-def test_untimed_copy_does_not_promise_splitting(client):
-    """文案不能承諾 v1 沒有的功能。
-
-    SPEC-v1 §12 明確不做商品合併／拆分，所以不能寫「之後再拆」——
-    那會讓人以為之後能拆，其實拆不了。未分組那批會變成同一件商品，
-    文案要老實說清楚。
-    """
-    markup = ui("inbox.html")
-    for promised in ("之後再拆", "再拆開", "之後可以拆", "可以拆"):
-        assert promised not in markup, f"文案不該承諾拆分功能：{promised}"
-    # 反而要說清楚實際行為
-    assert "同一件商品" in markup
-
-
-def test_frontend_untimed_card_is_selectable_like_the_others(client):
-    source = ui("inbox.js")
-    assert "selectGroup(group.index)" in source
-    assert "group.captured_at ? timeRange(group)" in source
 
 
 def test_unknown_file_is_rejected_and_changes_nothing(client):
@@ -559,187 +486,4 @@ def test_partial_failure_returns_files_to_the_inbox(client, config, monkeypatch)
     archived = config.files_dir / "ITM-0001" / "original"
     assert not archived.exists() or list(archived.iterdir()) == []
 
-
-# ----------------------------------------------------------------------
-# 前端行為
-# ----------------------------------------------------------------------
-
-
-def test_frontend_navigates_to_the_item_after_intake(client):
-    source = ui("inbox.js")
-    assert 'window.location.href = "/items/"' in source
-    assert "done.item_id" in source
-
-
-def test_frontend_selects_a_group_before_building(client):
-    source = ui("inbox.js")
-    assert "selectGroup" in source
-    assert "selected === null" in source
-    assert "/api/inbox/intake" in source
-
-
-def test_frontend_uploads_with_the_files_field(client):
-    """multipart 欄位名要是 files，和後端一致。"""
-    source = ui("inbox.js")
-    assert 'body.append("files", file, file.name)' in source
-
-
-def test_frontend_does_not_upload_existing_inbox_files_again(client):
-    """檔案已經在 inbox 上了，前端不該重新上傳它們。"""
-    source = ui("inbox.js")
-    assert "group.entries.map((entry) => entry.relative)" in source
-    assert "/api/observations" not in source
-
-
-def test_upload_area_is_large_enough_for_thumbs(client):
-    """手機優先：上傳區與建檔按鈕都要夠大。"""
-    markup = ui("inbox.html")
-    assert 'type="file"' in markup and "multiple" in markup
-    assert "點這裡選照片" in markup
-    css = ui("app.css")
-    assert "button.big" in css
-    assert ".dropzone" in css
-
-
-# ----------------------------------------------------------------------
-# 選照片的觸發鏈
-#
-# 實機踩過的坑：#dropzone 原本是 <label> 包住 file input，點下去時
-# 瀏覽器原生觸發 input，JS 又呼叫一次 fileInput.click() → 雙重觸發 →
-# file picker 被開兩次又立刻收掉，change 沒發生，
-# POST /api/inbox/photos 從來沒送出。
-# ----------------------------------------------------------------------
-
-
-def test_dropzone_is_not_a_label(client):
-    """上傳區不能是 label：label 會原生觸發內部的 input。"""
-    markup = ui("inbox.html")
-    assert not re.search(r'<label[^>]*id="dropzone"', markup), (
-        "dropzone 必須是 div，不是 label"
-    )
-    assert '<div class="dropzone" id="dropzone">' in markup
-    # 整個上傳區裡不該還有別的 label 包 input
-    assert not re.search(r"<label[^>]*>\s*<input", markup)
-
-
-def test_file_input_is_still_hidden_inside_the_dropzone(client):
-    markup = ui("inbox.html")
-    block = markup.split('id="dropzone"')[1].split("</div>")[0]
-    assert 'id="file-input"' in block
-    assert 'type="file"' in block
-    assert "multiple" in block
-    assert "hidden" in block
-    assert 'accept="image/*"' in block
-
-
-def test_dropzone_click_is_the_only_trigger(client):
-    """fileInput.click() 只能被呼叫一次，且只在 dropzone 的 click handler 裡。"""
-    source = ui("inbox.js")
-    # 總數 1 就擋掉「任何地方多開一次 picker」
-    assert source.count("fileInput.click()") == 1
-
-    handler = source.split('dropzone.addEventListener("click"')[1].split("});")[0]
-    assert "fileInput.click()" in handler
-
-
-def test_change_handler_copies_the_filelist_before_clearing(client):
-    """先把 FileList 複製成 Array，再清 input —— 順序反過來會拿到 0 張。
-
-    input.files 是活的 FileList：value = "" 會清空 selected files，
-    getter 又回傳同一個物件。所以先取參照再清空，那個參照會跟著變空，
-    upload() 的 `if (!files.length) return` 直接早退，一張都沒上傳。
-    """
-    source = ui("inbox.js")
-    change = source.split('fileInput.addEventListener("change"')[1].split("});")[0]
-    copy_at = change.index("Array.from(fileInput.files)")
-    clear_at = change.index('fileInput.value = ""')
-    assert copy_at < clear_at, "必須先複製 FileList 再清 input"
-    assert "upload(picked)" in change
-
-
-def test_upload_sends_multipart_field_named_files(client):
-    """multipart 欄位名必須是 files，和後端 /api/inbox/photos 一致。"""
-    source = ui("inbox.js")
-    assert 'body.append("files", file, file.name)' in source
-    assert 'api("/api/inbox/photos", { method: "POST", body })' in source
-
-
-def test_upload_does_not_leave_the_start_button_enabled_by_accident(client):
-    """上傳進行中要鎖住建檔按鈕，避免同時跑兩條流程。"""
-    source = ui("inbox.js")
-    upload_body = source.split("async function upload(")[1].split("\nasync function")[0]
-    assert "startBtn.disabled = true" in upload_body
-    assert "if (!files || !files.length) return" in upload_body
-
-
-# ----------------------------------------------------------------------
-# 行為測試：在假的 DOM 上真的派發 change，看 upload 收到什麼
-#
-# 上面那些是原始碼比對，擋得住「忘了清 value」，擋不住「清 value 之後
-# FileList 被清空」。這組用 node 的 vm 跑真正的 ui/inbox.js，假造的 file
-# input 照 HTML Standard 建模（value="" 會清空 selected files、files
-# getter 回傳同一個活物件），所以真的會重現那個 bug。
-# ----------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def harness():
-    """跑一次 tests/inbox_dom_harness.js，回傳每個張數情境的結果。"""
-    if shutil.which("node") is None:
-        pytest.skip("需要 node 才能做行為測試")
-    script = Path(__file__).resolve().parent / "inbox_dom_harness.js"
-    result = subprocess.run(
-        ["node", str(script)], capture_output=True, text=True,
-        encoding="utf-8", errors="replace",
-    )
-    assert result.returncode == 0, f"harness 執行失敗：{result.stderr}"
-    return {row["requested"]: row for row in json.loads(result.stdout)}
-
-
-def test_picking_photos_actually_posts_them(harness):
-    """重點：選完照片要真的送出，不是安靜地什麼都沒做。"""
-    for count in (1, 3, 8):
-        row = harness[count]
-        assert row["posted"] is True, f"選 {count} 張卻沒有 POST"
-        assert row["method"] == "POST"
-        assert row["fieldNames"] == ["files"]
-        assert row["sentCount"] == count, f"選 {count} 張只送出 {row['sentCount']} 張"
-        assert row["sentNames"] == [f"IMG_{i}.jpg" for i in range(count)]
-
-
-def test_clearing_the_input_does_not_empty_the_upload(harness):
-    """input 被清空（為了讓同一批能再選一次）不影響已經抓到的檔案。"""
-    for count in (1, 3, 8):
-        row = harness[count]
-        assert row["fileInputCleared"] is True, "input 沒有被清空"
-        assert row["sentCount"] == count, "清空 input 把檔案清掉了"
-
-
-def test_multiple_photos_are_not_reduced_to_zero(harness):
-    """多張不會因為清 value 變成 0 張 —— 這正是 8d2d2b9 的症狀。"""
-    assert harness[8]["sentCount"] == 8
-    assert harness[3]["sentCount"] == 3
-
-
-def test_single_photo_upload_posts_one_file(harness):
-    assert harness[1]["sentNames"] == ["IMG_0.jpg"]
-    assert harness[1]["sentCount"] == 1
-
-
-def test_selecting_nothing_sends_no_request(harness):
-    """取消選取不該送出空請求。"""
-    assert harness[0]["posted"] is False
-    assert harness[0]["sentCount"] == 0
-
-
-def test_inbox_page_has_no_form_fields_before_building(client):
-    """不要求使用者先填很多欄位：inbox 上只有檔案選擇。"""
-    markup = ui("inbox.html")
-    assert markup.count("<input") == 1  # 只有檔案選擇；分組 radio 由 JS 產生
-    assert "開始建檔" in markup
-
-
-def test_no_ai_or_suggestion_automation_in_the_inbox(client):
-    joined = ui("inbox.html") + ui("inbox.js")
-    for forbidden in ("/api/suggestions", "/accept", "/reject", "/api/ai", "openai", "ocr"):
-        assert forbidden not in joined
+
