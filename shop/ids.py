@@ -17,6 +17,8 @@ from .config import Config
 
 ITEM_PREFIX = "ITM"
 ITEM_WIDTH = 4
+TEMPLATE_PREFIX = "TPL"
+TEMPLATE_WIDTH = 4
 OBSERVATION_KINDS = ("intake", "recheck", "manual")
 NON_ALNUM = re.compile(r"[\s\-_/\\.,;:'\"()\[\]{}<>+*&^%$#@!?]")
 
@@ -94,6 +96,13 @@ def next_observation_id(conn, date: str | None = None) -> str:
     prefix = f"OBS-{day}-"
     n = _max_numeric_suffix(conn, "observations", prefix) + 1
     return f"{prefix}{n:02d}"
+
+
+def next_template_id(conn) -> str:
+    """產生 Template ID：TPL-XXXX 格式。"""
+    prefix = f"{TEMPLATE_PREFIX}-"
+    n = _max_numeric_suffix(conn, "templates", prefix) + 1
+    return f"{prefix}{n:0{TEMPLATE_WIDTH}d}"
 
 
 def normalize_identifier(value: str) -> str:

@@ -48,10 +48,11 @@ def test_example_path_exists():
     assert ai_config.example_path().exists(), "example 設定檔必須存在"
 
 
-def test_example_config_is_not_a_real_key():
+def test_example_config_is_not_a_real_key(tmp_path):
     payload = json.loads(ai_config.example_path().read_text(encoding="utf-8"))
-    assert payload["api_key"] == "PASTE_OPENROUTER_API_KEY_HERE"
+    assert payload["api_key"] == "PASTE_API_KEY_HERE"
     assert "sk-or-v1-" not in payload["api_key"]
+    assert "AIza" not in payload["api_key"]
 
 
 # ----------------------------------------------------------------------
@@ -65,6 +66,7 @@ def test_missing_file_is_not_an_error(tmp_path):
     assert settings.exists is False
     assert settings.model == ai_config.DEFAULT_MODEL
     assert settings.provider == "openrouter"
+    assert settings.base_url == ai_config.DEFAULT_BASE_URL
 
 
 def test_existing_file_reports_configured_without_the_key(tmp_path):
@@ -73,14 +75,17 @@ def test_existing_file_reports_configured_without_the_key(tmp_path):
     )
     assert settings.configured is True
     assert settings.model == "a/b:free"
+    # 舊檔沒有 provider / base_url → 預設 openrouter（向後相容）
+    assert settings.provider == "openrouter"
+    assert settings.base_url == ai_config.DEFAULT_BASE_URL
 
 
 def test_settings_object_has_no_api_key_field():
     """少一個欄位就少一個洩漏的機會。"""
     assert "api_key" not in ai_config.AiSettings.__dataclass_fields__
     assert "api_key" not in repr(ai_config.AiSettings(
-        provider="openrouter", model="m", configured=True, exists=True,
-        path=Path("x"),
+        provider="openrouter", model="m", base_url="https://x/v1",
+        configured=True, exists=True, path=Path("x"),
     ))
 
 
@@ -157,6 +162,131 @@ def test_load_config_returns_key_and_model(tmp_path):
     )
     assert config.api_key == LOCAL_KEY
     assert config.model == "a/b:free"
+    assert config.provider == "openrouter"
+    assert config.base_url == ai_config.DEFAULT_BASE_URL
+
+
+# ----------------------------------------------------------------------
+# provider / base_url：可配置 AI endpoint
+# ----------------------------------------------------------------------
+
+
+def test_google_config_is_read(tmp_path):
+    settings = ai_config.read_settings(write(tmp_path / "c.json", api_key=LOCAL_KEY,
+        provider="google", model="gemini-3.8-flash"))
+    assert settings.provider == "google"
+    assert settings.base_url == (
+        "https://generativelanguage.googleapis.com/v1beta/openai"
+    )
+    config = ai_config.load_config(tmp_path / "c.json")
+    assert config.provider == "google"
+    assert config.base_url.endswith("/v1beta/openai")
+
+def test_custom_config_requires_base_url(tmp_path):
+    with pytest.raises(ai_config.AiConfigError) as excinfo:
+        ai_config.read_settings(write(tmp_path / "c.json", api_key=LOCAL_KEY,
+            provider="custom"))
+    assert "custom" in str(excinfo.value)
+    assert "base_url" in str(excinfo.value)
+
+def test_custom_config_with_base_url(tmp_path):
+    settings = ai_config.read_settings(write(tmp_path / "c.json",
+        api_key=LOCAL_KEY, provider="custom",
+        base_url="https://my-proxy.internal/v1"))
+    assert settings.provider == "custom"
+    assert settings.base_url == "https://my-proxy.internal/v1"
+
+@pytest.mark.parametrize("bad", ["ftp://x/v1", "not-a-url", "http://"])
+def test_base_url_must_be_http_https(tmp_path, bad):
+    with pytest.raises(ai_config.AiConfigError) as excinfo:
+        ai_config.read_settings(write(tmp_path / "c.json", api_key=LOCAL_KEY,
+            provider="custom", base_url=bad))
+    assert "http/https" in str(excinfo.value)
+
+@pytest.mark.parametrize("bad", ["gemini", "openai", ""])
+def test_provider_must_be_known(tmp_path, bad):
+    with pytest.raises(ai_config.AiConfigError) as excinfo:
+        ai_config.read_settings(write(tmp_path / "c.json", api_key=LOCAL_KEY,
+            provider=bad))
+    assert "provider" in str(excinfo.value)
+
+def test_provider_must_be_a_string(tmp_path):
+    with pytest.raises(ai_config.AiConfigError) as excinfo:
+        ai_config.read_settings(write(tmp_path / "c.json", api_key=LOCAL_KEY,
+            provider=123))
+    assert "provider 必須是字串" in str(excinfo.value)
+
+def test_base_url_must_be_a_string(tmp_path):
+    with pytest.raises(ai_config.AiConfigError) as excinfo:
+        ai_config.read_settings(write(tmp_path / "c.json", api_key=LOCAL_KEY,
+            base_url=123))
+    assert "base_url 必須是字串" in str(excinfo.value)
+
+def test_chat_endpoint_appends_path(tmp_path):
+    assert ai_config.chat_endpoint("openrouter", None) == (
+        "https://openrouter.ai/api/v1/chat/completions"
+    )
+    assert ai_config.chat_endpoint(
+        "google", None) == (
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    )
+    assert ai_config.chat_endpoint(
+        "custom", "https://x/v1/") == "https://x/v1/chat/completions"
+
+def test_save_with_provider_and_base_url(tmp_path):
+    target = tmp_path / "c.json"
+    settings = ai_config.save_settings(
+        LOCAL_KEY, "m:free", "google", None, target
+    )
+    assert settings.provider == "google"
+    assert settings.base_url.endswith("/v1beta/openai")
+    stored = json.loads(target.read_text(encoding="utf-8"))
+    assert stored["provider"] == "google"
+    assert stored["base_url"].endswith("/v1beta/openai")
+
+def test_save_keeps_existing_base_url_when_provider_unchanged(tmp_path):
+    target = write(tmp_path / "c.json", api_key=LOCAL_KEY, model="m",
+        provider="custom", base_url="https://keep/v1")
+    ai_config.save_settings(None, "new:free", None, None, target)
+    stored = json.loads(target.read_text(encoding="utf-8"))
+    assert stored["provider"] == "custom"
+    assert stored["base_url"] == "https://keep/v1"
+
+def test_save_explicit_base_url_wins(tmp_path):
+    target = write(tmp_path / "c.json", api_key=LOCAL_KEY, model="m")
+    ai_config.save_settings(None, "m", "openrouter",
+                            "https://proxy/v1", target)
+    stored = json.loads(target.read_text(encoding="utf-8"))
+    assert stored["base_url"] == "https://proxy/v1"
+
+def test_save_explicit_base_url_must_be_http_https(tmp_path):
+    target = tmp_path / "c.json"
+    with pytest.raises(ai_config.AiConfigError) as excinfo:
+        ai_config.save_settings(LOCAL_KEY, "m", "custom", "ftp://x", target)
+    assert "http/https" in str(excinfo.value)
+    assert not target.exists()
+
+def test_save_unknown_provider_is_rejected(tmp_path):
+    with pytest.raises(ai_config.AiConfigError) as excinfo:
+        ai_config.save_settings(LOCAL_KEY, "m", "anthropic", None,
+                                tmp_path / "c.json")
+    assert "provider" in str(excinfo.value)
+
+def test_clear_keeps_provider_and_base_url(tmp_path):
+    target = write(tmp_path / "c.json", api_key=LOCAL_KEY, model="m",
+        provider="google", base_url="https://gemini.example/v1")
+    settings = ai_config.clear_api_key(target)
+    assert settings.configured is False
+    assert settings.provider == "google"
+    assert settings.base_url == "https://gemini.example/v1"
+    stored = json.loads(target.read_text(encoding="utf-8"))
+    assert "api_key" not in stored
+    assert stored["provider"] == "google"
+
+def test_redact_catches_google_key_shape():
+    gemini_key = "AIzaSyA1234567890abcdefghij1234567890"
+    assert gemini_key not in ai_config.redact(f"回傳了 {gemini_key}", None)
+    assert "AIza" not in ai_config.redact(f"回傳了 {gemini_key}", None)
 
 
 # ----------------------------------------------------------------------
@@ -166,11 +296,16 @@ def test_load_config_returns_key_and_model(tmp_path):
 
 def test_save_creates_the_file(tmp_path):
     target = tmp_path / "c.json"
-    settings = ai_config.save_settings(LOCAL_KEY, "a/b:free", target)
+    settings = ai_config.save_settings(LOCAL_KEY, "a/b:free", path=target)
     assert settings.configured is True
     assert settings.model == "a/b:free"
+    assert settings.provider == "openrouter"
+    assert settings.base_url == ai_config.DEFAULT_BASE_URL
     assert json.loads(target.read_text(encoding="utf-8")) == {
-        "api_key": LOCAL_KEY, "model": "a/b:free",
+        "api_key": LOCAL_KEY,
+        "model": "a/b:free",
+        "provider": "openrouter",
+        "base_url": ai_config.DEFAULT_BASE_URL,
     }
 
 
@@ -179,14 +314,14 @@ def test_blank_key_keeps_the_existing_one(tmp_path):
     target = write(tmp_path / "c.json", api_key=LOCAL_KEY, model="old:free")
 
     for blank in (None, "", "   "):
-        ai_config.save_settings(blank, "new:free", target)
+        ai_config.save_settings(blank, "new:free", path=target)
         assert json.loads(target.read_text(encoding="utf-8"))["api_key"] == LOCAL_KEY, blank
 
 
 def test_new_key_replaces_the_old_one(tmp_path):
     target = write(tmp_path / "c.json", api_key=LOCAL_KEY, model="m")
     new_key = "sk-or-v1-NEW-KEY-000000000000"
-    ai_config.save_settings(new_key, "m", target)
+    ai_config.save_settings(new_key, "m", path=target)
     stored = json.loads(target.read_text(encoding="utf-8"))
     assert stored["api_key"] == new_key
     assert LOCAL_KEY not in stored["api_key"]
@@ -194,34 +329,34 @@ def test_new_key_replaces_the_old_one(tmp_path):
 
 def test_blank_model_falls_back_to_default(tmp_path):
     target = write(tmp_path / "c.json", api_key=LOCAL_KEY, model="old:free")
-    settings = ai_config.save_settings(None, "  ", target)
+    settings = ai_config.save_settings(None, "  ", path=target)
     assert settings.model == ai_config.DEFAULT_MODEL
     assert json.loads(target.read_text(encoding="utf-8"))["api_key"] == LOCAL_KEY
 
 
 def test_saving_model_alone_keeps_the_key(tmp_path):
     target = write(tmp_path / "c.json", api_key=LOCAL_KEY, model="old:free")
-    ai_config.save_settings(None, "new:free", target)
+    ai_config.save_settings(None, "new:free", path=target)
     assert json.loads(target.read_text(encoding="utf-8"))["api_key"] == LOCAL_KEY
 
 
 def test_cannot_save_a_keyless_config_from_scratch(tmp_path):
     """還沒設定過、又沒填 key → 不要憑空造一個沒有 key 的設定檔。"""
     with pytest.raises(ai_config.AiConfigError) as excinfo:
-        ai_config.save_settings(None, "m:free", tmp_path / "new.json")
+        ai_config.save_settings(None, "m:free", path=tmp_path / "new.json")
     assert "尚未設定 API key" in str(excinfo.value)
     assert not (tmp_path / "new.json").exists()
 
 
 def test_save_creates_the_tools_directory(tmp_path):
     target = tmp_path / "nested" / "c.json"
-    ai_config.save_settings(LOCAL_KEY, "m:free", target)
+    ai_config.save_settings(LOCAL_KEY, "m:free", path=target)
     assert target.exists()
 
 
 def test_save_is_atomic_no_temp_file_left(tmp_path):
     target = tmp_path / "c.json"
-    ai_config.save_settings(LOCAL_KEY, "m:free", target)
+    ai_config.save_settings(LOCAL_KEY, "m:free", path=target)
     assert [p.name for p in tmp_path.iterdir()] == ["c.json"]
 
 

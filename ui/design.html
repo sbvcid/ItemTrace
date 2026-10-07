@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="showcase.title">UI Showcase · ItemTrace</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+.showcase-page { word-break: break-word; }
+.showcase-page .long-text-example { font-size: 14px; line-height: 1.6; }
+.showcase-page .section-label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
+.showcase-page table.showcase-table { font-size: 13px; }
+.showcase-page .showcase-id-long { font-size: 13px; font-family: ui-monospace, SFMono-Regular, monospace; letter-spacing: 0.02em; }
+</style>
+</head>
+<body class="showcase-page">
+<div class="wrap">
+
+  <div class="topbar">
+    <h1 data-i18n="showcase.title">UI Showcase · ItemTrace</h1>
+    <div class="lang-switch" id="locale" role="group" aria-label="Language">
+      <span class="lang-label" data-i18n="lang.label" style="display:none">語言</span>
+      <button type="button" class="lang-btn" data-lang="zh-TW">中文</button>
+      <span class="lang-sep" aria-hidden="true">|</span>
+      <button type="button" class="lang-btn" data-lang="en">EN</button>
+    </div>
+  </div>
+
+  <p class="muted" style="margin: 10px 0 18px; font-size: 13px;" data-i18n="showcase.subtitle">本頁集中展示 ItemTrace 目前實際使用的 UI 元件與狀態。切換語言後所有 UI 標籤應跟著變化，資料內容不翻譯。</p>
+
+  <!-- 1. Typography -->
+  <section class="card" id="showcase-typography">
+    <div class="section-label" data-i18n="showcase.typography">Typography</div>
+    <h1>Page Title — UI Showcase · ItemTrace</h1>
+    <h2>Section Heading — 區段標題</h2>
+    <p>一般文字 / General text. 中文與 English 混用時，排版需要保持字距與行高一致。</p>
+    <p class="muted">輔助文字 / Muted text. 這是輔助說明，顏色較淡，用於補充資訊。</p>
+    <p><small>小型說明 / Small text. 適合標註時間戳、資料來源、補充提示。</small></p>
+    <div class="long-text-example">
+      <b>長文字 / Long text:</b><br>
+      Xprinter XP-470E / AMD Ryzen 7 9700X / 規格／型號 / Specification / Model<br>
+      超長商品名稱測試場景：超長品牌 / 超長規格／型號 / 超長類型 / 超長狀態 / 超長備註
+    </div>
+    <p style="margin-top:8px"><b>極長 ID / Long ID:</b> <span class="showcase-id-long">ITM-9999 / ITM-10000 / ITM-10001</span></p>
+  </section>
+
+  <!-- 2. Buttons -->
+  <section class="card" id="showcase-buttons">
+    <div class="section-label" data-i18n="showcase.buttons">Buttons</div>
+    <h2>Button variants — 現有樣式</h2>
+    <div class="actions" style="margin-top:10px">
+      <button data-i18n="common.save">儲存</button>
+      <button class="primary" data-i18n="common.save">儲存</button>
+      <button data-i18n="common.cancel">取消</button>
+      <button class="danger" data-i18n="showcase.delete">刪除</button>
+      <button disabled data-i18n="common.save">儲存（disabled）</button>
+      <button data-i18n="common.loading">載入中…</button>
+    </div>
+    <div class="actions" style="margin-top:10px">
+      <button class="primary" style="padding:10px 16px; font-size:13px;" data-i18n="showcase.long_button">這是一個故意超長的按鈕文字，用來測試 390px 時的換行與溢出</button>
+    </div>
+  </section>
+
+  <!-- 3. Form Controls -->
+  <section class="card" id="showcase-forms">
+    <div class="section-label" data-i18n="showcase.forms">Form Controls</div>
+    <h2>Form fields — 目前商品實際語意</h2>
+    <div class="grid2">
+      <div class="field">
+        <label for="sc-name" data-i18n="item.name_label">名稱</label>
+        <input id="sc-name" type="text" value="Xprinter XP-470E" placeholder="">
+      </div>
+      <div class="field">
+        <label for="sc-brand" data-i18n="item.brand_label">品牌</label>
+        <input id="sc-brand" type="text" value="AMD" placeholder="">
+      </div>
+      <div class="field">
+        <label for="sc-model" data-i18n="item.model_label">規格／型號</label>
+        <input id="sc-model" type="text" value="Ryzen 7 9700X" placeholder="型號、尺寸、容量、版本、SKU…">
+      </div>
+      <div class="field">
+        <label for="sc-category" data-i18n="item.category_label">類型</label>
+        <select id="sc-category"><option>處理器</option><option>容器</option><option>工具</option><option>五金</option></select>
+      </div>
+      <div class="field">
+        <label for="sc-qty" data-i18n="item.quantity_label">數量</label>
+        <input id="sc-qty" type="text" value="1">
+      </div>
+      <div class="field">
+        <label for="sc-cond" data-i18n="item.condition_label">狀態</label>
+        <input id="sc-cond" type="text" value="外觀良好" placeholder="例如：全新、未使用、外觀良好、待檢查">
+      </div>
+      <div class="field" style="grid-column: 1 / -1;">
+        <label for="sc-notes" data-i18n="item.notes_label">備註</label>
+        <textarea id="sc-notes" rows="2">超長備註測試：這是一個故意拉長的備註欄位，用來驗證文字區域在正常與極端資料下的排版行為。包含多行中文與英文混用。</textarea>
+      </div>
+    </div>
+    <div class="grid2" style="margin-top:10px">
+      <div class="field">
+        <label for="sc-disabled">Disabled input</label>
+        <input id="sc-disabled" type="text" value="不可編輯" disabled>
+      </div>
+      <div class="field">
+        <label for="sc-error">Error input</label>
+        <input id="sc-error" type="text" value="錯誤值" aria-invalid="true" style="border-color: var(--bad);">
+        <div class="error" style="margin-top:6px; padding: 8px 10px; font-size: 12.5px;">錯誤訊息範例：格式不正確，請檢查規格／型號。</div>
+      </div>
+      <div class="field">
+        <label>Checkbox / Radio</label>
+        <label style="display:inline-flex; align-items:center; gap:6px; font-size:13px;"><input type="checkbox" checked> 已確認</label><br>
+        <label style="display:inline-flex; align-items:center; gap:6px; font-size:13px; margin-top:4px"><input type="radio" name="sc-r" checked> 選項 A</label>
+      </div>
+      <div class="field">
+        <label for="sc-long-place">Long placeholder</label>
+        <input id="sc-long-place" type="text" placeholder="這是一個故意非常長的 placeholder，用來測試輸入框在 390px 寬度下是否會被撐破或截斷">
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. Cards / Panels -->
+  <section class="card" id="showcase-cards">
+    <div class="section-label" data-i18n="showcase.cards">Cards / Panels</div>
+    <h2>Panel patterns — 目前頁面真實 markup</h2>
+    <div class="grid2" style="margin-top:8px">
+      <div class="card">
+        <h2>商品卡 / Item Card</h2>
+        <div style="display:flex; gap:10px; align-items:center; margin-top:8px">
+          <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect fill='%232aa' width='96' height='96'/%3E%3C/svg%3E" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px;background:var(--panel-2)" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+          <div class="nophoto" style="display:none;width:56px;height:56px;border-radius:8px;background:var(--panel-2);border:1px dashed var(--line);align-items:center;justify-content:center;color:var(--dim);font-size:11px">無照片</div>
+          <div>
+            <div style="font-weight:600">AMD Ryzen 7 9700X</div>
+            <div class="muted" style="font-size:12.5px">ITM-10001 · 使用中</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>建議卡 / Suggestion Card</h2>
+        <div class="sugg" style="margin-top:8px">
+          <a class="thumb" href="#" aria-label="來源照片"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect fill='%232aa' width='96' height='96'/%3E%3C/svg%3E" alt="" onerror="this.style.display='none';this.parentElement.classList.add('thumb-fail');this.parentElement.textContent='!';"></a>
+          <div class="sugg-main">
+            <div class="sugg-line"><b>品牌</b> <span class="sugg-value">AMD</span></div>
+            <div class="sugg-foot">
+              <span class="badge active">95%</span>
+              <button data-i18n="suggestion.accept">接受</button>
+              <button data-i18n="suggestion.reject">拒絕</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>設定區塊 / Settings Panel</h2>
+        <div class="field"><label data-i18n="settings.api_key_label">API Key</label><input type="password" value="●●●●●●●●" readonly></div>
+        <div class="field"><label data-i18n="settings.model_label">模型</label><select><option>gpt-4</option><option>claude-3</option></select></div>
+        <div class="actions"><button class="primary" data-i18n="settings.save">儲存</button><button data-i18n="common.cancel">取消</button></div>
+      </div>
+      <div class="card">
+        <h2>Template 卡</h2>
+        <p style="font-size:13px; margin:6px 0 8px">100 × 150 mm · 標籤紙</p>
+        <div style="display:flex; gap:6px">
+          <button class="primary" style="font-size:12px; padding:6px 10px">預覽</button>
+          <button style="font-size:12px; padding:6px 10px">編輯</button>
+          <button class="danger" style="font-size:12px; padding:6px 10px">刪除</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. Status / Badges -->
+  <section class="card" id="showcase-status">
+    <div class="section-label" data-i18n="showcase.status">Status / Badges</div>
+    <h2>Lifecycle &amp; other states</h2>
+    <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px">
+      <span class="badge active" data-i18n="status.active">使用中</span>
+      <span class="badge archived" data-i18n="status.archived">已封存</span>
+      <span class="badge void" data-i18n="status.void">作廢</span>
+      <span class="badge" data-i18n="suggestion.pending_title">pending</span>
+      <span class="badge" style="border-color:rgba(76,141,255,.4); color:var(--accent);">accepted</span>
+      <span class="badge" style="border-color:rgba(242,85,90,.4); color:var(--bad);">rejected</span>
+      <span class="badge warn">collision / warning</span>
+      <span class="badge" style="border-color:rgba(240,180,41,.4); color:var(--warn);">error</span>
+    </div>
+    <div class="field" style="margin-top:10px">
+      <label for="sc-status-prefix">Item Status Prefix (long label)</label>
+      <input id="sc-status-prefix" type="text" value="商品狀態：使用中（已封存 / 作廢）" readonly style="font-size:13px">
+    </div>
+  </section>
+
+  <!-- 6. Alerts / Messages -->
+  <section class="card" id="showcase-alerts">
+    <div class="section-label" data-i18n="showcase.alerts">Alerts / Messages</div>
+    <h2>Message patterns — success, warning, error, info, empty</h2>
+    <div class="error" style="margin-top:8px">
+      <strong>錯誤 / Error</strong> — 找不到印表機 / 各式錯誤訊息測試長字串：這是故意拉長的錯誤訊息，用來驗證錯誤區塊在 390px 下是否正常換行。<br>
+      <span style="font-size:12px; opacity:.8">列印失敗：印表機 XP-470E 未連接，請檢查 USB 連線與驅動程式。</span>
+    </div>
+    <div style="margin-top:10px; padding:12px 14px; border:1px solid rgba(62,207,142,.4); border-radius:9px; background:rgba(62,207,142,.08); color:#c6f5d9; font-size:13px;">
+      <strong>成功 / Success</strong> — 列印成功 / Print completed successfully.
+    </div>
+    <div style="margin-top:10px; padding:12px 14px; border:1px solid rgba(240,180,41,.55); border-radius:9px; background:rgba(240,180,41,.08); color:#ffe4a1; font-size:13px;">
+      <strong>警告 / Warning</strong> — 載入預覽失敗 / Preview load failed but server responded.
+    </div>
+    <div style="margin-top:10px; padding:12px 14px; border:1px solid rgba(76,141,255,.45); border-radius:9px; background:rgba(76,141,255,.06); color:#cfd7f0; font-size:13px;">
+      <strong>資訊 / Info</strong> — 這是資訊提示，沒有嚴重錯誤，僅供參考。
+    </div>
+    <div class="empty" style="margin-top:10px" data-i18n="item.no_photos">還沒有照片</div>
+  </section>
+
+  <!-- 7. Photo / Media -->
+  <section class="card" id="showcase-photos">
+    <div class="section-label" data-i18n="showcase.photos">Photo / Media</div>
+    <h2>Photo patterns — single, multi, thumbnail, source, empty</h2>
+    <div style="margin-top:8px">
+      <h3>Single — 單張照片</h3>
+      <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect fill='%232aa' width='96' height='96'/%3E%3C/svg%3E" alt="測試照片" style="max-width:100%; height:auto; max-height:240px; border-radius:9px; background:var(--panel-2); display:block;" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+      <div class="broken" style="display:none; max-width:100%; height:120px;">照片載入失敗</div>
+    </div>
+    <div style="margin-top:12px">
+      <h3>Multiple — 多張照片 (wall)</h3>
+      <div class="wall" style="margin-top:6px">
+        <figure><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect fill='%232aa' width='96' height='96'/%3E%3C/svg%3E" alt=""><figcaption>來源 1</figcaption></figure>
+        <figure><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect fill='%232aa' width='96' height='96'/%3E%3C/svg%3E" alt=""><figcaption>來源 2</figcaption></figure>
+        <figure><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect fill='%232aa' width='96' height='96'/%3E%3C/svg%3E" alt=""><figcaption>來源 3</figcaption></figure>
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <h3>Strip / Thumbnail — 縮圖列</h3>
+      <div class="strip" style="margin-top:6px">
+        <a class="cell" href="#"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect fill='%232aa' width='96' height='96'/%3E%3C/svg%3E" alt=""></a>
+        <a class="cell" href="#"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect fill='%232aa' width='96' height='96'/%3E%3C/svg%3E" alt=""></a>
+        <a class="cell" href="#"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect fill='%232aa' width='96' height='96'/%3E%3C/svg%3E" alt=""></a>
+        <div class="cell more">+3</div>
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <h3>Source photo thumbnail — 來源照片縮圖</h3>
+      <a class="thumb" href="#" aria-label="來源照片"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect fill='%232aa' width='96' height='96'/%3E%3C/svg%3E" alt=""></a>
+      <a class="thumb thumb-fail" href="#" aria-label="無來源照片" style="display:inline-flex; width:56px; height:56px; align-items:center; justify-content:center; font-size:10.5px; color:var(--dim); background:var(--panel-2); border:1px dashed var(--line); text-decoration:none;"><span>無來源</span></a>
+    </div>
+    <div style="margin-top:12px">
+      <h3>Empty state — 無照片</h3>
+      <div class="nophoto" style="width:100%; height:120px; border-radius:9px;">還沒有照片</div>
+    </div>
+  </section>
+
+  <!-- 8. Tables -->
+  <section class="card" id="showcase-tables">
+    <div class="section-label" data-i18n="showcase.tables">Tables</div>
+    <h2>Table patterns — 寬欄、長 ID、長 Template 名稱</h2>
+    <div class="showcase-table-wrap">
+    <table class="showcase-table">
+      <thead><tr><th>ID</th><th>名稱</th><th>品牌</th><th>規格／型號</th><th>狀態</th><th>更新時間</th></tr></thead>
+      <tbody>
+        <tr><td class="showcase-id-long">ITM-10000</td><td>超長商品名稱測試商品，用來確認表格欄位撐開與換行是否正常</td><td>AMD</td><td>Ryzen 7 9700X / Xprinter XP-470E</td><td><span class="badge active">使用中</span></td><td>2026-10-06 10:00</td></tr>
+        <tr><td>ITM-9999</td><td>普通商品</td><td>測試品牌</td><td>測試型號</td><td><span class="badge archived">已封存</span></td><td>2026-09-01</td></tr>
+        <tr><td>ITM-10001</td><td>另一個長名稱商品：這是故意拉長的商品名稱，用來測試表格在 390px 下的水平溢出</td><td>長品牌名稱測試</td><td>超長規格／型號測試：AMD Ryzen 7 9700X / Xprinter XP-470E / Specification / Model</td><td><span class="badge void">作廢</span></td><td>2026-08-15</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:12px; color:var(--dim); margin-top:6px">長 ID 與長文字測試：ITM-10000 / ITM-9999 / ITM-10001。表格文字使用 <code>word-break: break-word</code>，避免意外水平捲動。</p>
+    </div>
+  </section>
+
+  <!-- 9. History / Event -->
+  <section class="card" id="showcase-history">
+    <div class="section-label" data-i18n="showcase.history">History / Event</div>
+    <h2>Event rows — 內部 event code 必須經 i18n 翻譯</h2>
+    <div style="margin-top:8px">
+      <div class="event">
+        <div class="when">10:03</div>
+        <div class="event-body">
+          <div class="what"><b data-i18n="event.type.field_changed">欄位變更</b> <span class="val" data-i18n="item.name_label">名稱</span> <span class="to">→ <b>AMD Ryzen 7 9700X</b></span></div>
+        </div>
+        <div class="event-act"><button data-i18n="event.revert">復原</button></div>
+      </div>
+      <div class="event">
+        <div class="when">09:58</div>
+        <div class="event-body">
+          <div class="what"><b data-i18n="event.type.suggestion_accepted">建議已接受</b> <span class="val" data-i18n="item.brand_label">品牌</span> <span class="to">→ <b>AMD</b></span></div>
+        </div>
+        <div class="event-act"><button disabled data-i18n="event.revert">復原</button></div>
+      </div>
+      <div class="event">
+        <div class="when">09:45</div>
+        <div class="event-body">
+          <div class="what"><b data-i18n="event.type.suggestion_rejected">建議已拒絕</b> <span class="val" data-i18n="item.model_label">規格／型號</span> <span class="to">→ <b>拒絕</b></span></div>
+        </div>
+        <div class="event-act"></div>
+      </div>
+      <div class="event">
+        <div class="when">09:30</div>
+        <div class="event-body">
+          <div class="what"><b data-i18n="event.type.identifier_created">識別碼已建立</b> <span class="val">IMEI: <b>123456789012345</b></span></div>
+        </div>
+        <div class="event-act"></div>
+      </div>
+      <div class="event">
+        <div class="when">09:12</div>
+        <div class="event-body">
+          <div class="what"><b data-i18n="event.type.item_created">商品已建立</b> <span class="val">ITM-10000</span></div>
+        </div>
+        <div class="event-act"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10. Suggestion Card -->
+  <section class="card" id="showcase-suggestions">
+    <div class="section-label" data-i18n="showcase.suggestions">Suggestion Card</div>
+    <h2>Suggestion — 一般建議與識別碼建議</h2>
+    <div style="margin-top:8px">
+      <h3>Standard suggestion</h3>
+      <div class="sugg">
+        <a class="thumb" href="#" aria-label="來源照片"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect fill='%232aa' width='96' height='96'/%3E%3C/svg%3E" alt=""></a>
+        <div class="sugg-main">
+          <div class="sugg-line"><b data-i18n="item.brand_label">品牌</b> <span class="sugg-value">AMD</span></div>
+          <div class="sugg-line"><b data-i18n="item.category_label">類型</b> <span class="sugg-value">處理器</span></div>
+          <div class="sugg-foot">
+            <span class="badge active">92%</span>
+            <button data-i18n="suggestion.accept">接受</button>
+            <button data-i18n="suggestion.reject">拒絕</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:8px">
+      <h3>Identifier suggestion (collision / error)</h3>
+      <div class="sugg">
+        <a class="thumb thumb-fail" href="#" aria-label="無來源照片" style="display:inline-flex; width:56px;height:56px;align-items:center;justify-content:center;font-size:10.5px;color:var(--dim);background:var(--panel-2);border:1px dashed var(--line);text-decoration:none;"><span>無來源</span></a>
+        <div class="sugg-main">
+          <div class="sugg-line"><b>識別碼</b> <span class="sugg-value">IMEI</span> <span class="badge warn">collision</span></div>
+          <div class="sugg-foot">
+            <span class="badge" style="border-color:rgba(240,180,41,.4);color:var(--warn);">78%</span>
+            <button data-i18n="suggestion.accept">接受</button>
+            <button data-i18n="suggestion.reject">拒絕</button>
+          </div>
+          <div class="sugg-error">已有相同識別碼存在於另一件商品（ITM-9999），請確認是否重複。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11. Dialog -->
+  <section class="card" id="showcase-dialog">
+    <div class="section-label" data-i18n="showcase.dialog">Dialog</div>
+    <h2>Dialog patterns — 普通 / 確認 / 錯誤</h2>
+    <div class="actions" style="margin-top:8px">
+      <button onclick="document.getElementById('sc-confirm').hidden=false;" data-i18n="showcase.open_dialog">開啟確認對話</button>
+      <button onclick="document.getElementById('sc-error-dialog').hidden=false;" data-i18n="showcase.open_dialog">開啟錯誤對話</button>
+    </div>
+
+    <section id="sc-confirm" class="card" hidden style="margin-top:12px; border-color:rgba(76,141,255,.35); background:rgba(76,141,255,.06);">
+      <h2 data-i18n="print.title">列印</h2>
+      <p>您確定要列印這件商品？此操作將送出至預設印表機。</p>
+      <div class="actions">
+        <button class="primary" onclick="this.closest('section').hidden=true;" data-i18n="common.save">確認</button>
+        <button onclick="this.closest('section').hidden=true;" data-i18n="common.cancel">取消</button>
+      </div>
+    </section>
+
+    <section id="sc-error-dialog" class="card" hidden style="margin-top:12px; border-color:rgba(242,85,90,.5); background:rgba(242,85,90,.08);">
+      <h2 data-i18n="settings.load_failed">載入失敗</h2>
+      <p class="error">無法連接到列印服務：印表機 XP-470E 未回應。</p>
+      <div class="actions">
+        <button onclick="this.closest('section').hidden=true;" data-i18n="common.close">關閉</button>
+        <button onclick="this.closest('section').hidden=true;" data-i18n="common.retry">再試一次</button>
+      </div>
+    </section>
+  </section>
+
+  <!-- 12. Print Dialog -->
+  <section class="card" id="showcase-print-dialog">
+    <div class="section-label" data-i18n="showcase.print_dialog">Print Dialog</div>
+    <h2>Real Print Dialog — 使用實際的 print_dialog.js / markup / style</h2>
+    <p>下方使用與商品詳情頁相同的 <code>print-dialog</code> 標記與 JS。</p>
+    <div class="actions" style="margin-top:8px">
+      <button id="sc-print-btn" class="primary" data-i18n="showcase.open_print">開啟列印對話</button>
+    </div>
+  </section>
+
+  <!-- 13. Loading / Empty / Error -->
+  <section class="card" id="showcase-loading">
+    <div class="section-label" data-i18n="showcase.loading">Loading / Empty / Error</div>
+    <h2>State patterns</h2>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px">
+      <div class="card" style="min-width:200px; flex:1;">
+        <h3>Loading</h3>
+        <p data-i18n="common.loading">載入中…</p>
+      </div>
+      <div class="card" style="min-width:200px; flex:1;">
+        <h3>Success</h3>
+        <p style="color:var(--ok)">已儲存 / Saved successfully.</p>
+      </div>
+      <div class="card" style="min-width:200px; flex:1;">
+        <h3>Error state</h3>
+        <div class="error">載入預覽失敗：伺服器未回應（500）。</div>
+      </div>
+      <div class="card" style="min-width:200px; flex:1;">
+        <h3>Empty</h3>
+        <div class="empty">沒有任何照片</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14. Long Text / Extreme Cases -->
+  <section class="card" id="showcase-long-text">
+    <div class="section-label" data-i18n="showcase.long_text">Long Text / Extreme Cases</div>
+    <h2>極端資料測試 — 超長文字與缺少資料</h2>
+    <div class="grid2" style="margin-top:8px">
+      <div>
+        <h3>超長欄位</h3>
+        <div class="field"><label>超長商品名稱</label><input type="text" value="這是一個故意極端拉長的商品名稱，用來測試排版在正常與極端資料下的行為，包含中文與英文混用。Xprinter XP-470E / AMD Ryzen 7 9700X"></div>
+        <div class="field"><label>超長品牌</label><input type="text" value="超長品牌名稱測試：AMD / Xprinter / Intel / NVIDIA / 超長品牌混合測試"></div>
+        <div class="field"><label>超長規格／型號</label><input type="text" value="AMD Ryzen 7 9700X / Xprinter XP-470E / Specification / Model / 超長規格測試場景"></div>
+        <div class="field"><label>超長類型</label><input type="text" value="電子產品 / 電腦零組件 / 中央處理器（CPU）/ 超長類型測試場景"></div>
+        <div class="field"><label>超長狀態</label><input type="text" value="外觀良好，沒有任何刮傷或損壞，已測試過開機與功能正常，包含超長狀態描述"></div>
+        <div class="field"><label>超長備註</label><textarea rows="3">這是超長備註測試：包含多行中文與英文混用，用來驗證文字區域在極端資料下的排版行為。ITM-10000 / ITM-9999 / ITM-10001。</textarea></div>
+      </div>
+      <div>
+        <h3>缺少資料</h3>
+        <div class="field"><label>沒有品牌</label><input type="text" value="" placeholder="—"></div>
+        <div class="field"><label>沒有規格／型號</label><input type="text" value="" placeholder="—"></div>
+        <div class="field"><label>沒有備註</label><textarea rows="2" placeholder="—"></textarea></div>
+        <div class="field"><label>沒有照片</label><div class="nophoto" style="height:120px;">還沒有照片</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 15. Notes / Known Issues -->
+  <section class="card" id="showcase-notes" style="border-color:rgba(240,180,41,.5); background:rgba(240,180,41,.06);">
+    <div class="section-label" data-i18n="showcase.notes">Notes / 已知問題</div>
+    <h2>已知 UI 問題（本輪不修）</h2>
+    <ul style="font-size:13px; line-height:1.7; padding-left:18px; color:var(--ink);">
+      <li><b>Button nowrap at 390px:</b> <code>button { white-space: nowrap; }</code> 會讓超長按鈕文字在 390px 時溢出，除非包在 <code>.actions</code> 內換行。建議未來 review 是否允許極端文字時自動換行。</li>
+      <li><b>Table header alignment:</b> 長 Template 名稱在窄欄位會撐高整列。建議 review 是否加入 <code>min-width</code> 或固定欄寬。</li>
+      <li><b>Print preview height:</b> <code>.print-preview</code> 依賴內容高度，若內容為空可能過短。</li>
+      <li><b>Dialog overlay:</b> 目前沒有全頁遮罩（overlay），對話框直接在文流中顯示，未來可評估是否需要遮罩。</li>
+      <li><b>Language drop-down width:</b> <code>select#locale</code> 在 390px 下若選項名稱過長可能被撐開，尚未驗證。</li>
+      <li><b>Photo strip overflow:</b> <code>.strip</code> 使用 <code>overflow-x: auto</code>，在 390px 下可能出現水平滾動，此為刻意設計但需確認車用體驗。</li>
+    </ul>
+    <p style="font-size:12px; color:var(--dim); margin-top:8px">這些問題只記錄在 Showcase，不在本輪修改任何產品頁面。</p>
+  </section>
+
+</div><!-- /.wrap -->
+
+<!-- Real Print Dialog markup (from item.html) -->
+<div id="dialog-overlay" class="dialog-overlay" hidden></div>
+<section id="print-dialog" class="card" style="margin-top:16px; max-width:900px; margin-left:auto; margin-right:auto; padding:0 14px;" hidden>
+  <div style="padding:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <h2><span data-i18n="print.title">列印</span> <span class="dim" id="print-head-id"></span></h2>
+      <button id="print-close" type="button" data-i18n="print.close">關閉</button>
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label for="print-template" data-i18n="print.template_label">範本</label>
+      <select id="print-template"></select>
+      <small class="dim" data-i18n="print.manage_link">需要新增或修改範本請到「設定 → 列印 → 範本管理」。</small>
+    </div>
+    <div class="field">
+      <label for="print-printer" data-i18n="print.printer_label">印表機</label>
+      <select id="print-printer"></select>
+      <small class="dim" data-i18n="print.printer_note">印表機由這台電腦（server 主機）管理，不是手機的。</small>
+    </div>
+    <p class="dim" id="print-size" style="margin:0 0 8px"></p>
+    <div id="print-preview" class="print-preview" data-i18n-aria-label="print.preview"></div>
+    <p class="print-error" id="print-error"></p>
+    <div class="actions">
+      <button class="primary" id="print-confirm" data-i18n="print.submit">列印 1 份</button>
+    </div>
+  </div>
+</section>
+
+<script src="/static/i18n.js"></script>
+<script src="/static/api.js"></script>
+<script src="/static/print_dialog.js"></script>
+<script src="/static/design.js"></script>
+</body>
+</html>

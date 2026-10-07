@@ -149,7 +149,8 @@ function revertMatrix() {
   ];
 }
 
-/* item.html 裡初始帶 hidden 的元素 */
+/* item.html 裡初始帶 hidden 的元素。print_dialog 是列印對話框，
+   初始必須是隱藏的 —— 沒有對應的 .hidden class，只看 hidden 屬性。 */
 const INITIALLY_HIDDEN = {
   notfound: true,
   detail: true,
@@ -158,7 +159,44 @@ const INITIALLY_HIDDEN = {
   obs_empty: true,
   pending_sec: true,
   saved: true,
+  print_dialog: true,
 };
+
+/* 商品頁的列印測試資料。列印流程需要 templates、printers、settings。 */
+const PRINT_TEMPLATES = [
+  { id: "TPL-0002", name: "Label 100x150", html: "<html></html>",
+    width: 100, height: 150, unit: "mm",
+    created_at: "2024-01-01T00:00:00", updated_at: "2024-02-01T00:00:00" },
+  { id: "TPL-0003", name: "Small 60x40", html: "<html></html>",
+    width: 60, height: 40, unit: "mm",
+    created_at: "2024-01-02T00:00:00", updated_at: "2024-02-02T00:00:00" },
+];
+
+const PRINT_PRINTERS = [
+  { name: "Microsoft Print to PDF", is_default: false },
+  { name: "Xprinter XP-470E", is_default: true },
+];
+
+/* print-preview 回傳的 html：每個範本一份，用來驗證「切換範本會換預覽」。 */
+function printPreviewHtml(templateId, itemId) {
+  return `<html><body><h1>PRINT:${templateId}</h1><p>item:${itemId}</p></body></html>`;
+}
+
+function printPreviewPayload(templateId, itemId) {
+  const template = PRINT_TEMPLATES.find((t) => t.id === templateId) || {};
+  return {
+    printer: "",
+    item_id: itemId,
+    item_name: "ROG STRIX B650E-F",
+    template_id: templateId,
+    width_mm: template.width || 100,
+    height_mm: template.height || 150,
+    pixel_width: 0, pixel_height: 0, dpi: 300,
+    pdf_width_mm: template.width || 100,
+    pdf_height_mm: template.height || 150,
+    html: printPreviewHtml(templateId, itemId),
+  };
+}
 
 function ok(body) {
   return { ok: true, status: 200, text: async () => JSON.stringify(body) };
@@ -186,9 +224,25 @@ async function mountPage(options = {}) {
     detail: options.detail || detailPayload(options),
     events: options.events || eventsPayload(),
   };
+  /* 列印預設值：預設範本 TPL-0002、預設印表機 Xprinter。 */
+  const settings = options.settings || {
+    printer: "Xprinter XP-470E",
+    template_id: "TPL-0002",
+    exists: true,
+    error: null,
+  };
+  /* 讀不到 /api/printers 時要保留真正的錯誤原因，而不是被印表機清單
+     為空那個訊息蓋掉。 */
+  const printerListError = options.printersError
+    ? `讀取印表機清單失敗: ${options.printersError}`
+    : null;
+  /* 記錄實際呼叫過 print-preview 的範本順序，用來驗證切換範本會重新載入。 */
+  const printState = { previews: [] };
 
   const view = mount({
-    scripts: ["api.js", "item.js"],
+    /* print_dialog.js 必須排在 item.js 之前：item.js 頂層就呼叫
+     printBind()，沒有它就直接 ReferenceError（整頁的腳本都不會跑）。 */
+    scripts: ["api.js", "print_dialog.js", "item.js"],
     documentOverrides: overrides,
     windowProps: { location: { href: "", pathname: "/items/ITM-0001" } },
     fetchImpl: async (path, init) => {
@@ -222,6 +276,44 @@ async function mountPage(options = {}) {
         }
         return ok(state.events);
       }
+      /* ---- 列印（ui/print_dialog.js 走同一組 api()） ----
+         這些分支必須排在下面的 catch-all `return ok({})` 之前，
+         否則預設回應會讓對話框「看起來成功但什麼都沒載入」。 */
+      if (path === "/api/settings/printing") {
+        if ((init && init.method) === "POST") return ok(settings);
+        return ok(settings);
+      }
+      if (path === "/api/templates?limit=200") return ok(PRINT_TEMPLATES);
+      if (path === "/api/printers") {
+        if (printerListError) return fail(400, options.printersError);
+        return ok(options.printers !== undefined ? options.printers : PRINT_PRINTERS);
+      }
+      if (path === "/api/items?limit=200") {
+        return ok([{ id: "ITM-0001", name: "ROG STRIX B650E-F" }]);
+      }
+      const printPreview = path.match(
+        /^\/api\/templates\/([^/]+)\/print-preview$/);
+      if (printPreview && (init && init.method) === "POST") {
+        if (options.printPreviewError) {
+          return fail(400, options.printPreviewError);
+        }
+        const body = JSON.parse(init.body);
+        const preview = printPreviewPayload(printPreview[1], body.item_id);
+        printState.previews.push(preview.template_id);
+        return ok(preview);
+      }
+      const doPrint = path.match(/^\/api\/templates\/([^/]+)\/print$/);
+      if (doPrint && (init && init.method) === "POST") {
+        if (options.printError) return fail(400, options.printError);
+        const body = JSON.parse(init.body);
+        const payload = printPreviewPayload(doPrint[1], body.item_id);
+        return ok({
+          ...payload,
+          printer: body.printer || "Xprinter XP-470E",
+          pixel_width: 1182, pixel_height: 1772,
+        });
+      }
+
       if (path === "/api/stats?limit=1") return ok({ counts: {}, categories: [], recent: [] });
       if (path.includes("/api/identifiers/lookup")) {
         return ok({ value: "", normalized: "", matches: options.collisionMatches || [] });
@@ -283,6 +375,63 @@ async function mountPage(options = {}) {
     shownErrors: shown,
     error,
     cards,
+    /* ---- 列印相關的觀察點 ---- */
+    print: {
+      previews: printState.previews,
+      dialogHidden: () => view.element("print-dialog").hidden === true,
+      dialogVisible: () => view.element("print-dialog").hidden === false,
+      templateOptions: () =>
+        view.element("print-template").childNodes.map((o) => ({
+          value: o.value, text: o.textContent,
+        })),
+      /* 假 DOM 不會從 selectedIndex 同步 select.value，所以要自己換算 ——
+         否則「選了哪一個」永遠讀成空字串，會把真正的問題遮掉。 */
+      selectedTemplate: () => {
+        const select = view.element("print-template");
+        const chosen = select.childNodes[select.selectedIndex];
+        return chosen ? chosen.value : null;
+      },
+      printerOptions: () =>
+        view.element("print-printer").childNodes.map((o) => o.value),
+      selectedPrinter: () => {
+        const select = view.element("print-printer");
+        const chosen = select.childNodes[select.selectedIndex];
+        return chosen ? chosen.value : null;
+      },
+      sizeText: () => view.element("print-size").textContent,
+      errorText: () => view.element("print-error").textContent,
+      confirmDisabled: () => view.element("print-confirm").disabled === true,
+      confirmLabel: () => view.element("print-confirm").textContent,
+      previewSrcdoc: () => {
+        const frames = view.element("print-preview").childNodes
+          .filter((n) => String(n.tagName || "").toUpperCase() === "IFRAME");
+        return frames.length ? frames[0].getAttribute("srcdoc") : null;
+      },
+      /* 商品頁不該有商品下拉：商品固定是本頁這一件。 */
+      hasItemSelect: () => Boolean(view.element("print-item")),
+      open: async () => {
+        const button = view.element("print-label");
+        await Promise.all(
+          (button.listeners.click || []).map((fn) => fn({}))
+        );
+        await view.flush();
+      },
+      switchTemplate: async (value) => {
+        const select = view.element("print-template");
+        select.value = value;
+        await Promise.all(
+          (select.listeners.change || []).map((fn) => fn({}))
+        );
+        await view.flush();
+      },
+      confirm: async () => {
+        const button = view.element("print-confirm");
+        await Promise.all(
+          (button.listeners.click || []).map((fn) => fn({}))
+        );
+        await view.flush();
+      },
+    },
     /* 歷史每一列 */
     rows: view.element("events").childNodes,
     buttons: (card, action) =>
@@ -393,6 +542,47 @@ async function scenario(label, options = {}) {
         ? row.querySelector(".event-error").hidden : null,
     })),
   };
+
+  /* 列印情境：開啟對話框 →（選範本）→（送出），
+     回報對話框實際顯示了什麼。放在最前面，因為它是整個列印路徑的驗收。 */
+  if (options.print) {
+    await page.print.open();
+    const opened = {
+      dialogVisible: page.print.dialogVisible(),
+      templateOptions: page.print.templateOptions(),
+      selectedTemplate: page.print.selectedTemplate(),
+      printerOptions: page.print.printerOptions(),
+      selectedPrinter: page.print.selectedPrinter(),
+      sizeText: page.print.sizeText(),
+      errorText: page.print.errorText(),
+      confirmDisabled: page.print.confirmDisabled(),
+      previewSrcdoc: page.print.previewSrcdoc(),
+      hasItemSelect: page.print.hasItemSelect(),
+    };
+    if (options.print.switchTemplate) {
+      await page.print.switchTemplate(options.print.switchTemplate);
+    }
+    if (options.print.confirm) {
+      await page.print.confirm();
+    }
+    return {
+      ...base,
+      printOpened: opened,
+      printAfter: {
+        templateOptions: page.print.templateOptions(),
+        selectedTemplate: page.print.selectedTemplate(),
+        selectedPrinter: page.print.selectedPrinter(),
+        sizeText: page.print.sizeText(),
+        errorText: page.print.errorText(),
+        confirmDisabled: page.print.confirmDisabled(),
+        confirmLabel: page.print.confirmLabel(),
+        previewSrcdoc: page.print.previewSrcdoc(),
+        previewCalls: page.print.previews,
+        dialogVisible: page.print.dialogVisible(),
+      },
+      printCalls: page.calls.filter((c) => /print|settings/.test(c)),
+    };
+  }
 
   if (options.revertEvent) {
     const result = await page.clickRevert(options.revertEvent);
@@ -672,6 +862,52 @@ async function scenario(label, options = {}) {
     failEventsAfterRevert: true,
     revertEvent: "E2",
     onRevert: (state) => { state.detail.item.brand = ""; },
+  }));
+
+  /* ------------------------------------------------------------------
+   * 商品頁列印：只有「挑範本 → 看預覽 → 列印」。
+   * ------------------------------------------------------------------ */
+
+  // 預設值套用：範本與印表機都來自設定
+  results.push(await scenario("列印對話框套用預設值", {
+    print: {},
+  }));
+
+  // 沒有設定檔時退回 Windows 預設印表機與第一個範本
+  results.push(await scenario("列印對話框沒有設定值", {
+    settings: { printer: null, template_id: null, exists: false, error: null },
+    print: {},
+  }));
+
+  // 切換範本 → 重新取得預覽，且不修改範本本身
+  results.push(await scenario("切換範本會更新預覽", {
+    print: { switchTemplate: "TPL-0003" },
+  }));
+
+  // 送出列印：1 份、用選定的印表機
+  results.push(await scenario("商品頁送出一份列印", {
+    print: { confirm: true },
+  }));
+
+  // 沒有印表機要說清楚
+  results.push(await scenario("列印時找不到印表機", {
+    printers: [],
+    print: {},
+  }));
+
+  results.push(await scenario("讀不到印表機清單", {
+    printersError: "缺少 pywin32",
+    print: {},
+  }));
+
+  results.push(await scenario("列印預覽載入失敗", {
+    printPreviewError: "Template 渲染失敗",
+    print: {},
+  }));
+
+  results.push(await scenario("列印送出失敗", {
+    printError: "找不到印表機：Nope",
+    print: { confirm: true },
   }));
 
   process.stdout.write(JSON.stringify(results, null, 2));

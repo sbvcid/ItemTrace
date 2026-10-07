@@ -3,3 +3,10 @@
 fastapi>=0.115
 uvicorn>=0.30
 python-multipart>=0.0.9
+
+# 列印功能（shop/print_backend.py）。兩者都是軟性依賴：缺任一個，
+# 列印會回 400 並說明原因，其餘功能不受影響。
+# - PyMuPDF：把 Chromium 產生的 PDF 校正成精確 mm 並光柵化。
+# - pywin32：列印佇列與 DEVMODE（GDI 部分用 ctypes，所以只需要這一個包）。
+pymupdf>=1.24
+pywin32>=306

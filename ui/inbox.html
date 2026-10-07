@@ -3,55 +3,73 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Inbox · ItemTrace</title>
+<title data-i18n="page.title_inbox">Inbox · ItemTrace</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 
 <header class="topbar">
-  <strong>Inbox</strong>
+  <a class="topbar-brand" href="/">
+    <span class="brand-mark">IT</span>
+    <span>ItemTrace</span>
+  </a>
+  <nav class="topbar-nav" aria-label="Main Navigation">
+    <a class="nav-link active" href="/" data-i18n="inbox.title">Inbox</a>
+    <a class="nav-link" href="/items" data-i18n="items.title">商品</a>
+    <a class="nav-link" href="/settings" data-i18n="nav.settings">設定</a>
+  </nav>
   <span class="grow"></span>
-  <span class="sub" id="count"></span>
-  <a class="sub" href="/items">商品列表 &rarr;</a>
-  <a class="sub" href="/settings">設定</a>
+  <span class="topbar-meta" id="count"></span>
+  <div class="lang-switch" role="group" aria-label="Language">
+    <button type="button" class="lang-btn" data-lang="zh-TW">中文</button>
+    <span class="lang-sep" aria-hidden="true">|</span>
+    <button type="button" class="lang-btn" data-lang="en">EN</button>
+  </div>
 </header>
 
-<div class="wrap">
+<main class="wrap">
 
-  <!-- 1. 上傳：手機優先，點一下就能選多張
-       這裡刻意用 div 而不是 label：label 包住 file input 時，點 label 會
-       由瀏覽器原生觸發 input，再疊上 JS 的 fileInput.click() 就是雙重觸發。
-       實機測到的結果是選完照片完全沒有 POST /api/inbox/photos ——
-       file picker 被開兩次又立刻關掉，change 事件根本沒發生。
-       觸發只留 JS 這一條路徑。 -->
+  <!-- 待整理工作台入口：相機連續拍照 -->
+  <div class="capture-entry">
+    <a class="primary big" href="/capture" data-i18n="nav.capture">連續拍照</a>
+    <div class="sub" data-i18n="inbox.capture_hint">
+      手機相機直接開，拍完一張接一張，最後一次建檔
+    </div>
+  </div>
+
+  <!-- 1. 批次上傳區：手機優先，可拖放、可一次選多張。
+       注意：這裡必須用 div 而不是 label，避免雙重觸發原生 input click。 -->
   <section id="upload-sec">
     <div class="dropzone" id="dropzone">
       <input id="file-input" type="file" accept="image/*" multiple hidden>
-      <div class="dz-icon">＋</div>
-      <div class="dz-title">點這裡選照片</div>
-      <div class="dz-sub">可以一次選多張。照片先放進 inbox，還不會建立商品。</div>
+      <div class="dz-icon" data-i18n="common.plus">＋</div>
+      <div class="dz-title" data-i18n="inbox.dropzone_title">點這裡選照片</div>
+      <div class="dz-sub" data-i18n="inbox.dropzone_hint">
+        可以一次選多張。照片先放進 inbox，還不會建立商品。
+      </div>
     </div>
     <div id="upload-status" class="saved" hidden></div>
   </section>
 
   <div id="error"></div>
 
-  <!-- 2. 沒有東西時的說明 -->
+  <!-- 2. 空狀態：無待處理照片時的說明 -->
   <div class="empty" id="nothing" hidden>
-    inbox 是空的。<br>從手機相簿選幾張照片丟進來。
+    <span data-i18n="inbox.empty_line1">inbox 是空的。</span><br>
+    <span data-i18n="inbox.empty_line2">從手機相簿選幾張照片丟進來。</span>
   </div>
 
-  <!-- 3. 分組 -->
+  <!-- 3. 時間分組：依 EXIF 拍攝時間智慧聚合成批次群組 -->
   <section id="groups-sec" hidden>
     <div class="group-head">
-      <h2>依拍攝時間分組</h2>
-      <label class="gap">間隔
+      <h2 data-i18n="inbox.group_title">依拍攝時間分組</h2>
+      <label class="gap"><span data-i18n="inbox.gap_label">間隔</span>
         <select id="gap">
-          <option value="10">10 分鐘</option>
-          <option value="30" selected>30 分鐘</option>
-          <option value="60">1 小時</option>
-          <option value="180">3 小時</option>
-          <option value="1440">同一天</option>
+          <option value="10" data-i18n="inbox.gap_minutes_10">10 分鐘</option>
+          <option value="30" selected data-i18n="inbox.gap_minutes_30">30 分鐘</option>
+          <option value="60" data-i18n="inbox.gap_minutes_60">1 小時</option>
+          <option value="180" data-i18n="inbox.gap_hours_3">3 小時</option>
+          <option value="1440" data-i18n="inbox.group_same_day">同一天</option>
         </select>
       </label>
     </div>
@@ -59,27 +77,25 @@
     <div class="groups" id="groups"></div>
   </section>
 
-  <!-- 3b. 沒有時間的照片：不能自動分組，但一樣要能建檔 -->
+  <!-- 3b. 無拍攝時間照片：無法依時間聚類，但仍可整批建檔 -->
   <section id="ungrouped-sec" hidden>
-    <h2>沒有拍攝時間 <span class="dim" id="ungrouped-count"></span></h2>
-    <p class="dim" style="font-size:13px;margin:-4px 0 10px">
-      這些照片的時間讀不出來（EXIF、檔名都沒有），沒辦法自動分組。
-      整批會建成同一件商品 —— 確認它們本來就是同一件再用。
-    </p>
+    <h2><span data-i18n="inbox.ungrouped_title">沒有拍攝時間</span> <span class="dim" id="ungrouped-count"></span></h2>
+    <p class="dim" style="font-size:13px;margin:-4px 0 10px" data-i18n="inbox.ungrouped_hint">這些照片的時間讀不出來（EXIF、檔名都沒有），沒辦法自動分組。整批會建成同一件商品 —— 確認它們本來就是同一件再用。</p>
     <div class="groups" id="ungrouped"></div>
   </section>
 
-  <!-- 4. 建檔：只有選好一組才有作用 -->
+  <!-- 4. 一鍵建檔指令列：選定群組後啟用 -->
   <div class="build" id="build" hidden>
-    <div class="build-label" id="build-label">選一組照片開始建檔</div>
-    <button class="primary big" id="start">開始建檔</button>
-    <div class="dim" style="font-size:12.5px;margin-top:8px">
+    <div class="build-label" id="build-label" data-i18n="inbox.build_hint">選一組照片開始建檔</div>
+    <button class="primary big" id="start" data-i18n="inbox.start_intake">開始建檔</button>
+    <div class="dim" style="font-size:12.5px;margin-top:8px;text-align:center" data-i18n="inbox.build_hint_detail">
       建檔後商品欄位會先留空，照片與紀錄會立刻進去，細節到商品頁再補。
     </div>
   </div>
 
-</div>
+</main>
 
+<script src="/static/i18n.js"></script>
 <script src="/static/api.js"></script>
 <script src="/static/inbox.js"></script>
 </body>

@@ -13,7 +13,7 @@ from typing import Any
 from .db import now
 from .ids import new_id
 
-ENTITY_TYPES = ("item", "identifier", "photo", "observation", "suggestion")
+ENTITY_TYPES = ("item", "identifier", "photo", "observation", "suggestion", "template")
 ACTORS = ("user", "external", "system")
 
 

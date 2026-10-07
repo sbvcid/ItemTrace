@@ -117,6 +117,8 @@ def test_get_reports_configured_and_model(local, seeded):
     assert body["configured"] is True
     assert body["model"] == "seed/model:free"
     assert body["provider"] == "openrouter"
+    assert body["base_url"] == ai_config.DEFAULT_BASE_URL
+    assert body["presets"] == ai_config.PROVIDER_BASE_URLS
     assert body["default_model"] == ai_config.DEFAULT_MODEL
     assert body["config_file"] == "tools/ai_config.local.json"
 
@@ -125,6 +127,7 @@ def test_get_when_unconfigured(local, config_file):
     body = local.get("/api/settings/ai").json()
     assert body["configured"] is False
     assert body["model"] == ai_config.DEFAULT_MODEL
+    assert body["base_url"] == ai_config.DEFAULT_BASE_URL
     assert not config_file.exists(), "讀取不該憑空造出設定檔"
 
 
@@ -133,7 +136,8 @@ def test_get_is_readable_from_lan(lan, seeded):
     response = lan.get("/api/settings/ai")
     assert response.status_code == 200
     assert response.json()["configured"] is True
-    assert response.json()["can_edit"] is False
+    assert response.json()["can_edit"] is True
+    assert response.json()["is_loopback"] is False
     assert SECRET not in response.text
 
 
@@ -262,6 +266,37 @@ def test_test_api_sends_a_minimal_request(local, seeded, fake_provider):
     assert calls[0]["body"]["messages"] == [{"role": "user", "content": "ping"}]
     assert "response_format" not in calls[0]["body"]
 
+def test_test_api_hits_the_google_endpoint(local, config_file, fake_provider):
+    """provider=google 時打 Gemini 的 OpenAI 相容端點。"""
+    config_file.write_text(json.dumps(
+        {"api_key": SECRET, "model": "gemini-3.8-flash", "provider": "google"}
+    ), encoding="utf-8")
+    calls = fake_provider()
+    response = local.post("/api/settings/ai/test", json={})
+    assert response.status_code == 200
+    assert calls[0]["url"] == (
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    )
+
+def test_test_api_hits_custom_base_url(local, config_file, fake_provider):
+    config_file.write_text(json.dumps(
+        {"api_key": SECRET, "model": "m", "provider": "custom",
+         "base_url": "https://my-proxy.internal/v1"}
+    ), encoding="utf-8")
+    calls = fake_provider()
+    response = local.post("/api/settings/ai/test", json={})
+    assert response.status_code == 200
+    assert calls[0]["url"] == "https://my-proxy.internal/v1/chat/completions"
+
+def test_test_api_can_test_an_unsaved_provider(local, seeded, fake_provider):
+    """剛填的 provider / base_url 也能先測，不必先存。"""
+    calls = fake_provider()
+    response = local.post("/api/settings/ai/test",
+                          json={"provider": "google"})
+    assert response.status_code == 200
+    assert calls[0]["url"].startswith(
+        "https://generativelanguage.googleapis.com/v1beta/openai/")
+
 
 def test_test_api_uses_the_stored_key(local, seeded, fake_provider):
     calls = fake_provider()
@@ -329,7 +364,7 @@ def test_test_api_without_configuration_is_a_clear_error(local, config_file, fak
 
 
 # ----------------------------------------------------------------------
-# 10. loopback / LAN
+# 10. 區網：受信任區網可操作（server 刻意只服務區網）
 # ----------------------------------------------------------------------
 
 
@@ -337,39 +372,35 @@ def test_test_api_without_configuration_is_a_clear_error(local, config_file, fak
 def test_loopback_can_edit(client_factory, seeded, address):
     with client_factory(address) as c:
         assert c.get("/api/settings/ai").json()["can_edit"] is True
+        assert c.get("/api/settings/ai").json()["is_loopback"] is True
         assert c.post("/api/settings/ai", json={"model": "m:free"}).status_code == 200
 
 
-def test_lan_cannot_change_the_model(lan, seeded):
+def test_lan_can_change_the_model(lan, seeded):
+    """區網裝置（例如手機）可以改設定 —— 與「區網可讀寫所有
+    商品資料」的信任模型一致。若不信任區網，把 server_host
+    改回 127.0.0.1。"""
     response = lan.post("/api/settings/ai", json={"model": "hacked/model"})
-    assert response.status_code == 400
-    assert "只有本機" in response.json()["detail"]
-    assert json.loads(seeded.read_text(encoding="utf-8"))["model"] == "seed/model:free"
+    assert response.status_code == 200
+    assert json.loads(seeded.read_text(encoding="utf-8"))["model"] == "hacked/model"
 
-
-def test_lan_cannot_change_the_key(lan, seeded):
+def test_lan_can_change_the_key(lan, seeded):
     response = lan.post("/api/settings/ai", json={"api_key": "sk-or-v1-HACKED"})
-    assert response.status_code == 400
-    assert json.loads(seeded.read_text(encoding="utf-8"))["api_key"] == SECRET
+    assert response.status_code == 200
+    assert json.loads(seeded.read_text(encoding="utf-8"))["api_key"] == "sk-or-v1-HACKED"
 
+def test_lan_can_clear_the_key(lan, seeded):
+    assert lan.post("/api/settings/ai/clear-key").status_code == 200
+    assert "api_key" not in json.loads(seeded.read_text(encoding="utf-8"))
 
-def test_lan_cannot_clear_the_key(lan, seeded):
-    assert lan.post("/api/settings/ai/clear-key").status_code == 400
-    assert json.loads(seeded.read_text(encoding="utf-8"))["api_key"] == SECRET
-
-
-def test_lan_cannot_test_the_api(lan, seeded, fake_provider):
+def test_lan_can_test_the_api(lan, seeded, fake_provider):
     calls = fake_provider()
-    assert lan.post("/api/settings/ai/test", json={}).status_code == 400
-    assert calls == [], "被拒絕的請求不該真的送到 provider"
+    assert lan.post("/api/settings/ai/test", json={}).status_code == 200
+    assert len(calls) == 1
 
-
-def test_forwarded_for_cannot_impersonate_loopback(client_factory, seeded):
-    """偽造 X-Forwarded-For 不該讓區網裝置取得寫入權限。
-
-    判斷用的是 socket 對端位址，不是使用者可控的標頭。實測過這個 spoof
-    不會改變 request.client.host。
-    """
+def test_spoofed_headers_do_not_change_anything(client_factory, seeded):
+    """來源判斷只看 socket 對端位址，偽造標頭不影響任何事
+    （現在區網本來就能寫，這個測試釘住「判斷不靠標頭」）。"""
     with client_factory(LAN) as c:
         response = c.post(
             "/api/settings/ai",
@@ -377,8 +408,8 @@ def test_forwarded_for_cannot_impersonate_loopback(client_factory, seeded):
             headers={"X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1",
                      "Host": "localhost"},
         )
-        assert response.status_code == 400
-    assert json.loads(seeded.read_text(encoding="utf-8"))["api_key"] == SECRET
+        assert response.status_code == 200
+    assert json.loads(seeded.read_text(encoding="utf-8"))["api_key"] == "sk-or-v1-SPOOFED"
 
 
 def test_loopback_detection_is_not_via_headers():
@@ -407,7 +438,7 @@ def test_api_accepts_no_path_parameter():
     )
     assert block, "找不到 AiSettingsUpdate"
     fields = set(re.findall(r"^\s{4}(\w+):", block.group(1), re.M))
-    assert fields == {"model", "api_key"}, f"請求模型多了欄位：{fields}"
+    assert fields == {"model", "api_key", "provider", "base_url"}, f"請求模型多了欄位：{fields}"
 
     settings_source = (ROOT / "shop" / "settings.py").read_text(encoding="utf-8")
     for forbidden in ("config_path:", "filename:", "path: str", "Request.body"):
@@ -426,15 +457,20 @@ def test_analyze_item_reads_the_same_file(local, seeded):
     config = ai_config.load_config(seeded)
     assert config.model == "shared/model:free"
     assert config.api_key == NEW_SECRET
+    assert config.provider == "openrouter"
+    assert config.base_url == ai_config.DEFAULT_BASE_URL
 
 
 def test_adapter_and_server_share_one_implementation():
     """設定語意只有一份，不複製。"""
     adapter = (ROOT / "tools" / "analyze_item.py").read_text(encoding="utf-8")
     assert "from shop.ai_config import" in adapter
+    assert "from shop.ai_client import" in adapter
     assert "def load_config(" not in adapter, "adapter 不該自己刻一份 load_config"
     assert "def redact(" not in adapter, "adapter 不該自己刻一份 redact"
     assert "class AiConfig" not in adapter
+    assert "def call_ai_provider(" not in adapter, "adapter 不該自己刻一份 client"
+    assert "def build_request_body(" not in adapter, "adapter 不該自己刻一份 request builder"
 
 
 def test_api_does_not_contain_its_own_config_format():

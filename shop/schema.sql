@@ -101,6 +101,18 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_entity ON events(entity_type, entity_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_time   ON events(created_at);
 
+CREATE TABLE IF NOT EXISTS templates (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    html        TEXT NOT NULL,
+    width       REAL,
+    height      REAL,
+    unit        TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_templates_name ON templates(name);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

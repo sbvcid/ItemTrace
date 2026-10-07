@@ -39,7 +39,9 @@ function thumb(relative, caption) {
     loading: "lazy",
   });
   image.addEventListener("error", () => {
-    figure.replaceChildren(el("div", { class: "broken", text: "讀不到" }));
+    figure.replaceChildren(el("div", {
+      class: "broken", text: t("common.unreadable_short"),
+    }));
   });
   figure.appendChild(image);
   if (caption) figure.appendChild(el("figcaption", { text: caption }));
@@ -57,30 +59,26 @@ async function upload(files) {
   showError("");
   const status = document.getElementById("upload-status");
   status.hidden = false;
-  status.textContent = "上傳中…（" + files.length + " 張）";
+  status.textContent = t("inbox.uploading", { count: files.length });
   startBtn.disabled = true;
 
   const body = new FormData();
   Array.from(files).forEach((file) => body.append("files", file, file.name));
 
-  const verb = "上傳";
   try {
     await api("/api/inbox/photos", { method: "POST", body });
   } catch (err) {
-    showError(verb + "失敗：" + err.message);
+    showError(t("inbox.upload_failed", { message: err.message }));
     startBtn.disabled = false;
     return;
   }
 
-  status.textContent = "上傳完成";
+  status.textContent = t("inbox.upload_done");
   setTimeout(() => { status.hidden = true; }, 2000);
   try {
     await refresh();
   } catch (err) {
-    showError(
-      verb + "成功，但重新載入待處理清單失敗（" + err.message +
-      "）。照片已經在 inbox 裡，請重新整理確認。"
-    );
+    showError(t("inbox.upload_ok_reload_failed", { message: err.message }));
   } finally {
     startBtn.disabled = false;
   }
@@ -154,10 +152,13 @@ function groupCard(group) {
           onchange: () => selectGroup(group.index),
         }),
         el("div", { class: "grow" }, [
-          el("div", { class: "group-count", text: group.entries.length + " 張照片" }),
+          el("div", {
+            class: "group-count",
+            text: t("inbox.group_photo_count", { count: group.entries.length }),
+          }),
           el("div", {
             class: "group-time",
-            text: group.captured_at ? timeRange(group) : "時間讀不出來",
+            text: group.captured_at ? timeRange(group) : t("inbox.group_no_time"),
           }),
         ]),
       ]),
@@ -176,7 +177,7 @@ function selectGroup(key) {
   });
   const group = choices().find((g) => g.index === key);
   document.getElementById("build-label").textContent =
-    "已選 " + group.entries.length + " 張，開始建檔？";
+    t("inbox.selected_prompt", { count: group.entries.length });
   buildBox.hidden = false;
   startBtn.focus();
 }
@@ -194,7 +195,7 @@ async function refresh() {
   groups = grouped;
 
   document.getElementById("count").textContent =
-    entries.length ? entries.length + " 張待處理" : "";
+    entries.length ? t("inbox.pending_count", { count: entries.length }) : "";
   document.getElementById("nothing").hidden = entries.length > 0;
   document.getElementById("groups-sec").hidden = groups.length === 0;
 
@@ -226,7 +227,7 @@ async function refresh() {
   clear(looseBox);
   if (loose) {
     document.getElementById("ungrouped-count").textContent =
-      "（" + loose.entries.length + " 張）";
+      t("inbox.ungrouped_count", { count: loose.entries.length });
     // 沒有時間的那批也能建檔：走同一條 /api/inbox/intake
     looseBox.appendChild(groupCard(loose));
   }
@@ -235,7 +236,7 @@ async function refresh() {
 gapSelect.addEventListener("change", () => {
   selected = null;
   buildBox.hidden = true;
-  refresh().catch((err) => showError("分組失敗：" + err.message));
+  refresh().catch((err) => showError(t("inbox.group_failed", { message: err.message })));
 });
 
 /* ------------------------------------------------------------ 建檔 */
@@ -245,8 +246,11 @@ startBtn.addEventListener("click", async () => {
   const group = choices().find((g) => g.index === selected);
   if (!group || !group.entries.length) return;
 
+  const idleLabel = t("inbox.start_intake");
+  const busyLabel = t("inbox.intaking");
+
   startBtn.disabled = true;
-  startBtn.textContent = "建檔中…";
+  startBtn.textContent = busyLabel;
   showError("");
   try {
     const done = await api("/api/inbox/intake", {
@@ -263,14 +267,21 @@ startBtn.addEventListener("click", async () => {
       return;
     }
     // 全部都是重複匯入，沒有新商品可去
-    startBtn.textContent = "開始建檔";
+    startBtn.textContent = idleLabel;
     await refresh();
   } catch (err) {
-    showError("建檔失敗（資料沒有半套）：" + err.message);
+    showError(t("inbox.intake_failed", { message: err.message }));
   } finally {
     startBtn.disabled = false;
-    if (startBtn.textContent === "建檔中…") startBtn.textContent = "開始建檔";
+    /* 用變數比對而不是比字串：比字串在翻譯後仍然成立，但一旦語言在
+       請求途中被切換，比的就會對不上，按鈕會卡在「建檔中…」。 */
+    if (startBtn.textContent === busyLabel) startBtn.textContent = idleLabel;
   }
 });
 
-refresh().catch((err) => showError("讀取失敗：" + err.message));
+i18nSubscribe(() => {
+  refresh().catch(() => {});
+});
+
+i18nInit();
+refresh().catch((err) => showError(t("inbox.load_failed", { message: err.message })));

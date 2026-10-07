@@ -10,19 +10,28 @@ function makeHarness(options = {}) {
   const calls = [];
   const responses = {
     "/api/settings/ai": {
-      provider: "openrouter",
+      provider: options.provider || "openrouter",
       configured: options.configured !== false,
       model: options.model || "seed/model:free",
+      base_url: options.baseUrl || "https://openrouter.ai/api/v1",
       default_model: "qwen/qwen3.8-27b:free",
-      can_edit: options.canEdit !== false,
+      presets: {
+        openrouter: "https://openrouter.ai/api/v1",
+        google: "https://generativelanguage.googleapis.com/v1beta/openai",
+      },
+      can_edit: true,
+      is_loopback: options.loopback !== false,
       config_file: "tools/ai_config.local.json",
     },
     save: options.saveResponse || {
       provider: "openrouter", configured: true, model: "new/model:free",
+      base_url: "https://openrouter.ai/api/v1",
       api_key_changed: false, model_changed: true,
+      provider_changed: false, base_url_changed: false,
     },
     test: options.testResponse || { ok: true, model: "new/model:free", detail: "" },
-    clear: { provider: "openrouter", configured: false, model: "new/model:free",
+    clear: { provider: "openrouter", configured: false,
+             model: "new/model:free", base_url: "https://openrouter.ai/api/v1",
              api_key_changed: true, model_changed: false },
     ...(options.responses || {}),
   };
@@ -66,6 +75,10 @@ function makeHarness(options = {}) {
     setValue(v) { el("api-key").value = v; },
     model() { return el("model").value; },
     setModel(v) { el("model").value = v; },
+    provider() { return el("provider").value; },
+    setProvider(v) { el("provider").value = v; },
+    baseUrl() { return el("base-url").value; },
+    setBaseUrl(v) { el("base-url").value = v; },
     keyState() { return el("key-state").textContent; },
     status() { return el("status").textContent; },
     errorText() {
@@ -73,7 +86,8 @@ function makeHarness(options = {}) {
     },
     lanWarningHidden() { return el("lan-warning").hidden; },
     disabled() {
-      return ["api-key", "model", "save", "test", "clear"]
+      return ["api-key", "model", "provider", "base-url",
+              "save", "test", "clear"]
         .map((id) => el(id).disabled);
     },
     type() { return el("api-key").type; },
@@ -113,6 +127,8 @@ const label = (text) => String(text);
     keyState: h.keyState(),
     keyValue: h.value,
     model: h.model(),
+    provider: h.provider(),
+    baseUrl: h.baseUrl(),
     lanWarningHidden: h.lanWarningHidden(),
     disabled: h.disabled(),
     errorText: h.errorText(),
@@ -131,8 +147,8 @@ const label = (text) => String(text);
     errorText: h.errorText(),
   });
 
-  // 區網：看得到但不能改
-  h = makeHarness({ canEdit: false });
+  // 區網：看得到、也能改（server 刻意只服務受信任區網）
+  h = makeHarness({ loopback: false });
   await h.run();
   results.push({
     label: "區網檢視",
@@ -168,8 +184,19 @@ const label = (text) => String(text);
     keyState: h.keyState(),
   });
 
+  // 切換 provider → 自動帶入該 provider 的預設 base URL
+  h = makeHarness();
+  await h.run();
+  h.setProvider("google");
+  await h.el("provider").fire("change");
+  results.push({
+    label: "切換 provider",
+    provider: h.provider(),
+    baseUrl: h.baseUrl(),
+  });
+
   // 儲存失敗
-  h = makeHarness({ saveError: "只有本機（127.0.0.1 或 ::1）可以修改 AI 設定。" });
+  h = makeHarness({ saveError: "base_url：base_url 必須是 http/https URL" });
   await h.run();
   h.setModel("x/y:free");
   await h.click("save");

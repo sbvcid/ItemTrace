@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="page.title_capture">連續拍照 · ItemTrace</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="topbar-brand" href="/">
+    <span class="brand-mark">IT</span>
+    <span>ItemTrace</span>
+  </a>
+  <a class="nav-link" href="/"><span aria-hidden="true">&larr;</span> <span data-i18n="nav.item_detail">返回</span></a>
+  <h1 data-i18n="capture.title" style="margin:0;font-size:16px">連續拍照</h1>
+  <span class="grow"></span>
+  <nav class="topbar-nav" aria-label="Navigation">
+    <a class="nav-link" href="/" data-i18n="nav.inbox">Inbox</a>
+    <a class="nav-link" href="/items" data-i18n="nav.items">商品</a>
+    <a class="nav-link" href="/settings" data-i18n="nav.settings">設定</a>
+  </nav>
+  <div class="lang-switch" role="group" aria-label="Language">
+    <button type="button" class="lang-btn" data-lang="zh-TW">中文</button>
+    <span class="lang-sep" aria-hidden="true">|</span>
+    <button type="button" class="lang-btn" data-lang="en">EN</button>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div id="error" role="alert" aria-live="polite"></div>
+
+  <!-- 拍攝模式：快門點擊直接開啟原生相機，拍完回此畫面可連續快拍。
+       嚴格注意：此處禁止使用 label 標籤，以防原生 input 雙重觸發。 -->
+  <section id="capture-sec">
+    <button class="shutter" id="shutter" type="button">
+      <span class="shutter-dot"></span>
+      <span class="shutter-title" data-i18n="capture.shutter">拍照</span>
+      <span class="shutter-sub" data-i18n="capture.shutter_hint">直接開啟相機，拍完可以繼續拍</span>
+    </button>
+    <input id="camera-input" type="file" accept="image/*" capture="environment" hidden>
+    <div class="capture-count" id="count" data-i18n="capture.taken_count_zero">已拍 0 張</div>
+    <div class="strip" id="strip"></div>
+    <div class="capture-actions">
+      <button class="primary big" id="finish" type="button" disabled data-i18n="capture.finish">完成</button>
+      <button id="cancel" type="button" data-i18n="common.cancel">取消</button>
+    </div>
+  </section>
+
+  <!-- 預覽與整批建檔模式 -->
+  <section id="preview-sec" hidden>
+    <h2><span data-i18n="capture.preview_title">本批照片</span> <span class="dim" id="preview-count"></span></h2>
+    <div class="batch" id="grid"></div>
+    <div class="empty" id="grid-empty" hidden data-i18n="capture.grid_empty">這一批沒有照片了</div>
+    <div class="capture-actions">
+      <button class="primary big" id="build" type="button" disabled data-i18n="capture.build">建檔</button>
+      <button id="continue" type="button" data-i18n="capture.continue">繼續拍攝</button>
+      <button id="discard" type="button" data-i18n="capture.discard">取消整批</button>
+    </div>
+    <p class="dim" style="font-size:12.5px;margin-top:10px" data-i18n="capture.build_hint">按「建檔」後這一批照片會一起進入既有的多照片建檔流程：先建立商品，再由 AI 辨識、自動填入商品資料，結果是待確認建議，逐筆接受才會寫進商品。</p>
+  </section>
+
+</main>
+
+<script src="/static/i18n.js"></script>
+<script src="/static/api.js"></script>
+<script src="/static/capture.js"></script>
+</body>
+</html>

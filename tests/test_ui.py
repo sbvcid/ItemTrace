@@ -357,8 +357,25 @@ def test_frontend_never_deletes_a_photo(client):
         assert "delete_photo" not in source
 
 
-def test_frontend_has_no_delete_controls_at_all(client):
-    joined = "".join(ui_source(n) for n in UI_DIR.iterdir() if n.suffix in (".js", ".html"))
+def test_frontend_has_no_delete_controls_at_all():
+    # Template 有合法的刪除功能，現在集中在「設定 → 列印」；
+    # /templates 只剩轉頁頁面，所以排除那一組檔案。
+    # 商品頁與其他頁面不該有任何刪除控制項。
+    #
+    # i18n.js 是翻譯字典，「刪除」在裡面是 template.action_delete 的
+    # **譯文**，不是控制項 —— 掃「檔案裡有沒有這個字」會把它算進來。
+    # 字典本來就必須含所有語言的用詞，所以整個檔案排除。
+    excluded = {
+        "printing_settings.html", "printing_settings.js",
+        "i18n.js",
+        # /design Showcase 是示範頁面，包含示範性刪除按鈕與文字，
+        # 不是產品 UI 的實際刪除控制項；排除以避免誤判。
+        "design.html", "design.js",
+    }
+    joined = "".join(
+        ui_source(n) for n in UI_DIR.iterdir()
+        if n.suffix in (".js", ".html") and n.name not in excluded
+    )
     assert "刪除" not in joined
     assert "永久刪除" not in joined
 
@@ -401,12 +418,20 @@ def test_ui_has_no_build_step_or_framework():
     """原生 HTML/CSS/JS：不引入框架、不需要 npm build。"""
     files = sorted(p.name for p in UI_DIR.iterdir())
     assert files == [
-        "api.js", "app.css", "inbox.html", "inbox.js",
+        "api.js", "app.css", "capture.html", "capture.js",
+        "design.html", "design.js",
+        "favicon.ico",
+        "i18n.js",
+        "inbox.html", "inbox.js",
         "item.html", "item.js", "items.html", "list.js",
+        "print_dialog.js", "printing_settings.html", "printing_settings.js",
         "settings.html", "settings.js",
     ]
     for path in UI_DIR.iterdir():
-        text = path.read_text(encoding="utf-8")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue  # binary assets (e.g. favicon.ico) are not source
         assert "import " not in text
         assert "require(" not in text
         assert "node_modules" not in text

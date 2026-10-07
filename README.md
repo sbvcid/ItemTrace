@@ -48,10 +48,147 @@ Windows 也可以直接雙擊 **`啟動 ItemTrace.bat`**，它會依序做上面
 
 | 網址 | 用途 |
 |---|---|
-| `/` | Inbox：上傳照片 → 依拍攝時間分組 → 選一組建檔 |
+| `/` | Inbox：拍照與上傳照片 → 依拍攝時間分組 → 選取建檔 |
 | `/items` | 商品列表：搜尋、狀態／分類篩選 |
-| `/items/<item-id>` | 商品詳細：照片牆、建議、欄位、識別碼、歷史、復原 |
+| `/items/<item-id>` | 商品詳細：個人物品檔案、照片牆、AI 輔助建議、識別碼、修改歷史、**列印** |
+| `/settings` | AI 辨識設定（Gemini / OpenRouter / Custom） |
+| `/settings/printing` | 列印設定（預設印表機／範本）與**範本管理** |
 | `/docs` | API 文件（Swagger UI） |
+| `/design` | UI Showcase / visual reference（UI 基準頁） |
+
+### Architecture
+
+```text
+Browser / Phone
+    ↓ (HTTP)
+ItemTrace server (FastAPI)
+    ├── repository / persistence (SQLite + files/ + inbox/)
+    ├── evidence (read-only bundle: item / observations / identifiers / events / photos / manifest)
+    ├── template rendering (HTML/CSS → headless Chromium → PDF)
+    ├── printing (PDF → win32print / GDI → Windows printer)
+    └── optional AI adapter (external producer; suggestions only, not source of truth)
+```
+
+Evidence Export is **read-only output** from the server; it never modifies DB, creates events, or updates item status. Print sends PDF to the Windows print backend running on the same computer. AI suggestions are validated by the user before being written to item fields.
+
+### 語言（繁體中文 / English）
+
+UI 可以用繁體中文或 English 顯示。所有主要頁面右上角 topbar 均提供語言控制（中文 | EN），選擇後立刻套用到整個畫面。
+
+* 預設語言是 **繁體中文**。
+* 選擇記在瀏覽器 `localStorage["itemtrace.locale"]`，**只存語言偏好**：
+  不寫進資料庫、不送到 server、不存 API key 或商品資料，所以換裝置就是
+  各自的選擇，也**不需要重啟 server**。
+* 切換只翻 **UI**（標題、欄位 label、按鈕、錯誤訊息、空狀態、placeholder、
+  日期格式）。**商品資料不翻**：商品名稱、品牌、類型、狀態、備註，以及
+  Template 裡的文字，都是你自己的內容，兩種語言下都原樣顯示。
+
+翻譯全部集中在 **`ui/i18n.js`** 這一支檔案（純物件，沒有 build step、
+沒有 npm、沒有前端框架）：
+
+| 做法 | 說明 |
+|---|---|
+| `t("common.save")` | 頁面 script 產生動態文字 |
+| `data-i18n="common.save"` | markup 的靜態文字 |
+| `data-i18n-placeholder` / `-title` / `-aria-label` | placeholder、title、aria-label |
+| `i18nSwitch("en")` | 切換語言（會重新套用 markup 並通知訂閱者） |
+| `i18nFormatDateTime(iso)` | 日期時間跟著語言格式化 |
+
+| 語言 | key 數 |
+|---|---|
+| Language `zh-TW` | 352 |
+| Language `en` | 352 |
+
+兩邊的 key 必須完全一致（`tests/test_i18n.py` 會驗）。查不到 key 時的
+fallback 是 **目前語言 → `zh-TW` → key 本身**，並在 console 警告：畫面會
+顯示 `item.foo_label` 這種明顯不是翻譯的字串，但**不會讓整頁 JS 初始化
+失敗**。
+
+新增或修改 UI 文字的流程：先在 `ui/i18n.js` 的兩個語言都加 key，再用
+`t()` 或 `data-i18n` 引用，最後補 `tests/test_i18n.py` 的對應檢查。
+
+## 列印標籤
+
+列印功能分成兩個地方：
+
+**`/settings/printing`（設定 → 列印）** 負責長期設定與範本管理：
+
+- 列印設定：預設印表機、預設範本（存進 `tools/print_config.local.json`）
+- 範本管理：新增、編輯、預覽、移除
+
+**商品頁** 只保留三個操作：範本替換 → 更新預覽 → 列印。
+
+在商品頁按 **［列印］**，對話框裡有：
+
+- **列印預覽** —— 就是送進 PDF 的那一份 HTML，所以看到的就是會印的
+- **範本** —— 預設帶入設定裡的預設範本；切換會重新取得預覽（不修改範本本身）
+- **印表機** —— 來自 `/api/printers`，預設帶入設定裡的預設印表機
+- **［列印 1 份］** —— 固定 1 份
+
+只有預覽內容會印出來；網頁上的商品資訊、按鈕、範本選擇區都不在標籤上。
+沒有印表機、印表機清單讀取失敗、或列印預覽載入失敗時，對話框會直接顯示原因，
+不會留一片空白。
+
+手機操作流程相同（手機 → ItemTrace → 商品 → 列印 → 選範本 → 看預覽 → 列印）。
+印表機清單來自**跑 server 的那台電腦**，不是手機自己的；長期設定在手機上也能改
+（列印設定不含機密，與商品資料同一個信任模型）。
+
+實際輸出尺寸等於 Template 自己的 `width` / `height`（例如 TPL-0002 是
+100 × 150 mm），不會被縮放成印表機的預設紙張。
+
+列印走的是 headless Chromium 的排版引擎，跟畫面上的預覽同一套排版，
+所以照片、文字、空欄位、data-bind 替換結果都與預覽一致。
+
+需要的額外依賴（`pip install -r requirements.txt` 已包含，缺了也不影響
+其他功能，只是列印會回 400 並說明原因）：
+
+| 需求 | 說明 |
+|---|---|
+| Chrome 或 Edge | 排版引擎。Windows 10/11 內建 Edge，通常不用另外裝 |
+| PyMuPDF | 校正 PDF 頁面尺寸為精確 mm 並光柵化 |
+| pywin32 | 送列印工作到 Windows 印表機 |
+
+瀏覽器位置可以用 `ITEMTRACE_BROWSER` 覆寫：
+
+```powershell
+$env:ITEMTRACE_BROWSER = "D:\Browser\chrome.exe"
+```
+
+## Evidence Export（證據匯出）
+
+單一商品的完整讀取-only 證據 bundle，可帶走、保存、交付：
+
+```text
+GET /api/items/{item_id}/evidence/export
+→ JSON manifest (format / version / item_id / generated_at / files[])
+```
+
+Bundle 內容（不建立第二套資料來源，直接從現有表 / 檔案複製）：
+
+```text
+item.json
+observations.json
+identifiers.json
+events.json
+photos/          ← 原始照片 bytes 完整複製（無重新壓縮）
+manifest.json     ← file path / sha256 / size（manifest 自身用 baseline hash）
+```
+
+下載單一檔案：
+
+```text
+GET /api/items/{item_id}/evidence/export/file?path=manifest.json
+```
+
+特性：
+
+* **Read-only**：不修改 DB、item 狀態、event、照片 metadata、timestamp
+* **完整性**：manifest 對每個 exported file 計算 `sha256` + `size`；照片 bytes 與原始 `files/` 一致
+* **路徑安全**：禁止 `..`、絕對路徑、反斜線
+* **空資料可成功**：無 observations / identifiers / events / photos 時輸出空 array，但不失敗
+* **不存在 Item**：回傳現有一致的 404
+
+UI：商品頁提供 `[匯出證據]` 按鈕；點擊後顯示產生時間與檔案摘要，並提供下載連結。
 
 ## 離線工具
 
@@ -111,24 +248,29 @@ node --check ui/item.js               # JS 語法（有 node 才需要）
 
 `tools/analyze_item.py` 是一支**外部**腳本：把商品照片送到 Vision 模型，
 結果以 **pending 建議**寫回來。它不會動商品資料 —— 要人工在商品頁逐筆
-看過、按接受才會生效。
+看過、按接受才會生效。商品頁也有「AI 自動填入」按鈕，做的是同一件事
+（server 端分析、結果一樣是 pending 建議）。
 
 ### 設定（用網頁）
 
 1. 啟動 ItemTrace，開 **<http://127.0.0.1:8731/settings>**
-2. 填入 OpenRouter API key
-3. 設定 model（不填就用預設值 `qwen/qwen3.8-27b:free`）
+2. 選 Provider（Google Gemini / OpenRouter / Custom）並填入 API key
+3. Base URL 與 model（選預設 provider 會自動帶入；Custom 可填任何
+   OpenAI 相容 API 的端點基址，例如
+   `https://generativelanguage.googleapis.com/v1beta/openai/`）
 4. 按「測試 API」確認連得上
-5. 回到商品頁執行 AI adapter
+5. 回到商品頁按「AI 自動填入」或執行 AI adapter
 
 設定存在 **`tools/ai_config.local.json`** —— 那是後台實作細節，你平常
 不需要碰它。也可以直接複製 `tools/ai_config.example.json` 改名成
 `ai_config.local.json` 編輯。該檔案已被 `.gitignore` 排除，不會被 commit。
 
-> **只有本機可以改。** `/settings` 的讀取（看有無設定、model）是任何來源
-> 都能做，但**寫入 API key、清除、測試**只接受來自 `127.0.0.1` /
-> `::1` 的請求。同一個 Wi-Fi 裡的其他裝置看得到設定頁，但改不了你的
-> OpenRouter 帳號。
+> **API key 不會離開這台電腦。** 任何 API 回應都不含 key，
+> 頁面上的密碼欄每次載入都是空的。寫入（存檔／清除／測試）
+> 開放給能連到這台 server 的裝置 —— server 刻意只服務受信任
+> 區網（`server_host` + 防火牆），與「區網裝置本來就能讀寫所有
+> 商品資料」的信任模型一致。若不信任區網，把 `config.json` 的
+> `server_host` 改回 `127.0.0.1`，寫入就只接受本機。
 
 ### 執行
 

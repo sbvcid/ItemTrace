@@ -114,8 +114,9 @@ def test_revert_creates_a_new_event_instead_of_editing_the_old_one(views):
 
 
 def test_revert_leaves_the_original_event_row_untouched(views):
+    # 事件種類顯示的是譯文；資料庫裡的值仍是 field.changed。
     rows = _rows(views, "復原成功")
-    assert "field.changed" in rows["E2"]["text"]
+    assert "欄位變更" in rows["E2"]["text"]
     assert "華碩" in rows["E2"]["text"]
 
 

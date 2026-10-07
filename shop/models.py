@@ -26,6 +26,7 @@ __all__ = [
     "Observation",
     "Photo",
     "Suggestion",
+    "Template",
     "IDENTIFIER_KINDS",
     "IDENTIFIER_SOURCES",
     "ITEM_STATUSES",
@@ -278,4 +279,35 @@ class Event:
             next_value=loads_value(row["next_value"]),
             payload=payload if isinstance(payload, dict) else {},
             created_at=row["created_at"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Template:
+    """Template entity for HTML/CSS rendering.
+
+    Templates are untrusted user input. They define HTML structure with
+    explicit data-bind attributes for field substitution.
+    """
+
+    id: str
+    name: str
+    html: str
+    width: float | None = None
+    height: float | None = None
+    unit: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: Row) -> Template:
+        return cls(
+            id=row["id"],
+            name=row["name"],
+            html=row["html"],
+            width=row["width"] if row["width"] is not None else None,
+            height=row["height"] if row["height"] is not None else None,
+            unit=row["unit"] or None,
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )

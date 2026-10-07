@@ -1,8 +1,10 @@
 """`/settings` 頁面的行為（用假 DOM 跑真正的 ui/settings.js）。
 
 兩條重點：
-  1. 頁面永遠拿不到已儲存的 API key —— 密碼欄每次載入都是空的
-  2. 區網可以看、不能改
+   1. 頁面永遠拿不到已儲存的 API key —— 密碼欄每次載入都是空的
+   2. 區網也能看也能改（server 刻意只服務受信任區網，
+      與「區網本來就能讀寫所有商品資料」的信任模型一致；
+      不信任區網就別把 server_host 設成 0.0.0.0）
 """
 
 from __future__ import annotations
@@ -63,15 +65,15 @@ def test_no_error_on_load(views):
 
 
 # ----------------------------------------------------------------------
-# 2. LAN：看得到不能改
+# 2. 區網：也能改（受信任區網）
 # ----------------------------------------------------------------------
 
 
-def test_lan_sees_the_page_but_controls_are_disabled(views):
+def test_lan_sees_the_page_and_controls_are_enabled(views):
     row = views["區網檢視"]
     assert row["model"] == "seed/model:free", "區網應該看得到 model"
-    assert row["disabled"] == [True] * 5, "區網不能改任何東西"
-    assert row["lanWarningHidden"] is False, "要顯示只有本機能改的說明"
+    assert row["disabled"] == [False] * 7, "區網也能改（受信任區網）"
+    assert row["lanWarningHidden"] is False, "要顯示區網提示"
 
 
 def test_lan_sees_the_key_status_but_not_the_key(views):
@@ -80,7 +82,7 @@ def test_lan_sees_the_key_status_but_not_the_key(views):
 
 
 def test_localhost_controls_are_enabled(views):
-    assert views["已設定時載入"]["disabled"] == [False] * 5
+    assert views["已設定時載入"]["disabled"] == [False] * 7
     assert views["已設定時載入"]["lanWarningHidden"] is True
 
 
@@ -94,7 +96,11 @@ def test_changing_only_the_model_posts_no_key(views):
     assert len(posted) == 1
     assert posted[0]["path"] == "/api/settings/ai"
     assert posted[0]["method"] == "POST"
-    assert posted[0]["body"] == {"model": "new/model:free"}
+    assert posted[0]["body"] == {
+        "model": "new/model:free",
+        "provider": "openrouter",
+        "base_url": "https://openrouter.ai/api/v1",
+    }
     assert "api_key" not in posted[0]["body"], "沒填就不該送 key 欄位"
 
 
@@ -104,7 +110,8 @@ def test_saving_reports_success(views):
 
 def test_save_failure_shows_the_server_message(views):
     row = views["儲存失敗"]
-    assert "只有本機" in row["errorText"]
+    assert "儲存失敗" in row["errorText"]
+    assert "base_url" in row["errorText"]
     assert row["status"] == ""
 
 
@@ -151,7 +158,8 @@ def test_test_api_success_message(views):
 
 def test_test_api_failure_shows_the_real_error(views):
     row = views["測試 API 失敗"]
-    assert "API 測試失敗" in row["status"]
+    assert row["status"] == ""
+    assert "API 測試失敗" in row["errorText"]
     assert "No auth" in row["errorText"]
 
 
@@ -167,7 +175,8 @@ def test_test_api_never_sends_itemtrace_data(views):
     for label in ("測試 API 成功", "測試未儲存的 key"):
         for call in views[label]["posted"]:
             assert call["path"] == "/api/settings/ai/test"
-            assert set(call["body"]) <= {"model", "api_key"}
+            assert set(call["body"]) <= {"model", "api_key",
+                                            "provider", "base_url"}
 
 
 # ----------------------------------------------------------------------

@@ -3,63 +3,137 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>商品詳細 · ItemTrace</title>
+<title data-i18n="page.title_item">商品 · ItemTrace</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 
 <header class="topbar">
-  <a href="/items">&larr; 返回</a>
+  <a class="topbar-brand" href="/">
+    <span class="brand-mark">IT</span>
+    <span>ItemTrace</span>
+  </a>
+  <nav class="topbar-nav" aria-label="Main Navigation">
+    <a class="nav-link" href="/items"><span aria-hidden="true">&larr;</span> <span data-i18n="nav.item_detail">返回</span></a>
+    <a class="nav-link" href="/" data-i18n="nav.inbox">Inbox</a>
+    <a class="nav-link active" href="/items" data-i18n="items.title">商品</a>
+    <a class="nav-link" href="/settings" data-i18n="nav.settings">設定</a>
+  </nav>
   <span class="grow"></span>
-  <a class="sub" href="/">Inbox</a>
-  <a class="sub" href="/settings">設定</a>
-  <span class="sub" id="head-id"></span>
-  <span id="head-status"></span>
+  <!-- 商品狀態 Context Chip（保留 items.status 標示） -->
+  <div class="topbar-context" id="topbar-context" aria-label="Item Context">
+    <span class="topbar-id" id="head-id"></span>
+    <span class="topbar-meta" data-i18n="item.item_status_prefix">商品狀態：</span>
+    <span id="head-status"></span>
+  </div>
+  <div class="lang-switch" role="group" aria-label="Language">
+    <button type="button" class="lang-btn" data-lang="zh-TW">中文</button>
+    <span class="lang-sep" aria-hidden="true">|</span>
+    <button type="button" class="lang-btn" data-lang="en">EN</button>
+  </div>
 </header>
 
-<div class="wrap">
+<main class="wrap">
 
   <div id="error" role="alert" aria-live="polite"></div>
 
   <div id="notfound" class="empty" hidden>
-    找不到這件商品，可能編號打錯了。<br>
-    <a href="/items">回到列表</a>
+    <span data-i18n="item.not_found">找不到這件商品，可能編號打錯了。</span><br>
+    <a href="/items" data-i18n="nav.items">商品</a>
   </div>
 
   <div id="detail" hidden>
 
-    <!-- 照片優先：使用習慣是看照片 → 瞄一眼 → 改錯的地方 -->
-    <section>
-      <h2>照片 <span class="dim" id="wall-count"></span></h2>
+    <!-- 區段 1：商品照片庫（照片優先，點擊放大檢視） -->
+    <section class="card">
+      <h2><span data-i18n="item.title">商品</span> <span class="dim" id="wall-count"></span></h2>
       <div class="wall" id="wall"></div>
-      <div class="empty" id="wall-empty" hidden>還沒有照片</div>
+      <div class="empty" id="wall-empty" hidden data-i18n="item.no_photos">還沒有照片</div>
+      <!-- 操作工具列：AI 自動辨識（Hero）、列印標籤、匯出證據 -->
+      <div class="item-actions">
+        <button id="ai-analyze" class="btn-ai" type="button" data-i18n="item.photo_ai_analyze">AI 自動填入</button>
+        <button id="print-label" class="secondary" type="button" data-i18n="print.action">列印…</button>
+        <button id="evidence-export-btn" class="secondary" type="button" data-i18n="evidence.export">匯出證據</button>
+        <span class="dim" id="ai-status" data-i18n-aria-label="suggestion.ai_status"></span>
+      </div>
     </section>
 
-    <section id="pending-sec" hidden>
-      <h2>待確認建議 <span class="dim" id="pending-count"></span></h2>
+    <!-- 列印對話框：與「設定 → 列印」共用 ui/print_dialog.js -->
+    <section id="print-dialog" class="card" style="margin-top:16px" hidden>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <h2><span data-i18n="print.title">列印</span> <span class="dim" id="print-head-id"></span></h2>
+        <button id="print-close" type="button" data-i18n="print.close">關閉</button>
+      </div>
+
+      <div class="field" style="margin-top:12px">
+        <label for="print-template" data-i18n="print.template_label">範本</label>
+        <select id="print-template"></select>
+        <small class="dim" data-i18n="print.manage_link">
+          需要新增或修改範本請到「設定 → 列印 → 範本管理」。
+        </small>
+      </div>
+
+      <div class="field">
+        <label for="print-printer" data-i18n="print.printer_label">印表機</label>
+        <select id="print-printer"></select>
+        <small class="dim" data-i18n="print.printer_note">印表機由這台電腦（server 主機）管理，不是手機的。</small>
+      </div>
+
+      <p class="dim" id="print-size" style="margin:0 0 8px"></p>
+      <div id="print-preview" class="print-preview"
+           data-i18n-aria-label="print.preview"></div>
+      <p class="print-error" id="print-error"></p>
+      <div class="actions">
+        <button class="primary" id="print-confirm" data-i18n="print.submit">列印 1 份</button>
+      </div>
+    </section>
+
+    <!-- 區段 2：待確認建議（AI 辨識結果一律在此停留，人工逐筆確認後才寫入商品檔案） -->
+    <section id="pending-sec" class="card" hidden>
+      <h2><span data-i18n="suggestion.pending_title">待確認建議</span> <span class="dim" id="pending-count"></span></h2>
       <div id="pending"></div>
     </section>
 
+    <!-- 區段 3：商品核心屬性（數位檔案袋基本資料） -->
     <section>
       <div class="card">
-        <h2>商品資料</h2>
+        <h2 data-i18n="item.data_title">商品資料</h2>
+        <p class="dim" style="margin:0 0 12px" data-i18n="item.data_hint">這些欄位適用於任何實體物品，不限電子產品。欄位名是資料庫的固定內部名稱（model、category、condition），顯示文字才是給人看的。</p>
         <form id="form">
           <div class="grid2">
-            <div class="field"><label for="f-name">品名</label><input id="f-name"></div>
-            <div class="field"><label for="f-brand">品牌</label><input id="f-brand"></div>
-            <div class="field"><label for="f-model">型號</label><input id="f-model"></div>
-            <div class="field"><label for="f-category">分類</label><input id="f-category" list="cats"></div>
-            <div class="field"><label for="f-quantity">數量</label><input id="f-quantity" type="number" min="1" step="1"></div>
-            <div class="field"><label for="f-condition">品況</label><input id="f-condition"></div>
+            <div class="field">
+              <label for="f-name" data-i18n="item.name_label">名稱</label>
+              <input id="f-name">
+            </div>
+            <div class="field">
+              <label for="f-brand" data-i18n="item.brand_label">品牌</label>
+              <input id="f-brand">
+            </div>
+            <div class="field">
+              <label for="f-model" data-i18n="item.model_label">規格／型號</label>
+              <input id="f-model" data-i18n-placeholder="item.model_placeholder">
+            </div>
+            <div class="field">
+              <label for="f-category" data-i18n="item.category_label">類型</label>
+              <input id="f-category" list="cats" data-i18n-placeholder="item.category_placeholder">
+            </div>
+            <div class="field">
+              <label for="f-quantity" data-i18n="item.quantity_label">數量</label>
+              <input id="f-quantity" type="number" min="1" step="1">
+            </div>
+            <div class="field">
+              <label for="f-condition" data-i18n="item.condition_label">狀態</label>
+              <input id="f-condition" data-i18n-placeholder="item.condition_placeholder">
+            </div>
           </div>
           <div class="field" style="margin-top:12px">
-            <label for="f-notes">備註</label>
+            <label for="f-notes" data-i18n="item.notes_label">備註</label>
             <textarea id="f-notes" rows="3"></textarea>
           </div>
           <datalist id="cats"></datalist>
           <div style="display:flex;align-items:center;gap:12px;margin-top:14px">
-            <button class="primary" type="submit" id="save">儲存</button>
-            <span class="saved" id="saved" hidden></span>
+            <button class="primary" type="submit" id="save" data-i18n="common.save">儲存</button>
+            <span class="saved" id="saved" hidden data-i18n="item.saved">已儲存</span>
             <span class="grow" style="flex:1"></span>
             <span class="dim" id="updated"></span>
           </div>
@@ -67,36 +141,107 @@
       </div>
     </section>
 
+    <!-- 區段 4：識別碼與條碼 -->
     <section>
       <div class="card">
-        <h2>識別碼</h2>
-        <table id="identifiers"><thead>
-          <tr><th style="width:86px">種類</th><th>值</th><th style="width:96px"></th></tr>
-        </thead><tbody></tbody></table>
-        <div class="empty" id="id-empty" hidden>還沒有識別碼</div>
+        <h2 data-i18n="identifier.title">識別碼</h2>
+        <div style="overflow-x:auto">
+          <table id="identifiers"><thead>
+            <tr><th style="width:86px" data-i18n="identifier.kind">種類</th>
+                <th data-i18n="identifier.value">值</th><th style="width:96px"></th></tr>
+          </thead><tbody></tbody></table>
+        </div>
+        <div class="empty" id="id-empty" hidden data-i18n="identifier.empty">還沒有識別碼</div>
       </div>
     </section>
 
+    <!-- 區段 5：觀測紀錄（入庫與檢查） -->
     <section>
       <div class="card">
-        <h2>觀測紀錄</h2>
-        <table id="observations"><thead>
-          <tr><th style="width:118px">編號</th><th style="width:84px">種類</th>
-              <th>時間</th><th style="width:120px">照片</th></tr>
-        </thead><tbody></tbody></table>
-        <div class="empty" id="obs-empty" hidden>還沒有觀測紀錄</div>
+        <h2 data-i18n="observation.title">觀測紀錄</h2>
+        <div style="overflow-x:auto">
+          <table id="observations"><thead>
+            <tr><th style="width:118px" data-i18n="observation.number">編號</th>
+                <th style="width:84px" data-i18n="observation.kind">種類</th>
+                <th data-i18n="observation.time">時間</th>
+                <th style="width:120px" data-i18n="observation.photos">照片</th></tr>
+          </thead><tbody></tbody></table>
+        </div>
+        <div class="empty" id="obs-empty" hidden data-i18n="observation.empty">還沒有觀測紀錄</div>
       </div>
     </section>
 
-    <details id="history">
-      <summary>修改歷史（<span id="event-count">0</span> 筆）</summary>
-      <div id="events"></div>
-    </details>
+    <!-- 區段 6：變更歷程與審計追蹤（支援單一事件復原） -->
+    <section>
+      <div class="card">
+        <h2><span data-i18n="event.title">修改歷史</span> <span class="dim" id="event-count"></span></h2>
+        <div id="events"></div>
+      </div>
+    </section>
+
+    <!-- 區段 7：Evidence Bundle Export（完整證據包匯出） -->
+    <section class="card" id="evidence-export" style="margin-top:16px">
+      <h2 data-i18n="evidence.export">匯出證據</h2>
+      <p class="muted" style="font-size:13px" data-i18n="evidence.subtitle">產生單一商品的完整證據 bundle（read-only）</p>
+      <div class="actions" style="margin-top:8px">
+        <button id="evidence-btn" class="primary" data-i18n="evidence.export" onclick="evidenceExport()">匯出證據</button>
+      </div>
+      <div id="evidence-status" class="status" style="margin-top:10px; min-height:20px"></div>
+      <div id="evidence-result" hidden>
+        <div class="card-elevated" style="margin-top:10px; border-color:rgba(16,185,129,.35); background:rgba(16,185,129,.06);">
+          <b data-i18n="evidence.exported">已匯出</b>
+          <div style="font-size:13px; margin-top:6px; display:flex; gap:12px; flex-wrap:wrap">
+            <span><b data-i18n="evidence.item_label">商品</b>: <span id="evidence-item-id"></span></span>
+            <span><b data-i18n="evidence.generated_at">產生時間</b>: <span id="evidence-generated-at"></span></span>
+            <span><b data-i18n="evidence.file_count">檔案數</b>: <span id="evidence-file-count"></span></span>
+            <span><b data-i18n="evidence.photo_count">照片數</b>: <span id="evidence-photo-count"></span></span>
+          </div>
+          <div class="actions" style="margin-top:10px">
+            <a id="evidence-download" class="primary" href="#" data-i18n="evidence.download">下載 manifest</a>
+          </div>
+        </div>
+      </div>
+    </section>
 
   </div>
-</div>
+</main>
 
+<script src="/static/i18n.js"></script>
 <script src="/static/api.js"></script>
+<script src="/static/print_dialog.js"></script>
 <script src="/static/item.js"></script>
+<script>
+(function () {
+  function t(key) { return typeof i18nCurrentLocale === 'function' ? (window.t ? window.t(key) : key) : key; }
+  var btn = document.getElementById('evidence-export-btn');
+  if (!btn || typeof ITEM_ID === 'undefined') return;
+  btn.addEventListener('click', async function () {
+    var status = document.getElementById('evidence-status');
+    var result = document.getElementById('evidence-result');
+    var download = document.getElementById('evidence-download');
+    if (status) status.textContent = t('evidence.exporting');
+    if (result) result.hidden = true;
+    btn.disabled = true;
+    try {
+      var resp = await fetch('/api/items/' + encodeURIComponent(ITEM_ID) + '/evidence/export');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      var data = await resp.json();
+      if (status) status.textContent = t('evidence.exported');
+      if (result) result.hidden = false;
+      document.getElementById('evidence-item-id').textContent = data.item_id;
+      document.getElementById('evidence-generated-at').textContent = data.generated_at || '-';
+      var files = data.files || [];
+      document.getElementById('evidence-file-count').textContent = files.length;
+      var photos = files.filter(function(f){ return f.path && f.path.indexOf('photos/') === 0; });
+      document.getElementById('evidence-photo-count').textContent = photos.length;
+      if (download) download.href = '/api/items/' + encodeURIComponent(ITEM_ID) + '/evidence/export/file?path=manifest.json';
+    } catch (e) {
+      if (status) status.textContent = t('evidence.export_failed').replace('{message}', String(e.message || e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
 </body>
 </html>

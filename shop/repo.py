@@ -53,6 +53,7 @@ from .models import (
     Observation,
     Photo,
     Suggestion,
+    Template,
     dumps_object,
 )
 
@@ -89,6 +90,10 @@ IDENTIFIER_COLUMNS = (
 SUGGESTION_COLUMNS = (
     "id", "item_id", "field", "value", "confidence", "source", "model_name",
     "source_photo_id", "status", "created_at", "decided_at",
+)
+
+TEMPLATE_COLUMNS = (
+    "id", "name", "html", "width", "height", "unit", "created_at", "updated_at",
 )
 
 #: JSON 欄位：Python 端是 dict，資料庫端是 TEXT。
@@ -869,6 +874,112 @@ class Repository:
             return getattr(self, method_name)(entity_id, {field: value}, actor=actor)
 
     # ------------------------------------------------------------------
+    # templates
+    # ------------------------------------------------------------------
+
+    def add_template(
+        self,
+        name: str,
+        html: str,
+        *,
+        width: float | None = None,
+        height: float | None = None,
+        unit: str | None = None,
+        actor: str = "user",
+    ) -> Template:
+        """建立 Template。"""
+        with db.transaction(self.conn):
+            stamp = db.now()
+            template = Template(
+                id=ids.next_template_id(self.conn),
+                name=name,
+                html=html,
+                width=width,
+                height=height,
+                unit=unit,
+                created_at=stamp,
+                updated_at=stamp,
+            )
+            _validate_template(template)
+            _insert(self.conn, "templates", TEMPLATE_COLUMNS, template)
+            events.append(
+                self.conn,
+                entity_type="template",
+                entity_id=template.id,
+                type="template.created",
+                actor=actor,
+                payload=_snapshot(template),
+            )
+            return template
+
+    def get_template(self, template_id: str) -> Template:
+        return Template.from_row(_fetch(self.conn, "templates", template_id))
+
+    def list_templates(
+        self, *, limit: int = 200, offset: int = 0
+    ) -> list[Template]:
+        limit, offset = _paging(limit, offset)
+        rows = self.conn.execute(
+            "SELECT * FROM templates ORDER BY name, id LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        return [Template.from_row(row) for row in rows]
+
+    def update_template(
+        self,
+        template_id: str,
+        *,
+        name: str | None = None,
+        html: str | None = None,
+        width: float | None = None,
+        height: float | None = None,
+        unit: str | None = None,
+        actor: str = "user",
+    ) -> Template:
+        """更新 Template。需重新驗證。"""
+        with db.transaction(self.conn):
+            before = self.get_template(template_id)
+            changes = {}
+            if name is not None:
+                changes["name"] = name
+            if html is not None:
+                changes["html"] = html
+            if width is not None:
+                changes["width"] = width
+            if height is not None:
+                changes["height"] = height
+            if unit is not None:
+                changes["unit"] = unit
+            if not changes:
+                return before
+            after = replace(before, **changes, updated_at=db.now())
+            _validate_template(after)
+            _update(self.conn, "templates", TEMPLATE_COLUMNS, after, template_id)
+            events.append(
+                self.conn,
+                entity_type="template",
+                entity_id=template_id,
+                type="template.updated",
+                actor=actor,
+                payload=_snapshot(after),
+            )
+            return after
+
+    def delete_template(self, template_id: str, *, actor: str = "user") -> None:
+        """刪除 Template。不影響任何 Item。"""
+        with db.transaction(self.conn):
+            template = self.get_template(template_id)
+            self.conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
+            events.append(
+                self.conn,
+                entity_type="template",
+                entity_id=template_id,
+                type="template.deleted",
+                actor=actor,
+                payload=_snapshot(template),
+            )
+
+    # ------------------------------------------------------------------
     # 內部檢查
     # ------------------------------------------------------------------
 
@@ -1118,3 +1229,13 @@ def _validate_suggestion(suggestion: Suggestion) -> None:
             f" 或 {IDENTIFIER_FIELD_PREFIX}<kind>（{', '.join(IDENTIFIER_KINDS)}），"
             f"得到 {field!r}"
         )
+
+
+def _validate_template(template: Template) -> None:
+    """驗證 Template 基本欄位。"""
+    _check_required("templates.name", template.name)
+    _check_required("templates.html", template.html)
+    if template.width is not None and template.width <= 0:
+        raise ValidationError(f"templates.width 必須 > 0，得到 {template.width}")
+    if template.height is not None and template.height <= 0:
+        raise ValidationError(f"templates.height 必須 > 0，得到 {template.height}")

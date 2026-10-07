@@ -1,4 +1,4 @@
-"""外部 AI adapter：OpenRouter Vision → ItemTrace suggestions。
+"""外部 AI adapter：OpenAI 相容 Vision → ItemTrace suggestions。
 
 這支程式**在 ItemTrace 之外**。它只做一件事：把商品照片交給 Vision 模型，
 把結果以 pending suggestion 的形式送進 ItemTrace。它沒有、也不該有任何
@@ -9,10 +9,14 @@ AI 只是 suggestion producer（SPEC-v1 §1、§13）。
 （讀商品、讀照片、建立 suggestion）。accept / reject / PATCH 沒有對應的
 呼叫途徑，想呼叫也沒地方調。
 
-設定只來自 tools/ai_config.local.json。刻意**不**讀環境變數
-OPENROUTER_API_KEY、也不找 ~/.config 或 Windows credential —— 這支
-adapter 的憑證來源只有它自己那個檔案，免得和同機器上其他 agent 共用同一把
-key。該檔案已被 .gitignore 排除。
+設定只來自 tools/ai_config.local.json。刻意**不**讀環境變數、
+也不找 ~/.config 或 Windows credential —— 這支 adapter 的憑證來源只有
+它自己那個檔案，免得和同機器上其他 agent 共用同一把 key。
+該檔案已被 .gitignore 排除。
+
+AI 請求怎麼送、模型輸出怎麼驗證，只有 shop/ai_client.py 一份；
+設定檔格式只有 shop/ai_config.py 一份。這裡不自己刻，
+兩邊規則漂移過好幾次了。
 
 用法：
     複製 tools/ai_config.example.json → tools/ai_config.local.json，填入 api_key
@@ -23,9 +27,7 @@ key。該檔案已被 .gitignore 排除。
 from __future__ import annotations
 
 import argparse
-import base64
 import json
-import mimetypes
 import re
 import sys
 import urllib.error
@@ -33,12 +35,27 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-# 設定檔的格式、驗證、遮蔽只有 shop/ai_config.py 一份，這裡直接共用，
-# 不再自己刻一遍 —— 兩邊規則漂移過好幾次了。
+# 設定檔的格式、驗證、遮蔽只有 shop/ai_config.py 一份；
+# AI 請求與回應驗證只有 shop/ai_client.py 一份。
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from shop.ai_client import (  # noqa: E402
+    ALLOWED_FIELDS,
+    MAX_PHOTOS,
+    PROMPT,
+    TIMEOUT,
+    AnalyzerError,
+    build_request_body,
+    call_ai_provider,
+    extract_text,
+    parse_suggestions,
+    photo_data_url,
+    strip_code_fence,
+)
 from shop.ai_config import (  # noqa: E402
+    DEFAULT_BASE_URL,
     DEFAULT_MODEL,
     MISSING_CONFIG,
+    PROVIDER,
     AiConfig,
     AiConfigError,
     config_path,
@@ -49,85 +66,44 @@ from shop.ai_config import (  # noqa: E402
     save_settings,
 )
 
-AnalyzerError = AiConfigError
+ItemTraceError = AnalyzerError
 
-# 這些是從 shop.ai_config 轉出來的名字。analyze_item 是外部工具，
-# 測試與其他呼叫端仍然用 analyze_item.load_config / .redact 這些名字，
-# 轉出來就不必到處改匯入來源。實際定義只有 shop/ai_config.py 一份。
+# 這些是從 shop.ai_config / shop.ai_client 轉出來的名字。
+# analyze_item 是外部工具，測試與其他呼叫端仍然用
+# analyze_item.load_config / .redact 這些名字，轉出來就不必到處改
+# 匯入來源。實際定義只有 shop/ 裡那兩份。
 __all__ = [
     "AiConfig",
+    "AiConfigError",
+    "ALLOWED_FIELDS",
     "AnalyzerError",
+    "DEFAULT_BASE_URL",
     "DEFAULT_MODEL",
-    "MISSING_CONFIG",
     "ItemTraceClient",
+    "ItemTraceError",
+    "MISSING_CONFIG",
+    "MAX_PHOTOS",
+    "PROMPT",
+    "TIMEOUT",
     "analyze",
-    "example_path",
-    "call_openrouter",
+    "build_request_body",
+    "call_ai_provider",
     "config_path",
+    "example_path",
+    "extract_text",
     "load_config",
     "main",
+    "parse_suggestions",
+    "photo_data_url",
     "read_settings",
     "redact",
     "save_settings",
+    "strip_code_fence",
 ]
 
-#: 這一輪只認這些欄位。不確定就不輸出 —— 空陣列比猜測好。
-ALLOWED_FIELDS = (
-    "name",
-    "brand",
-    "model",
-    "category",
-    "condition",
-    "identifier:serial",
-    "identifier:imei",
-    "identifier:barcode",
-)
-
-#: 免費、支援圖片輸入的模型（2026-10 由 GET https://openrouter.ai/api/v1/models
-#: 與 /models/{slug}/endpoints 實際確認）。
-#:
-#: 選 google/gemma-4-31b-it:free 時實測到兩個問題，都不影響正確性但影響可用性：
-#:   1. 免費變體只對應一個 endpoint，加上 provider.require_parameters 會直接 404
-#:   2. 該 endpoint（Google AI Studio）經常 429 rate-limited
-#: qwen/qwen3.8-27b:free 有 17 個獨立上游（Wafer / Reka / DekaLLM / …），
-#: 比較不會撞上單一 provider 的限流，而且 Qwen 的 vision 這條線本來就擅長
-#: 讀標籤與序號。
-#:
-#: 刻意不設自動 fallback：不能因為免費模型失敗就改用付費的。要換模型請用
-#: --model 明確指定，而且必須自己確認那是免費的。
-# DEFAULT_MODEL 由 shop.ai_config 提供，這裡不再重複定義。
-
-OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_BASE_URL = "http://127.0.0.1:8731"
-MAX_PHOTOS = 8
-TIMEOUT = 120
-
-#: 照片縮圖邊長。手機原圖 3~5MB，base64 會再膨脹 33%，直接送整批容易爆。
-MAX_SIDE = 1024
-JPEG_QUALITY = 82
-
-PROMPT = """\
-你是商品建檔的輔助。請看這些照片，辨識商品的以下欄位：
-
-- name：品名
-- brand：品牌
-- model：型號
-- category：分類（例如 主機板 / 顯示卡 / 記憶體 / 硬碟 / 電源 / 機殼）
-- condition：外觀與品況
-- identifier:serial：序號 / 產品序號 / SN
-- identifier:imei：IMEI
-- identifier:barcode：條碼
-
-規則：
-1. 只輸出你真的從照片上讀到的東西。不確定就不要輸出該欄位。
-2. 序號、IMEI、條碼必須逐字照抄照片上的字元，不要腦補常見格式。
-3. 如果同一個欄位在不同照片上讀到不同的值，以你最有把握的那個為準，
-   並給它最高的 confidence。
-4. source_photo_index 是你讀到該值的照片索引（從 0 開始）。
-   序號請務必指向那張拍到標籤／序號的照片。
-5. 照片順序就是給定的順序，不要重新編號。
-6. 完全讀不到就回傳空的 suggestions 陣列。不要解釋，不要客套。
-"""
+#: ItemTrace 服務位置（不是 AI 端點）。AI 端點由設定檔的
+#: provider / base_url 決定。
+ITEMTRACE_BASE_URL = "http://127.0.0.1:8731"
 
 
 # ----------------------------------------------------------------------
@@ -139,7 +115,7 @@ class ItemTraceClient:
     """只讀商品／照片，加上建立 suggestion。
 
     刻意不提供 accept / reject / PATCH —— 這個 adapter 沒有修改正式資料的
-    權限。`_request` 也會把 method + path 對照 ALLOWED_ROUTES擋下來，
+    權限。`_request` 也會把 method + path 對照 ALLOWED_ROUTES 擋下來，
     就算日後有人加錯方法也會在送出前就爆掉。
     """
 
@@ -204,204 +180,21 @@ class ItemTraceClient:
 
 
 # ----------------------------------------------------------------------
-# 照片：縮圖 → base64 data URL
-# ----------------------------------------------------------------------
-
-
-def encode_photo(data: bytes, filename: str) -> tuple[bytes, str]:
-    """縮到 MAX_SIDE 並轉 JPEG。沒有 Pillow 就原封不動送出去。"""
-    try:
-        import io
-
-        from PIL import Image
-    except ImportError:
-        return data, mimetypes.guess_type(filename)[0] or "image/jpeg"
-
-    try:
-        with Image.open(io.BytesIO(data)) as image:
-            image = image.convert("RGB")
-            image.thumbnail((MAX_SIDE, MAX_SIDE))
-            buffer = io.BytesIO()
-            image.save(buffer, format="JPEG", quality=JPEG_QUALITY)
-            return buffer.getvalue(), "image/jpeg"
-    except Exception:
-        # 壞檔或不是圖片就照原樣送，讓模型自己判斷
-        return data, mimetypes.guess_type(filename)[0] or "image/jpeg"
-
-
-def photo_data_url(data: bytes, filename: str) -> str:
-    """ItemTrace 的照片在區網內、不是公開網址，所以必須用 base64 data URL。
-
-    絕對不能把區網網址交給第三方 —— 那等於把你的內網位置與照片暴露出去。
-    """
-    payload, mime = encode_photo(data, filename)
-    return f"data:{mime};base64," + base64.b64encode(payload).decode("ascii")
-
-
-# ----------------------------------------------------------------------
-# 送出與驗證
-# ----------------------------------------------------------------------
-
-RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "suggestions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "field": {"type": "string", "enum": list(ALLOWED_FIELDS)},
-                    "value": {"type": "string"},
-                    "confidence": {"type": ["number", "null"]},
-                    "source_photo_index": {"type": ["integer", "null"]},
-                },
-                "required": ["field", "value", "confidence", "source_photo_index"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["suggestions"],
-    "additionalProperties": False,
-}
-
-
-def build_request_body(model: str, data_urls: list[str]) -> dict:
-    """OpenRouter chat completions。
-
-    文字在最前面、照片在後面 —— OpenRouter 官方建議的順序，說是因為內容
-    解析的實作如此。
-
-    刻意**不**加 `provider.require_parameters`。實測：免費變體只對應到一個
-    endpoint，加上這個約束會直接 404（"No endpoints found that can handle the
-    requested parameters"，而且不計費）。真正保護 pipeline 的是 parse_suggestions
-    的嚴格驗證 —— 就算 endpoint 忽略 response_format，格式不合也會報錯，
-    不會有半套資料進來。
-    """
-    content: list[dict] = [{"type": "text", "text": PROMPT}]
-    content.extend(
-        {"type": "image_url", "image_url": {"url": url}} for url in data_urls
-    )
-    return {
-        "model": model,
-        "messages": [{"role": "user", "content": content}],
-        "temperature": 0,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "item_suggestions",
-                "strict": True,
-                "schema": RESPONSE_SCHEMA,
-            },
-        },
-    }
-
-
-def call_openrouter(api_key: str, model: str, data_urls: list[str],
-                    timeout: int = TIMEOUT) -> dict:
-    body = json.dumps(build_request_body(model, data_urls)).encode("utf-8")
-    request = urllib.request.Request(OPENROUTER_ENDPOINT, data=body, method="POST")
-    request.add_header("Authorization", "Bearer " + api_key)
-    request.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        detail = redact(exc.read().decode("utf-8", "replace")[:300], api_key)
-        raise AnalyzerError(
-            f"OpenRouter 回應 {exc.code}（model={model}）：{detail}"
-        ) from None
-    except urllib.error.URLError as exc:
-        raise AnalyzerError(f"連不到 OpenRouter：{exc.reason}") from None
-
-
-def extract_text(response: dict, api_key: str | None = None) -> str:
-    try:
-        return response["choices"][0]["message"]["content"] or ""
-    except (KeyError, IndexError, TypeError):
-        raise AnalyzerError(
-            "OpenRouter 回應格式不如預期："
-            + redact(json.dumps(response, ensure_ascii=False)[:300], api_key)
-        ) from None
-
-
-def parse_suggestions(text: str, photos: list[dict]) -> list[dict]:
-    """嚴格驗證模型輸出。格式不合就直接報錯，不用 regex 猜測修復。"""
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        preview = text.strip()[:200]
-        raise AnalyzerError(f"模型輸出不是合法 JSON：{preview}（{exc}）") from None
-
-    if not isinstance(payload, dict) or "suggestions" not in payload:
-        raise AnalyzerError("模型輸出缺少 suggestions 欄位")
-    raw = payload["suggestions"]
-    if not isinstance(raw, list):
-        raise AnalyzerError("suggestions 必須是陣列")
-
-    validated: list[dict] = []
-    for position, entry in enumerate(raw):
-        if not isinstance(entry, dict):
-            raise AnalyzerError(f"第 {position + 1} 筆建議不是物件")
-
-        field = entry.get("field")
-        if field not in ALLOWED_FIELDS:
-            raise AnalyzerError(
-                f"第 {position + 1} 筆建議的欄位不在白名單：{field!r}"
-            )
-
-        value = entry.get("value")
-        if not isinstance(value, str) or not value.strip():
-            raise AnalyzerError(f"第 {position + 1} 筆建議的 value 不是非空字串")
-
-        confidence = entry.get("confidence")
-        if confidence is not None:
-            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
-                raise AnalyzerError(
-                    f"第 {position + 1} 筆建議的 confidence 不是數字或 null"
-                )
-            if not 0.0 <= float(confidence) <= 1.0:
-                raise AnalyzerError(
-                    f"第 {position + 1} 筆建議的 confidence 超出 0~1：{confidence}"
-                )
-
-        index = entry.get("source_photo_index")
-        photo_id = None
-        if index is not None:
-            if isinstance(index, bool) or not isinstance(index, int):
-                raise AnalyzerError(
-                    f"第 {position + 1} 筆建議的 source_photo_index 不是整數或 null"
-                )
-            if not 0 <= index < len(photos):
-                raise AnalyzerError(
-                    f"第 {position + 1} 筆建議的 source_photo_index={index} "
-                    f"超出範圍（共 {len(photos)} 張照片）"
-                )
-            photo_id = photos[index]["id"]
-
-        validated.append(
-            {
-                "field": field,
-                "value": value.strip(),
-                "confidence": None if confidence is None else float(confidence),
-                "source_photo_id": photo_id,
-            }
-        )
-    return validated
-
-
-# ----------------------------------------------------------------------
 # 主流程
 # ----------------------------------------------------------------------
 
 
 def analyze(item_client: ItemTraceClient, api_key: str, item_id: str, *,
             model: str = DEFAULT_MODEL, max_photos: int = MAX_PHOTOS,
+            provider_name: str = PROVIDER,
+            base_url: str = DEFAULT_BASE_URL,
             provider=None, echo=None) -> list[dict]:
     """讀商品 → 取照片 → Vision → 驗證 → 建立 pending suggestion。
 
     provider / echo 是測試用的注入點（HTTP 與輸出都可假）。
+    provider_name / base_url 決定呼叫哪個 OpenAI 相容端點。
     """
-    provider = provider or call_openrouter
+    provider = provider or call_ai_provider
     echo = echo if echo is not None else (lambda message: None)
 
     detail = item_client.get_item(item_id)
@@ -423,8 +216,9 @@ def analyze(item_client: ItemTraceClient, api_key: str, item_id: str, *,
         data_urls.append(photo_data_url(raw, photo.get("orig_name") or photo["filename"]))
         echo(f"  已讀取 {photo['orig_name']}")
 
-    echo(f"OpenRouter：{model}（{len(data_urls)} 張）")
-    response = provider(api_key, model, data_urls)
+    echo(f"AI 服務：{provider_name} / {model}（{len(data_urls)} 張）")
+    response = provider(api_key, model, data_urls,
+                        provider=provider_name, base_url=base_url)
     text = extract_text(response, api_key)
     suggestions = parse_suggestions(text, photos)
 
@@ -467,11 +261,11 @@ def analyze(item_client: ItemTraceClient, api_key: str, item_id: str, *,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="analyze_item",
-        description="用 OpenRouter Vision 辨識商品照片，結果寫成 ItemTrace 的 pending 建議",
+        description="用 AI Vision 辨識商品照片，結果寫成 ItemTrace 的 pending 建議",
     )
     parser.add_argument("item_id", help="例如 ITM-0001")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL,
-                        help=f"ItemTrace 服務位置（預設 {DEFAULT_BASE_URL}）")
+    parser.add_argument("--base-url", default=ITEMTRACE_BASE_URL,
+                        help=f"ItemTrace 服務位置（預設 {ITEMTRACE_BASE_URL}）")
     parser.add_argument("--model", default=None,
                         help="覆蓋設定檔裡的 model（預設用 ai_config.local.json 的值）")
     parser.add_argument("--max-photos", type=int, default=MAX_PHOTOS,
@@ -493,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
             config.api_key,
             args.item_id,
             model=model,
+            provider_name=config.provider,
+            base_url=config.base_url,
             max_photos=args.max_photos,
             echo=echo,
         )
@@ -502,6 +298,10 @@ def main(argv: list[str] | None = None) -> int:
     echo(f"\n{args.item_id}：{len(created)} 筆 pending 建議已送出。")
     echo("接著到 ItemTrace 商品頁逐筆看過再接受 —— AI 不會自己決定。")
     return 0
+
+
+# analyze_item 原先自己 import 的模組，現在集中在檔案頭；
+# 這裡不再重複 import。
 
 
 if __name__ == "__main__":

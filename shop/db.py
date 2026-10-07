@@ -16,7 +16,7 @@ from typing import Iterator
 from .config import Config
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 
 def connect(config: Config) -> sqlite3.Connection:

@@ -35,11 +35,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, config as config_mod, db as db_mod, ids
+from . import __version__, ai_client, ai_config, config as config_mod, db as db_mod, ids
 from . import inbox as inbox_mod
 from . import photos as photos_mod
+from . import print_backend as print_backend_mod
+from . import template_renderer as template_renderer_mod
+from .ai_config import AiConfigError
 from .config import Config, ConfigError
 from .errors import ConflictError, NotFoundError, ValidationError
+from . import evidence as evidence_mod
 from .repo import Repository
 from .settings import router as settings_router
 from .schemas import (
@@ -66,10 +70,17 @@ from .schemas import (
     PhotoPatch,
     PhotoSkipped,
     PhotoUploadResult,
+    PrinterOut,
     SkippedFile,
     StatsOut,
     SuggestionCreate,
     SuggestionOut,
+    TemplateCreate,
+    TemplateOut,
+    TemplatePatch,
+    TemplatePreviewRequest,
+    TemplatePrintOut,
+    TemplatePrintRequest,
     to_out,
     to_outs,
 )
@@ -123,12 +134,16 @@ UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 def _register_ui(app: FastAPI) -> None:
     """掛上 Phase 6A／7 的頁面。
 
-這些不是 API，所以不放進 OpenAPI（/docs 保持純 API 契約）。
-頁面是靜態 HTML，資料全部由前端的 fetch 打 /api/*，後端不多做一層模板。
+    這些不是 API，所以不放進 OpenAPI（/docs 保持純 API 契約）。
+    頁面是靜態 HTML，資料全部由前端的 fetch 打 /api/*，後端不多做一層模板。
 
-路由：/ 是 inbox（Phase 7）、/items 是列表、/items/{id} 是詳細頁、
-/settings 是 AI 設定頁（Post-v1 / AI-2）。
-"""
+    路由：/ 是 inbox（Phase 7）、/items 是列表、/items/{id} 是詳細頁、
+    /settings 是 AI 設定頁（Post-v1 / AI-2）、/capture 是連續拍照、
+    /settings/printing 是列印設定與範本管理頁。
+
+    注意：Template 的上傳／預覽／CRUD 集中在 /settings/printing，
+    商品頁只留「挑範本 → 預覽 → 列印」。
+    """
     if not UI_DIR.is_dir():  # 測試環境或未 checkout UI 時不影響 API
         return
     app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
@@ -145,11 +160,30 @@ def _register_ui(app: FastAPI) -> None:
     def settings_page() -> FileResponse:
         return FileResponse(UI_DIR / "settings.html")
 
+    @app.get("/capture", include_in_schema=False)
+    def capture_page() -> FileResponse:
+        return FileResponse(UI_DIR / "capture.html")
+
+    @app.get("/settings/printing", include_in_schema=False)
+    def printing_settings_page() -> FileResponse:
+        # 列印設定與範本管理。商品頁只留「挑範本 → 預覽 → 列印」，
+        # Template 的 CRUD 集中在這裡。
+        return FileResponse(UI_DIR / "printing_settings.html")
+
     @app.get("/items/{item_id}", include_in_schema=False)
     def item_page(item_id: str) -> FileResponse:
         # item_id 不在這裡驗證：頁面殼子對任何 id 都一樣，
         # 真正的 404 由前端呼叫 /api/items/{id} 時得到。
         return FileResponse(UI_DIR / "item.html")
+
+    @app.get("/design", include_in_schema=False)
+    def design_page() -> FileResponse:
+        return FileResponse(UI_DIR / "design.html")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> FileResponse:
+        # Minimal placeholder to avoid 404 console noise; no product feature.
+        return FileResponse(UI_DIR / "favicon.ico")
 
 
 def _register_error_handlers(app: FastAPI) -> None:
@@ -496,6 +530,79 @@ def create_suggestion(
 
 
 @router.post(
+    "/api/items/{item_id}/ai/analyze",
+    response_model=list[SuggestionOut],
+    status_code=201,
+    tags=["suggestions"],
+)
+def analyze_item_photos(
+    item_id: str,
+    repo: Repo,
+    cfg: Annotated[Config, Depends(get_config)],
+) -> list[SuggestionOut]:
+    """用商品的 original 照片跑 AI 分析（手機「AI 自動填入」按鈕）。
+
+    結果是 **pending suggestions** —— 推論，不是事實。
+    主表資料完全不受影響：要有人逐筆接受（POST
+    /api/suggestions/{id}/accept）才會寫進商品（推論與事實分離，
+    SPEC-v1 §1）。這個端點自己永不修改 items。
+
+    AI 服務由 tools/ai_config.local.json 決定（provider /
+    base_url / model / api_key），與外部 adapter
+    tools/analyze_item.py 共用 shop/ai_client.py 同一份實作。
+    """
+    repo.get_item(item_id)  # 商品不存在 → 404
+    photos = repo.list_photos(
+        item_id=item_id, role="original", limit=ai_client.MAX_PHOTOS
+    )
+    if not photos:
+        raise ValidationError(
+            f"{item_id} 沒有 original 照片，沒有東西可以辨識。"
+            " 先用 Inbox 建檔並上傳照片。"
+        )
+
+    try:
+        ai = ai_config.load_config()
+    except AiConfigError as exc:
+        raise ValidationError(ai_config.redact(str(exc))) from None
+
+    data_urls = []
+    for photo in photos:
+        data = _read_photo_bytes(cfg, photo.filename)
+        data_urls.append(
+            ai_client.photo_data_url(data, photo.orig_name or photo.filename)
+        )
+
+    try:
+        response = ai_client.call_ai_provider(
+            ai.api_key, ai.model, data_urls,
+            provider=ai.provider, base_url=ai.base_url,
+        )
+        text = ai_client.extract_text(response, ai.api_key)
+        parsed = ai_client.parse_suggestions(
+            text, [{"id": photo.id} for photo in photos]
+        )
+    except ai_client.AnalyzerError as exc:
+        raise ValidationError(ai_config.redact(str(exc), ai.api_key)) from None
+
+    created = []
+    for suggestion in parsed:
+        created.append(
+            repo.add_suggestion(
+                item_id,
+                suggestion["field"],
+                suggestion["value"],
+                confidence=suggestion["confidence"],
+                source="external",
+                model_name=ai.model,
+                source_photo_id=suggestion["source_photo_id"],
+                actor="external",
+            )
+        )
+    return to_outs(created)
+
+
+@router.post(
     "/api/suggestions/{suggestion_id}/accept",
     response_model=SuggestionOut,
     tags=["suggestions"],
@@ -528,6 +635,41 @@ def item_events(
     item_id: str, repo: Repo, limit: Annotated[int, Query(ge=1, le=2000)] = 500
 ) -> list[EventOut]:
     return to_outs(repo.item_history(item_id, limit=limit))
+
+
+@router.get(
+    "/api/items/{item_id}/evidence/export",
+    tags=["evidence"],
+)
+def export_evidence(
+    item_id: str,
+    repo: Repo,
+    cfg: Annotated[Config, Depends(get_config)],
+) -> JSONResponse:
+    """單一商品的 read-only evidence bundle export。"""
+    result = evidence_mod.build_bundle(item_id, repo, cfg)
+    return JSONResponse(content=result["manifest"])
+
+
+@router.get(
+    "/api/items/{item_id}/evidence/export/file",
+    tags=["evidence"],
+)
+def export_evidence_file(
+    item_id: str,
+    path: Annotated[str, Query()],
+    repo: Repo,
+    cfg: Annotated[Config, Depends(get_config)],
+) -> FileResponse:
+    """讀取 bundle 中的單一檔案，路徑受控。"""
+    # Verify item exists (same 404 semantics)
+    repo.get_item(item_id)
+    # Containment check: path relative to bundle_dir only
+    bundle_dir = cfg.data_root / "evidence" / item_id
+    target = (bundle_dir / path).resolve()
+    if not target.is_relative_to(bundle_dir.resolve()) or not target.is_file():
+        raise NotFoundError(f"bundle file not found: {path!r}")
+    return FileResponse(target)
 
 
 @router.post(
@@ -672,6 +814,211 @@ def group_inbox(
     return groups
 
 
+# ----------------------------------------------------------------------
+# Templates (Phase 1)
+# ----------------------------------------------------------------------
+
+
+@router.get("/api/templates", response_model=list[TemplateOut], tags=["templates"])
+def list_templates(
+    repo: Repo,
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[TemplateOut]:
+    return to_outs(repo.list_templates(limit=limit, offset=offset))
+
+
+@router.post("/api/templates", response_model=TemplateOut, status_code=201, tags=["templates"])
+def create_template(body: TemplateCreate, repo: Repo) -> TemplateOut:
+    from .template_validator import validate_template
+    validate_template(body.html)
+    return to_out(
+        repo.add_template(
+            name=body.name,
+            html=body.html,
+            width=body.width,
+            height=body.height,
+            unit=body.unit,
+            actor=body.actor,
+        )
+    )
+
+
+@router.get("/api/templates/{template_id}", response_model=TemplateOut, tags=["templates"])
+def get_template(template_id: str, repo: Repo) -> TemplateOut:
+    return to_out(repo.get_template(template_id))
+
+
+@router.put("/api/templates/{template_id}", response_model=TemplateOut, tags=["templates"])
+def update_template(template_id: str, body: TemplatePatch, repo: Repo) -> TemplateOut:
+    from .template_validator import validate_template
+    if body.html is not None:
+        validate_template(body.html)
+    return to_out(
+        repo.update_template(
+            template_id,
+            name=body.name,
+            html=body.html,
+            width=body.width,
+            height=body.height,
+            unit=body.unit,
+            actor=body.actor,
+        )
+    )
+
+
+@router.delete("/api/templates/{template_id}", status_code=204, tags=["templates"])
+def delete_template(template_id: str, repo: Repo) -> None:
+    repo.delete_template(template_id)
+
+
+@router.post("/api/templates/{template_id}/preview", response_model=dict, tags=["templates"])
+def preview_template(
+    template_id: str,
+    body: TemplatePreviewRequest,
+    repo: Repo,
+    cfg: Annotated[Config, Depends(get_config)],
+) -> dict:
+    """渲染 Template 預覽。
+
+    回傳 rendered HTML 與使用的 Item 基本資訊。
+    """
+    template = repo.get_template(template_id)
+    item = repo.get_item(body.item_id)
+    rendered = template_renderer_mod.render_template_preview(template, item, repo, cfg)
+    return {
+        "html": rendered,
+        "item_id": item.id,
+        "item_name": item.name,
+    }
+
+
+def _rendered_html(template: Any, item: Any, repo: Repo, cfg: Config) -> str:
+    """用**同一條 render pipeline** 渲染，預覽與列印共用。
+
+    這是「預覽 = 實印」能成立的關鍵：這裡呼叫的是與 `/preview` 完全
+    相同的 `render_template_preview`。print_backend 不做任何
+    data-bind 處理，所以專案裡只有一套資料填充邏輯。
+    """
+    return template_renderer_mod.render_template_preview(
+        template, item, repo, cfg
+    )
+
+
+def _print_html(template: Any, item: Any, repo: Repo, cfg: Config) -> str:
+    """送進瀏覽器排版的**那份**列印 HTML（含 inline 照片）。
+
+    `/preview` 回的是 `_rendered_html` 的原始輸出；這裡多一步
+    `inline_photos`，把照片轉成 data URI。原因是排版發生在暫存檔
+    (`file://`) 上，`/files/...` 在那裡解析不到，照片會整個消失。
+
+    兩者的資料填充完全相同 —— 都只經過 `render_template_preview`，
+    差別只有照片怎麼被載入。印表機對話框顯示的 html 與送進 PDF 的
+    html 都是這個函式的產物，所以預覽與實印是同一份。
+    """
+    return print_backend_mod.inline_photos(
+        _rendered_html(template, item, repo, cfg), _photo_reader(cfg)
+    )
+
+
+@router.get(
+    "/api/printers", response_model=list[PrinterOut], tags=["templates"]
+)
+def list_printers() -> list[PrinterOut]:
+    """列出可用的 Windows 印表機（給列印選單用）。"""
+    names = print_backend_mod.list_printers()
+    default = print_backend_mod.default_printer()
+    return [PrinterOut(name=name, is_default=(name == default)) for name in names]
+
+
+@router.post(
+    "/api/templates/{template_id}/print-preview",
+    response_model=TemplatePrintOut,
+    tags=["templates"],
+)
+def print_preview_template(
+    template_id: str,
+    body: TemplatePreviewRequest,
+    repo: Repo,
+    cfg: Annotated[Config, Depends(get_config)],
+) -> TemplatePrintOut:
+    """產生列印輸出，但不送印表機。
+
+    印表機對話框的「列印預覽」就是用這個回應的 `html` 渲染的 ——
+    它與送進 PDF 的是同一份，所以看到的就是會印的。`width_mm` /
+    `height_mm` 是實際的 PDF 頁面尺寸，UI 拿來顯示輸出尺寸。
+    """
+    template = repo.get_template(template_id)
+    item = repo.get_item(body.item_id)
+    print_html = _print_html(template, item, repo, cfg)
+    _, width_mm, height_mm = print_backend_mod.build_pdf(
+        print_html,
+        width_mm=template.width,
+        height_mm=template.height,
+        unit=template.unit,
+    )
+    return TemplatePrintOut(
+        printer="",
+        item_id=item.id,
+        item_name=item.name or "",
+        template_id=template.id,
+        width_mm=width_mm,
+        height_mm=height_mm,
+        pixel_width=0,
+        pixel_height=0,
+        dpi=print_backend_mod.DEFAULT_DPI,
+        pdf_width_mm=width_mm,
+        pdf_height_mm=height_mm,
+        html=print_html,
+    )
+
+
+@router.post(
+    "/api/templates/{template_id}/print",
+    response_model=TemplatePrintOut,
+    tags=["templates"],
+)
+def print_template(
+    template_id: str,
+    body: TemplatePrintRequest,
+    repo: Repo,
+    cfg: Annotated[Config, Depends(get_config)],
+) -> TemplatePrintOut:
+    """列印目前預覽（預設 1 份）。
+
+    刻意不寫 events、也不動 Item：跟 `/preview` 一樣是唯讀操作，
+    只是多了一個送到印表機的副作用。第一版不做列印歷史、不支援取消
+    或排程 —— 那些都留給之後的需求。
+    """
+    template = repo.get_template(template_id)
+    item = repo.get_item(body.item_id)
+    result = print_backend_mod.print_html(
+        _print_html(template, item, repo, cfg),
+        template_id=template.id,
+        item_id=item.id,
+        width_mm=template.width,
+        height_mm=template.height,
+        unit=template.unit,
+        printer=body.printer,
+        photo_reader=_photo_reader(cfg),
+    )
+    return TemplatePrintOut(
+        printer=result.printer,
+        item_id=item.id,
+        item_name=item.name or "",
+        template_id=template.id,
+        width_mm=result.width_mm,
+        height_mm=result.height_mm,
+        pixel_width=result.pixel_width,
+        pixel_height=result.pixel_height,
+        dpi=result.dpi,
+        pdf_width_mm=result.pdf_width_mm,
+        pdf_height_mm=result.pdf_height_mm,
+        # 與送進 PDF 的是同一份，UI 可以據此確認「看到 = 會印」。
+        html=_print_html(template, item, repo, cfg),
+    )
+
+
 @router.get("/api/health", response_model=HealthOut, tags=["system"])
 def health(cfg: Annotated[Config, Depends(get_config)]) -> HealthOut:
     return HealthOut(status="ok", schema_version=db_mod.version(cfg))
@@ -706,6 +1053,33 @@ def _serve_file(cfg: Config, path: str) -> FileResponse:
     if not any(target.is_relative_to(root) for root in roots) or not target.is_file():
         raise NotFoundError(f"找不到檔案：{path}")
     return FileResponse(target)
+
+
+def _photo_reader(cfg: Config):
+    """給 print_backend 的照片讀取 callable。
+
+    沿用 `_read_photo_bytes` 的 containment 規則（只開放 files/ 子樹），
+    找不到檔案回 None 而不是拋錯 —— 列印時照片缺失應該跟預覽一樣是
+    空白，而不是讓整次列印失敗。
+    """
+    def read(relative: str) -> bytes | None:
+        try:
+            return _read_photo_bytes(cfg, relative)
+        except NotFoundError:
+            return None
+    return read
+
+
+def _read_photo_bytes(cfg: Config, filename: str) -> bytes:
+    """讀已歸檔照片的原始 bytes（AI 分析用）。
+
+    與 _serve_file 同一條 containment 規則：只開放 files/ 子樹，
+    資料庫存的相對路徑不能逃出 DATA_ROOT/files。
+    """
+    target = (cfg.data_root / filename).resolve()
+    if not target.is_relative_to(cfg.files_dir.resolve()) or not target.is_file():
+        raise NotFoundError(f"找不到照片檔案：{filename}")
+    return target.read_bytes()
 
 
 def _minutes_between(earlier: str, later: str) -> float:

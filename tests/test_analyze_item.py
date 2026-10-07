@@ -79,10 +79,12 @@ def model_json(suggestions):
 
 
 def fake_provider(payload):
-    def provider(api_key, model, data_urls):
-        provider.seen = {"api_key": api_key, "model": model, "data_urls": data_urls}
+    def fake(api_key, model, data_urls, provider=None, base_url=None):
+        fake.seen = {"api_key": api_key, "model": model,
+                     "data_urls": data_urls,
+                     "provider": provider, "base_url": base_url}
         return payload if isinstance(payload, dict) else model_json(payload)
-    return provider
+    return fake
 
 
 # ----------------------------------------------------------------------
@@ -146,6 +148,17 @@ def test_request_body_pins_structured_output():
         "suggestions"]["items"]["properties"]["field"]["enum"]
     assert set(fields) == set(analyzer.ALLOWED_FIELDS)
 
+def test_request_body_google_has_no_response_format():
+    """Google Gemini 的相容層不支援 json_schema strict，
+    格式保護交給 parse_suggestions 的嚴格驗證。"""
+    body = analyzer.build_request_body("m", [], provider="google")
+    assert "response_format" not in body
+    assert body["messages"][0]["content"][0]["type"] == "text"
+
+def test_request_body_custom_has_no_response_format():
+    body = analyzer.build_request_body("m", [], provider="custom")
+    assert "response_format" not in body
+
 
 def test_request_body_does_not_pin_a_provider():
     """實測：免費變體只有一個 endpoint，provider 約束會讓請求直接 404。
@@ -185,12 +198,184 @@ def test_invalid_json_is_an_error():
     assert "不是合法 JSON" in str(excinfo.value)
 
 
-def test_json_in_a_code_fence_is_not_silently_repaired():
-    """不做 regex 猜測修復 —— 格式不對就報錯。"""
-    fenced = '```json\n{"suggestions": []}\n```'
-    provider = fake_provider({"choices": [{"message": {"content": fenced}}]})
+#: Markdown code fence 標記。用變數組出來，讓下面的測試讀起來是真正的
+#: ```` ``` ```` 而不是巢狀反引號（在 Python 裡根本寫不出來）。
+FENCE = "`" * 3
+
+#: 一筆合法的建議，用來確認「包進 fence 之後驗證照跑」。
+VALID_ENTRY = {
+    "field": "brand", "value": "ASUS",
+    "confidence": 0.92, "source_photo_index": 0,
+}
+
+
+def parse_text(text, photos=None):
+    """把一段模型輸出文字丟進真正的 parser，回傳驗證結果。"""
+    return analyzer.parse_suggestions(
+        text, PHOTOS if photos is None else photos
+    )
+
+
+def fenced(body, language="json"):
+    """組出一個完整的外層 code fence。"""
+    return f"{FENCE}{language}\n{body}\n{FENCE}"
+
+
+# ----------------------------------------------------------------------
+# 3-9. Markdown code fence
+#
+# 模型有時把 JSON 包在 ``` ``` ``` 裡。只移除**完整明確的外層** fence，
+# 移除之後的資料驗證完全不變。不做「從任意輸出找第一個 { 」那種修復。
+# ----------------------------------------------------------------------
+
+
+def test_plain_json_is_accepted():
+    """1. 純 JSON 一直是合法的。"""
+    result = parse_text(json.dumps({"suggestions": [VALID_ENTRY]}))
+    assert [entry["field"] for entry in result] == ["brand"]
+    assert result[0]["value"] == "ASUS"
+    assert result[0]["source_photo_id"] == "PHOTO1"
+
+
+def test_json_in_a_code_fence_is_accepted():
+    """2. ``` ```json ... ``` ``` ``` 是模型的常見輸出，要接受。"""
+    body = json.dumps({"suggestions": [VALID_ENTRY]})
+    result = parse_text(fenced(body))
+    assert result == [
+        {"field": "brand", "value": "ASUS",
+         "confidence": 0.92, "source_photo_id": "PHOTO1"}
+    ]
+
+
+def test_code_fence_without_a_language_tag_is_accepted():
+    """3. 沒有語言標記的 ``` ``` ``` ``` ``` 也接受。"""
+    body = json.dumps({"suggestions": []})
+    assert parse_text(fenced(body, language="")) == []
+
+
+def test_whitespace_around_json_and_fence_is_accepted():
+    """4. 前後（以及 fence 內）有空白都要正常處理。"""
+    body = json.dumps({"suggestions": [VALID_ENTRY]})
+    text = f"\n\n  {FENCE}json  \n  {body}  \n  {FENCE}  \n\n"
+    assert len(parse_text(text)) == 1
+
+
+def test_empty_suggestions_in_a_fence_is_accepted():
+    """空陣列是合法的「沒有建議」，不是錯誤。"""
+    assert parse_text(fenced('{"suggestions": []}')) == []
+
+
+def test_incomplete_code_fence_is_rejected():
+    """5. 不完整 fence（只有開頭，輸出被截斷）→ 拒絕。
+
+    不能猜內容到哪裡結束，所以維持原樣讓 json.loads 失敗。
+    """
+    with pytest.raises(analyzer.AnalyzerError) as excinfo:
+        parse_text(f'{FENCE}json\n{{"suggestions": []}}')
+    assert "不是合法 JSON" in str(excinfo.value)
+
+
+def test_code_fence_whose_content_is_not_json_is_rejected():
+    """6. fence 完整但內容不是 JSON → 拒絕。"""
     with pytest.raises(analyzer.AnalyzerError):
-        analyzer.analyze(FakeItemTrace(), SECRET, "ITM-0001", provider=provider)
+        parse_text(fenced("這不是 JSON，只是說明文字"))
+
+
+def test_prose_around_json_is_rejected():
+    """7. 前後夾帶自然語言 → 拒絕。
+
+    這是最容易不小心變成寬鬆修復的情況：那不是 fence，是模型在講話，
+    必須當成格式錯誤。
+    """
+    body = json.dumps({"suggestions": []})
+    with pytest.raises(analyzer.AnalyzerError):
+        parse_text(f"這是結果：\n{body}\n謝謝")
+
+
+def test_broken_json_inside_a_code_fence_is_rejected():
+    """8. fence 裡的 JSON 結構錯誤 → 拒絕（fence 移除後仍要嚴格解析）。"""
+    with pytest.raises(analyzer.AnalyzerError):
+        parse_text(fenced('{"suggestions": [}'))
+    with pytest.raises(analyzer.AnalyzerError):
+        parse_text(fenced('{"suggestions": [],}'))
+
+
+def test_glued_closing_fence_is_rejected():
+    """閉合 ``` 黏在 JSON 後面不是 fence —— Markdown 規定它要自己佔一行。"""
+    body = json.dumps({"suggestions": []})
+    with pytest.raises(analyzer.AnalyzerError):
+        parse_text(f"{FENCE}json\n{body}{FENCE}")
+
+
+def test_glued_opening_fence_is_rejected():
+    """開頭 ``` 後直接接內容也不是 fence。"""
+    body = json.dumps({"suggestions": []})
+    with pytest.raises(analyzer.AnalyzerError):
+        parse_text(f"{FENCE}json {body}\n{FENCE}")
+
+
+def test_text_after_the_closing_fence_is_rejected():
+    """fence 結束後還有其他東西 → 不是「整段就是一個 fence」。"""
+    body = json.dumps({"suggestions": []})
+    with pytest.raises(analyzer.AnalyzerError):
+        parse_text(f"{FENCE}json\n{body}\n{FENCE}\n以上")
+
+
+def test_language_tag_case_is_irrelevant():
+    """語言標記大小寫不影響（OpenRouter 有時回 ```JSON```）。"""
+    body = json.dumps({"suggestions": []})
+    assert parse_text(fenced(body, language="JSON")) == []
+    assert parse_text(fenced(body, language="json5")) == []
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ('{"a": 1}', "缺少 suggestions"),
+        ('{"suggestions": {}}', "必須是陣列"),
+        ('{"suggestions": ["x"]}', "不是物件"),
+        ('{"suggestions": [{"field": "price", "value": "9"}]}', "白名單"),
+        ('{"suggestions": [{"field": "brand", "value": " "}]}', "非空字串"),
+        ('{"suggestions": [{"field": "brand", "value": "A",'
+         ' "confidence": 1.5}]}', "超出"),
+        ('{"suggestions": [{"field": "brand", "value": "A",'
+         ' "confidence": "0.5"}]}', "confidence"),
+        ('{"suggestions": [{"field": "brand", "value": "A",'
+         ' "source_photo_index": 9}]}', "超出範圍"),
+        ('{"suggestions": [{"field": "brand", "value": "A",'
+         ' "source_photo_index": "0"}]}', "不是整數"),
+    ],
+)
+def test_code_fence_still_applies_every_schema_rule(body, expected):
+    """去掉 fence 之後，資料驗證一條都不能放寬。"""
+    with pytest.raises(analyzer.AnalyzerError) as excinfo:
+        parse_text(fenced(body))
+    assert expected in str(excinfo.value)
+
+
+def test_strip_code_fence_leaves_non_fenced_text_untouched():
+    """strip_code_fence 本身不做任何猜測修復。"""
+    body = json.dumps({"suggestions": []})
+    for text in (
+        body,
+        f"這是結果：\n{body}\n謝謝",
+        f'{FENCE}json\n{{"suggestions": [}}',
+        f"{FENCE}json\n{body}{FENCE}",
+        f"{FENCE}json\n{body}\n{FENCE}\n以上",
+        "",
+        FENCE,
+    ):
+        assert analyzer.strip_code_fence(text) == text, text
+
+
+def test_strip_code_fence_returns_the_inner_json():
+    body = json.dumps({"suggestions": [VALID_ENTRY]})
+    for text in (
+        fenced(body),
+        fenced(body, language=""),
+        f"\n {FENCE}json \n {body} \n {FENCE} \n",
+    ):
+        assert analyzer.strip_code_fence(text) == body
 
 
 def test_missing_suggestions_key_is_an_error():
@@ -358,6 +543,24 @@ def test_model_name_is_the_actual_model_used():
     assert provider.seen["model"] == "some/model:free"
     assert client.suggestions[0]["model_name"] == "some/model:free"
 
+def test_analyze_passes_provider_and_base_url_to_the_client():
+    """provider_name / base_url 決定呼叫哪個 OpenAI 相容端點。"""
+    provider = fake_provider([{"field": "brand", "value": "ASUS",
+                               "confidence": 0.9, "source_photo_index": 0}])
+    analyzer.analyze(FakeItemTrace(), SECRET, "ITM-0001",
+                     provider_name="google",
+                     base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                     provider=provider)
+    assert provider.seen["provider"] == "google"
+    assert provider.seen["base_url"].endswith("/v1beta/openai")
+
+def test_analyze_defaults_to_openrouter():
+    provider = fake_provider([{"field": "brand", "value": "ASUS",
+                               "confidence": 0.9, "source_photo_index": 0}])
+    analyzer.analyze(FakeItemTrace(), SECRET, "ITM-0001", provider=provider)
+    assert provider.seen["provider"] == "openrouter"
+    assert provider.seen["base_url"] == analyzer.DEFAULT_BASE_URL
+
 
 # ----------------------------------------------------------------------
 # 10-11. 絕不 accept / reject
@@ -424,8 +627,8 @@ def test_items_are_never_modified():
 
 
 def test_provider_http_failure_is_reported():
-    def failing(api_key, model, data_urls):
-        raise analyzer.AnalyzerError("OpenRouter 回應 429")
+    def failing(api_key, model, data_urls, provider=None, base_url=None):
+        raise analyzer.AnalyzerError("AI 服務回應 429")
     with pytest.raises(analyzer.AnalyzerError):
         analyzer.analyze(FakeItemTrace(), SECRET, "ITM-0001", provider=failing)
 
@@ -453,7 +656,8 @@ def test_api_key_is_never_printed(monkeypatch, capsys):
     config = analyzer.AiConfig(api_key=SECRET, model="m:free")
     monkeypatch.setattr(analyzer, "load_config", lambda *a, **k: config)
 
-    def failing(client, api_key, item_id, *, model, max_photos, echo):
+    def failing(client, api_key, item_id, *, model, max_photos,
+                provider_name=None, base_url=None, echo=None):
         raise analyzer.AnalyzerError(f"provider 回應包含 {api_key} 這段文字")
 
     monkeypatch.setattr(analyzer, "analyze", failing)
@@ -487,7 +691,7 @@ def test_provider_error_path_redacts(capsys, monkeypatch):
 
     monkeypatch.setattr(analyzer.urllib.request, "urlopen", fake_urlopen)
     with pytest.raises(analyzer.AnalyzerError) as excinfo:
-        analyzer.call_openrouter(secret.api_key, "m", [])
+        analyzer.call_ai_provider(secret.api_key, "m", [])
     assert SECRET not in str(excinfo.value)
 
 
@@ -498,9 +702,9 @@ def test_failing_provider_is_not_retried_with_another_model():
     """
     attempted: list[str] = []
 
-    def failing(api_key, model, data_urls):
+    def failing(api_key, model, data_urls, provider=None, base_url=None):
         attempted.append(model)
-        raise analyzer.AnalyzerError("OpenRouter 回應 429")
+        raise analyzer.AnalyzerError("AI 服務回應 429")
 
     with pytest.raises(analyzer.AnalyzerError):
         analyzer.analyze(FakeItemTrace(), SECRET, "ITM-0001", provider=failing)
@@ -511,7 +715,7 @@ def test_failing_provider_is_not_retried_with_another_model():
 def test_successful_run_uses_exactly_one_request_and_one_model():
     attempted: list[str] = []
 
-    def provider(api_key, model, data_urls):
+    def provider(api_key, model, data_urls, provider=None, base_url=None):
         attempted.append(model)
         return model_json([{"field": "brand", "value": "ASUS", "confidence": 0.9,
                             "source_photo_index": 0}])

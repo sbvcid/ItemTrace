@@ -247,15 +247,76 @@ function makeDocument(overrides = {}) {
       if (!selectors.has(selector)) selectors.set(selector, fakeElement(selector));
       return selectors.get(selector);
     },
-    querySelectorAll() { return []; },
+    /* 真的在假樹上找，而不是永遠回空陣列。
+     *
+       i18nApply() 靠 querySelectorAll("[data-i18n]") 套用 markup 上的
+       data-i18n。舊版這裡永遠回 []，等於 i18n 在假 DOM 上完全沒有被
+       執行過 —— 「語言切換會更新頁面」這種事只能在真瀏覽器驗，測試裡
+       完全看不到。這裡改成真的搜尋之後，harness 就能驗到它。 */
+    querySelectorAll(selector) {
+      const out = [];
+      const seen = new Set();
+      const roots = [...elements.values(), ...Object.values(overrides)];
+      for (const root of roots) {
+        for (const node of [root, ...descendants(root)]) {
+          if (seen.has(node)) continue;
+          /* matchCompound 只能比「單一複合選擇器」；querySelectorAll
+             支援空白分隔的後代選擇器時才需要用到 queryTree。目前 ui/
+             只用單一形式（[data-i18n]、.class），所以直接呼叫即可。 */
+          if (matchCompound(node, selector)) {
+            seen.add(node);
+            out.push(node);
+          }
+        }
+      }
+      return out;
+    },
     createElement(tag) { return fakeElement("", tag); },
     createTextNode(text) { return { textContent: text }; },
   };
 }
 
 /* 跑一組 ui script，回傳 {sandbox, element(id), flush()} */
-function mount({ scripts, documentOverrides = {}, windowProps = {}, fetchImpl }) {
+function mount({ scripts, documentOverrides = {}, windowProps = {}, fetchImpl, sandboxProps }) {
   const document = makeDocument(documentOverrides);
+  /* documentElement 是 i18nSwitch() 設定 lang 屬性的目標。
+     沒有它那兩個 setAttribute 會丟 TypeError —— 而 i18nInit() 是在每個
+     頁面 script 的第一行呼叫的，所以沒有它**整頁**都初始化不了。 */
+  if (!document.documentElement) {
+    document.documentElement = fakeElement("documentElement", "html");
+    document.documentElement.setAttribute = function (name, value) {
+      this.attributes[name] = value;
+    };
+    document.documentElement.attributes = {};
+  }
+  /* localStorage：i18n 用它記語言偏好。真實環境裡可能被禁用（私密瀏覽），
+     所以 harness 也提供一個可以被關掉的版本，讓測試能驗「讀不到偏好
+     時退回預設語言」那條路。 */
+  const store = new Map();
+  const localStorage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => { store.set(key, String(value)); },
+    removeItem: (key) => { store.delete(key); },
+    clear: () => { store.clear(); },
+    __store: store,
+    /* 測試可以設成 true 模擬「localStorage 被禁用」 */
+    __enabled: true,
+  };
+  const guardedLocalStorage = {
+    getItem: (key) => {
+      if (!localStorage.__enabled) throw new Error("storage disabled");
+      return localStorage.getItem(key);
+    },
+    setItem: (key, value) => {
+      if (!localStorage.__enabled) throw new Error("storage disabled");
+      return localStorage.setItem(key, value);
+    },
+    removeItem: localStorage.removeItem,
+    clear: localStorage.clear,
+    __store: store,
+    __enabled: true,
+    __setEnabled: (on) => { localStorage.__enabled = on; },
+  };
   const sandbox = {
     console,
     URL,
@@ -265,6 +326,7 @@ function mount({ scripts, documentOverrides = {}, windowProps = {}, fetchImpl })
     setTimeout: () => 0,
     clearTimeout: () => {},
     document,
+    localStorage: guardedLocalStorage,
     /* location.origin 一定要在：api.js 的 url() 用它當 new URL() 的 base。
        少了它 url() 會丟 TypeError，而 renderIdentifiers 的 lookup 剛好被
        try/catch 吞掉 —— 撞號功能就這樣一路沒被任何測試真正執行過。 */
@@ -282,14 +344,27 @@ function mount({ scripts, documentOverrides = {}, windowProps = {}, fetchImpl })
     }),
     fetch: fetchImpl || (async () => ({ ok: true, status: 200, text: async () => "{}" })),
   };
+  /* 需要觀察 UI 丟給使用者的訊息（alert/confirm 之類）時，harness 可以
+     額外注入；沒有傳就完全不影響既有 harness 的行為。 */
+  Object.assign(sandbox, sandboxProps || {});
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
-  for (const file of loadScripts(scripts)) {
+  /* i18n.js 一律排在最前面 —— 每一個真實頁面都是這樣載入的，而且
+     頁面 script 的第一件事就是 i18nInit()。harness 不必自己記得放，
+     放錯順序的頁面 script 應該在測試裡立刻爆掉，而不是靠 harness 幫它
+     修正後看起來正常。 */
+  for (const file of loadScripts(["i18n.js", ...scripts])) {
     vm.runInContext(file.source, sandbox, { filename: file.name });
   }
   return {
     sandbox,
     document,
+    localStorage: guardedLocalStorage,
+    /* 測試需要改語言時用這個：直接改沙箱裡的 locale 變數。 */
+    setLocale: (locale) => vm.runInContext(
+      `i18nSwitch(${JSON.stringify(locale)})`, sandbox
+    ),
+    currentLocale: () => vm.runInContext("i18nCurrentLocale()", sandbox),
     element: (id) => document.getElementById(id),
     query: (selector) => document.querySelector(selector),
     /* 掃過所有已建立的根元素。渲染結果不一定掛在同一個根下面

@@ -68,14 +68,16 @@ function photoNode(photo, caption) {
   const figure = el("figure");
   const image = el("img", {
     src: photoUrl(photo.filename),
-    alt: caption || photo.orig_name || "照片",
+    alt: caption || photo.orig_name || t("item.photo_alt"),
     loading: "lazy",
   });
   image.addEventListener("error", () => {
     figure.replaceChildren(
       el("div", {
         class: "broken",
-        text: "檔案讀不到\n" + (photo.orig_name || photo.filename),
+        text: t("common.unreadable", {
+          filename: photo.orig_name || photo.filename,
+        }),
       })
     );
   });
@@ -84,8 +86,16 @@ function photoNode(photo, caption) {
   return figure;
 }
 
+/* 歸檔生命週期的 badge。status 是 API 的原始值（active / archived /
+   void），className 與篩選條件都用原始值，只有顯示文字走翻譯 ——
+   class 名不能翻譯，CSS 與測試都靠它。
+   未知值（例如日後加了新的 status）原樣顯示：這比顯示錯誤的翻譯好，
+   而且一眼看得出資料層加了值但這裡還沒翻。 */
 function badge(status) {
-  return el("span", { class: "badge " + status, text: status });
+  const label = Object.prototype.hasOwnProperty.call(
+    { active: 1, archived: 1, void: 1 }, status
+  ) ? t("status." + status) : status;
+  return el("span", { class: "badge " + status, text: label });
 }
 
 function shortTime(iso) {
