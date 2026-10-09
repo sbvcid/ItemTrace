@@ -610,20 +610,15 @@ def analyze_item_photos(
     except ai_client.AnalyzerError as exc:
         raise ValidationError(ai_config.redact(str(exc), ai.api_key)) from None
 
-    created = []
-    for suggestion in parsed:
-        created.append(
-            repo.add_suggestion(
-                item_id,
-                suggestion["field"],
-                suggestion["value"],
-                confidence=suggestion["confidence"],
-                source="external",
-                model_name=ai.model,
-                source_photo_id=suggestion["source_photo_id"],
-                actor="external",
-            )
-        )
+    # Phase 2A：成功的一輪是「最新詮釋」—— 舊 pending 在同一個交易內
+    # 失效（superseded），失敗的分析（上面已 raise）永遠碰不到既有建議。
+    created, _superseded = repo.replace_pending_suggestions(
+        item_id,
+        parsed,
+        model_name=ai.model,
+        source="external",
+        actor="external",
+    )
     return to_outs(created)
 
 

@@ -63,6 +63,7 @@ export default {
     serialPlaceholder: 'e.g. S/N 5023910',
     conditionPlaceholder: 'Condition or accessory notes',
     saveSuccess: 'Record saved successfully!',
+    savePartial: 'Record saved, but {n} item(s) could not be applied (kept for retry; press "Save" again).',
     saveError: 'Failed to save, please retry',
     uploadError: 'Failed to upload photos',
   },

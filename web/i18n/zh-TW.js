@@ -63,6 +63,7 @@ export default {
     serialPlaceholder: '例如：S/N 5023910',
     conditionPlaceholder: '外觀或配件備註',
     saveSuccess: '已成功存起來！',
+    savePartial: '紀錄已保存，但有 {n} 項未成功套用（已保留，可再按「存起來」重試）。',
     saveError: '儲存失敗，請重試',
     uploadError: '照片上傳失敗',
   },

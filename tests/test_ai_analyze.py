@@ -463,3 +463,250 @@ def test_identifier_suggestion_accept_creates_an_identifier(
     assert row["confidence"] == 0.77
 
     assert client.get(f"/api/items/{item.id}").json()["item"]["model"] == ""
+
+
+# ----------------------------------------------------------------------
+# F. 重新分析生命週期（Phase 2A）：supersede、失敗保留、重試不重複
+# ----------------------------------------------------------------------
+
+
+def test_reanalysis_supersedes_previous_pending_suggestions(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """成功的新一輪分析是最新詮釋：上一輪 pending 轉 superseded，
+    新一輪才是 pending；主表始終不被 analyze 修改。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 0},
+        {"field": "model", "value": "B650E-F", "confidence": 0.8,
+         "source_photo_index": 0},
+    ]))
+    first = client.post(f"/api/items/{item.id}/ai/analyze").json()
+    assert [s["status"] for s in first] == ["pending", "pending"]
+
+    fake_provider(provider_response([
+        {"field": "brand", "value": "acer", "confidence": 0.7,
+         "source_photo_index": 0},
+    ]))
+    second = client.post(f"/api/items/{item.id}/ai/analyze").json()
+    assert len(second) == 1
+
+    rows = {
+        row["id"]: row
+        for row in client.get(f"/api/items/{item.id}/suggestions").json()
+    }
+    for old in first:
+        assert rows[old["id"]]["status"] == "superseded"
+        assert rows[old["id"]]["decided_at"] is not None
+    assert rows[second[0]["id"]]["status"] == "pending"
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["suggestion_counts"]["pending"] == 1
+    assert detail["item"]["brand"] == ""
+    assert detail["item"]["model"] == ""
+
+    # supersede 是可觀測的：事件與 actor 都留下來
+    events = client.get(f"/api/items/{item.id}/events").json()
+    superseded = [e for e in events if e["type"] == "suggestion.superseded"]
+    assert len(superseded) == 2
+    assert all(e["actor"] == "external" for e in superseded)
+
+
+def test_reanalysis_leaves_decided_suggestions_as_history(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """已 accepted / rejected 的建議是歷史：重新分析不會讓它們復活，
+    也不會把它們改成 pending。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 0},
+        {"field": "condition", "value": "有刮痕", "confidence": 0.5,
+         "source_photo_index": 0},
+    ]))
+    first = client.post(f"/api/items/{item.id}/ai/analyze").json()
+    accepted = client.post(f"/api/suggestions/{first[0]['id']}/accept")
+    rejected = client.post(f"/api/suggestions/{first[1]['id']}/reject")
+    assert accepted.status_code == 200
+    assert rejected.status_code == 200
+
+    fake_provider(provider_response([
+        {"field": "brand", "value": "acer", "confidence": 0.7,
+         "source_photo_index": 0},
+    ]))
+    client.post(f"/api/items/{item.id}/ai/analyze")
+
+    rows = {
+        row["id"]: row
+        for row in client.get(f"/api/items/{item.id}/suggestions").json()
+    }
+    assert rows[first[0]["id"]]["status"] == "accepted"
+    assert rows[first[1]["id"]]["status"] == "rejected"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "ASUS"
+
+
+def test_successful_empty_reanalysis_supersedes_stale_pending(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """成功但空的一輪也是最新詮釋（模型不確定就什麼都不說）：
+    不讓舊 pending 無限期殘留 —— 它們已不在最新結果裡。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    first = client.post(f"/api/items/{item.id}/ai/analyze").json()
+
+    fake_provider(provider_response([]))
+    second = client.post(f"/api/items/{item.id}/ai/analyze")
+    assert second.status_code == 201
+    assert second.json() == []
+
+    rows = client.get(f"/api/items/{item.id}/suggestions").json()
+    assert rows[0]["id"] == first[0]["id"]
+    assert rows[0]["status"] == "superseded"
+    assert client.get(f"/api/items/{item.id}").json()["suggestion_counts"].get(
+        "pending", 0
+    ) == 0
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == ""
+
+
+def test_failed_reanalysis_preserves_existing_pending_suggestions(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """失敗的分析什麼都不算：既有有效 pending 原封不動，
+    不得被 supersede、也不會產生新資料。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    first = client.post(f"/api/items/{item.id}/ai/analyze").json()
+
+    fake_provider(raises=ai_client.ProviderError(
+        f"AI 服務暫時無法使用（model={MODEL}）：HTTP 502，provider_unavailable"
+    ))
+    response = client.post(f"/api/items/{item.id}/ai/analyze")
+    assert response.status_code == 400
+
+    rows = client.get(f"/api/items/{item.id}/suggestions").json()
+    assert [row["id"] for row in rows] == [first[0]["id"]]
+    assert rows[0]["status"] == "pending"
+    assert rows[0]["decided_at"] is None
+
+    events = client.get(f"/api/items/{item.id}/events").json()
+    assert "suggestion.superseded" not in [e["type"] for e in events]
+
+
+def test_invalid_model_output_preserves_existing_pending_suggestions(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """模型輸出不合格式（算失敗）也不能動到既有 pending。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    first = client.post(f"/api/items/{item.id}/ai/analyze").json()
+
+    fake_provider({"choices": [{"message": {"content": "not-json"}}]})
+    response = client.post(f"/api/items/{item.id}/ai/analyze")
+    assert response.status_code == 400
+
+    rows = client.get(f"/api/items/{item.id}/suggestions").json()
+    assert rows[0]["id"] == first[0]["id"]
+    assert rows[0]["status"] == "pending"
+
+
+def test_superseded_suggestion_cannot_be_accepted(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """已 superseded 的舊建議不能復活：接受被拒、主表不變。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    first = client.post(f"/api/items/{item.id}/ai/analyze").json()
+
+    fake_provider(provider_response([
+        {"field": "brand", "value": "acer", "confidence": 0.7,
+         "source_photo_index": 0},
+    ]))
+    second = client.post(f"/api/items/{item.id}/ai/analyze").json()
+
+    response = client.post(f"/api/suggestions/{first[0]['id']}/accept")
+    assert response.status_code == 400
+    assert "superseded" in response.json()["detail"]
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == ""
+
+    # 最新一輪仍然是 pending，沒有被舊建議的操作影響
+    rows = {
+        row["id"]: row
+        for row in client.get(f"/api/items/{item.id}/suggestions").json()
+    }
+    assert rows[second[0]["id"]]["status"] == "pending"
+
+
+def test_accept_failure_reports_conflict_and_keeps_suggestion_pending(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """接受 identifier 建議時撞到同商品既有識別碼 → 409；
+    建議維持 pending、不得被標成 accepted、不得建立重複識別碼。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    repo.add_identifier(item.id, "BX-807 06_1234", kind="serial")
+    fake_provider(provider_response([
+        {"field": "identifier:serial", "value": "BX-807 06_1234",
+         "confidence": 0.77, "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze").json()
+
+    response = client.post(f"/api/suggestions/{body[0]['id']}/accept")
+    assert response.status_code == 409
+    assert "已有相同" in response.json()["detail"]
+
+    stored = client.get(f"/api/items/{item.id}/suggestions").json()[0]
+    assert stored["status"] == "pending"
+    assert stored["decided_at"] is None
+    assert len(client.get(f"/api/items/{item.id}/identifiers").json()) == 1
+    events = client.get(f"/api/items/{item.id}/events").json()
+    suggestion_events = [
+        e for e in events
+        if e["entity_type"] == "suggestion" and e["entity_id"] == body[0]["id"]
+    ]
+    assert [e["type"] for e in suggestion_events] == ["suggestion.created"]
+
+
+def test_retrying_accepted_suggestion_is_refused_without_duplicate_changes(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """重試已接受的建議 → 400；值不會被套用兩次、事件不重複。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze").json()
+    suggestion_id = body[0]["id"]
+
+    assert client.post(f"/api/suggestions/{suggestion_id}/accept").status_code == 200
+    retry = client.post(f"/api/suggestions/{suggestion_id}/accept")
+    assert retry.status_code == 400
+    assert "accepted" in retry.json()["detail"]
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["brand"] == "ASUS"
+    assert detail["suggestion_counts"]["accepted"] == 1
+
+    events = client.get(f"/api/items/{item.id}/events").json()
+    brand_changes = [
+        e for e in events
+        if e["type"] == "field.changed" and e["field"] == "brand"
+    ]
+    assert len(brand_changes) == 1
+    accepted_events = [
+        e for e in events
+        if e["type"] == "suggestion.accepted" and e["entity_id"] == suggestion_id
+    ]
+    assert len(accepted_events) == 1

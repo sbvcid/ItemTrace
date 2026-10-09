@@ -157,11 +157,13 @@ Commit: "feat: phase-1a integrate V3 SPA frontend and core tests"
 
 ---
 
-### Phase 2：AI Contract 2.0 與視覺紀錄基礎
+### Phase 2：AI Contract 2.0 與視覺紀錄基礎（2A 建議生命週期 COMPLETED 2026-10-09）
 
 **依賴**：Phase 1A
 
 **目標**：擴充 AI 整合契約，支援通用視覺紀錄、自然語言描述、模型評測，為後續 AI 功能奠基。
+
+**已完成（Phase 2A，2026-10-09）**：AI 建議生命週期與部分失敗語意 —— 成功的新分析於同一交易內 supersede 舊 pending；失敗分析保留既有 pending；accept 原子化、重試不重複；capture 部分失敗誠實回報並可原地重試。零 schema migration；12 個新測試，全 940 通過。細則見 `STATUS.md`。
 
 **工作範圍**：
 1. **AI Contract 升級**
@@ -710,4 +712,5 @@ Phase 7 (Windows Release)
 
 - **2026-10-09**：初始版本建立，基於 Phase 0 audit 結果
 - **2026-10-09（Phase 1B-A）**：Phase 1A 標記 COMPLETED；列表排序方案確定為預設 `created_at DESC`（不走 sort 參數）；測試基線更新為 928
+- **2026-10-09（Phase 2A）**：建議生命週期與部分失敗語意完成（supersede／失敗保留／重試不重複／誠實回報）；零 schema migration；測試基線更新為 940；下一階段 = Phase 2B 提案命名空間（study S1，待決策）
 

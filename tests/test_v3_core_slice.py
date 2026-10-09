@@ -9,6 +9,7 @@
 3. Scenario B：同一個人再拍第二件東西，不重設分類與結構
 4. Scenario C：拍生活隨拍/寵物/風景照片，不被強迫建立 3C 規格欄位，照片安全留存
 5. Phase 1B-A：首頁最新紀錄置頂、保存後回首頁、修改不亂序、搜尋不受影響
+6. Phase 2A：capture 部分失敗語意（靜態接線檢查；非瀏覽器端對端測試）
 """
 
 from __future__ import annotations
@@ -437,3 +438,21 @@ def test_phase1b_frontend_wiring_static_checks(client):
     for key in ("freshBadge", "latestBadge"):
         assert key in zh
         assert key in en
+
+
+def test_phase2a_capture_partial_failure_static_checks(client):
+    """Phase 2A 前端接線靜態檢查（非瀏覽器端對端測試）：
+
+    accept 失敗不再被靜默吞掉；已套用的操作會被記住，
+    讓重試不會重複套用；部分失敗有專屬訊息而非假裝全部成功。
+    """
+    capture_js = client.get("/views/capture.js").text
+    assert "appliedSuggestionIds" in capture_js
+    assert "appliedSerialValue" in capture_js
+    assert "savePartial" in capture_js
+    assert "failures.push" in capture_js
+
+    zh = client.get("/i18n/zh-TW.js").text
+    en = client.get("/i18n/en.js").text
+    assert "savePartial" in zh
+    assert "savePartial" in en

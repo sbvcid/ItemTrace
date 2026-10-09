@@ -181,3 +181,90 @@ def test_failing_accept_rolls_back_suggestion_state(repo):
     assert [event.type for event in repo.list_events("suggestion", second.id)] == [
         "suggestion.created"
     ]
+
+
+# ----------------------------------------------------------------------
+# Phase 2A：修訂語意（replace_pending_suggestions）
+# ----------------------------------------------------------------------
+
+
+def test_replace_pending_suggestions_supersedes_only_pending(repo, item):
+    """新一輪分析是最新詮釋：只有 pending 被 superseded；
+    accepted / rejected 是歷史，不受影響；主表仍然沒被碰過。"""
+    stale = repo.add_suggestion(item.id, "brand", "ASUS")
+    kept = repo.add_suggestion(item.id, "model", "B650E-F")
+    repo.accept_suggestion(kept.id)
+    rejected = repo.add_suggestion(item.id, "condition", "有刮痕")
+    repo.reject_suggestion(rejected.id)
+
+    created, superseded = repo.replace_pending_suggestions(
+        item.id,
+        [{"field": "brand", "value": "acer",
+          "confidence": 0.9, "source_photo_id": None}],
+        model_name="test/model",
+    )
+
+    assert superseded == 1
+    assert len(created) == 1
+    assert created[0].status == "pending"
+    assert created[0].value == "acer"
+    assert created[0].model_name == "test/model"
+
+    assert repo.get_suggestion(stale.id).status == "superseded"
+    assert repo.get_suggestion(stale.id).decided_at is not None
+    assert repo.get_suggestion(kept.id).status == "accepted"
+    assert repo.get_suggestion(rejected.id).status == "rejected"
+
+    pending = repo.list_suggestions(item_id=item.id, status="pending")
+    assert [row.value for row in pending] == ["acer"]
+    assert repo.get_item(item.id).brand == ""
+
+    assert [event.type for event in repo.list_events("suggestion", stale.id)] == [
+        "suggestion.superseded",  # 事件最新在前
+        "suggestion.created",
+    ]
+
+
+def test_replace_pending_suggestions_is_atomic(repo, item):
+    """新一輪只要有任一筆不合法，supersede 與已寫入的新建議全部回滾，
+    不留半套結果、舊 pending 原封不動。"""
+    stale = repo.add_suggestion(item.id, "brand", "ASUS")
+
+    with pytest.raises(ValidationError):
+        repo.replace_pending_suggestions(
+            item.id,
+            [
+                {"field": "brand", "value": "acer",
+                 "confidence": 0.9, "source_photo_id": None},
+                {"field": "status", "value": "void"},  # 不在白名單
+            ],
+            model_name="test/model",
+        )
+
+    assert repo.get_suggestion(stale.id).status == "pending"
+    assert repo.get_suggestion(stale.id).decided_at is None
+    assert [row.id for row in repo.list_suggestions(item_id=item.id)] == [stale.id]
+    assert [event.type for event in repo.list_events("suggestion", stale.id)] == [
+        "suggestion.created"
+    ]
+
+
+def test_superseded_is_terminal(repo, item):
+    """superseded 不會復活：不能再被接受、拒絕或修改。
+    （空的新一輪也要 supersede 舊 pending —— 最新詮釋就是「沒有建議」。）"""
+    stale = repo.add_suggestion(item.id, "brand", "ASUS")
+    created, superseded = repo.replace_pending_suggestions(
+        item.id, [], model_name="test/model"
+    )
+
+    assert created == []
+    assert superseded == 1
+    assert repo.get_suggestion(stale.id).status == "superseded"
+
+    with pytest.raises(ValidationError):
+        repo.accept_suggestion(stale.id)
+    with pytest.raises(ValidationError):
+        repo.reject_suggestion(stale.id)
+    with pytest.raises(ValidationError):
+        repo.update_suggestion(stale.id, {"value": "acer"})
+    assert repo.get_item(item.id).brand == ""

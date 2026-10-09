@@ -800,6 +800,70 @@ class Repository:
             )
             return after
 
+    def replace_pending_suggestions(
+        self,
+        item_id: str,
+        entries: list[Mapping[str, Any]],
+        *,
+        model_name: str = "",
+        source: str = "external",
+        actor: str = "external",
+    ) -> tuple[list[Suggestion], int]:
+        """以新一輪分析結果原子性取代既有 pending 建議。
+
+        生命週期規則（Phase 2A）：成功的新分析＝目前最新的詮釋 ——
+        先把該商品所有 pending 標成 superseded，再寫入這一批。
+        supersede 與新資料在同一個交易內，任一步失敗全部回滾，
+        所以失敗的分析不可能弄丟先前有效的 pending 建議。
+        已 accepted / rejected 的建議是歷史，永遠不受影響。
+        空的一輪（模型不確定）同樣是有效結果：舊 pending 一樣失效，
+        否則它們已不在最新結果中、卻會永遠停在 pending。
+
+        回傳 (created, superseded_count)。主表全程不動。
+        """
+        with db.transaction(self.conn):
+            self.get_item(item_id)
+            superseded = self._supersede_pending(item_id, actor=actor)
+            created = [
+                self.add_suggestion(
+                    item_id,
+                    entry["field"],
+                    entry["value"],
+                    confidence=entry.get("confidence"),
+                    source=source,
+                    model_name=model_name,
+                    source_photo_id=entry.get("source_photo_id"),
+                    actor=actor,
+                )
+                for entry in entries
+            ]
+        return created, superseded
+
+    def _supersede_pending(self, item_id: str, *, actor: str) -> int:
+        """把商品現有 pending 建議標成 superseded 並留下事件。"""
+        rows = self.conn.execute(
+            "SELECT * FROM suggestions WHERE item_id = ? AND status = 'pending'",
+            (item_id,),
+        ).fetchall()
+        stamp = db.now()
+        for row in rows:
+            before = Suggestion.from_row(row)
+            after = replace(before, status="superseded", decided_at=stamp)
+            _validate_suggestion(after)
+            _update(self.conn, "suggestions", SUGGESTION_COLUMNS, after, before.id)
+            events.append(
+                self.conn,
+                entity_type="suggestion",
+                entity_id=before.id,
+                type="suggestion.superseded",
+                actor=actor,
+                field=before.field,
+                prev_value=before.value,
+                next_value=after.value,
+                payload={"model_name": before.model_name},
+            )
+        return len(rows)
+
     def find_photos_by_sha256(
         self, sha256: str, *, item_id: str | None = None, role: str | None = None
     ) -> list[Photo]:

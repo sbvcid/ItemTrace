@@ -154,6 +154,11 @@ export async function createCaptureView(params, router) {
   let currentSuggestions = [];
   let isEditMode = false;
 
+  // Phase 2A：記住本次 session 已成功套用的操作，重試時跳過，
+  // 確保「再按一次存起來」不會重複套用同一個變更。
+  const appliedSuggestionIds = new Set();
+  let appliedSerialValue = null;
+
   // Elements
   const dropZone = el.querySelector('#drop-zone');
   const cameraInput = el.querySelector('#camera-input');
@@ -478,22 +483,34 @@ export async function createCaptureView(params, router) {
   });
 
   // Confirm and Save (核心動作：✓ 存起來)
+  //
+  // 儲存分兩層：主要紀錄在 intake 時就已建立；這裡的工作是把 AI 建議與
+  // 使用者編輯的值套用上去。任何一步失敗都要誠實回報（不得假裝全部成功），
+  // 且重試不得重複套用 —— 已套用的建議與序號以區域狀態追蹤，後端的
+  // pending 檢查與同值 no-op 則是第二道保險。
   btnSaveConfirm.addEventListener('click', async () => {
     if (!currentItemId) return;
 
     btnSaveConfirm.disabled = true;
     btnSaveConfirm.innerHTML = `<span>${t('app.loading')}</span>`;
 
-    try {
-      // 1. Accept suggestions
-      const acceptPromises = currentSuggestions.map(s =>
-        api.acceptSuggestion(s.id).catch(err => {
-          console.warn(`Could not accept suggestion ${s.id}:`, err);
-        })
-      );
-      await Promise.all(acceptPromises);
+    const failures = [];
 
-      // 2. If user edited any fields, patch the item
+    try {
+      // 1. Accept suggestions one by one; already-applied ones are skipped.
+      for (const suggestion of currentSuggestions) {
+        if (appliedSuggestionIds.has(suggestion.id)) continue;
+        try {
+          await api.acceptSuggestion(suggestion.id);
+          appliedSuggestionIds.add(suggestion.id);
+        } catch (err) {
+          console.warn(`Could not accept suggestion ${suggestion.id}:`, err);
+          failures.push({ what: suggestion.field, error: err });
+        }
+      }
+
+      // 2. Patch user-edited fields. Backend treats same-value PATCH as a no-op,
+      //    so retrying this step never duplicates a change.
       const patchData = {};
       const newName = editName.value.trim();
       const newBrand = editBrand.value.trim();
@@ -511,20 +528,43 @@ export async function createCaptureView(params, router) {
         await api.patchItem(currentItemId, patchData);
       }
 
-      // 3. If user entered/edited serial number, add identifier
+      // 3. Serial: only add manually when an accepted suggestion did not
+      //    already create the same identifier (avoids a guaranteed 409).
       const newSerial = editSerial.value.trim();
-      if (newSerial) {
-        await api.addIdentifier(currentItemId, { kind: 'serial', value: newSerial }).catch(err => {
-          console.warn('Identifier note:', err.message);
-        });
+      if (newSerial && appliedSerialValue !== newSerial) {
+        const acceptedSerial = currentSuggestions.find(
+          s => s.field === 'identifier:serial' && appliedSuggestionIds.has(s.id)
+        );
+        if (acceptedSerial && acceptedSerial.value.trim() === newSerial) {
+          appliedSerialValue = newSerial;
+        } else {
+          try {
+            await api.addIdentifier(currentItemId, { kind: 'serial', value: newSerial });
+            appliedSerialValue = newSerial;
+          } catch (err) {
+            console.warn('Identifier add failed:', err.message);
+            failures.push({ what: 'identifier:serial', error: err });
+          }
+        }
       }
 
-      showToast(t('capture.saveSuccess'));
+      if (failures.length === 0) {
+        showToast(t('capture.saveSuccess'));
 
-      // 4. Back to Home: backend confirmed the save; the fresh record shows up
-      //    first (created_at DESC) and is briefly highlighted via ?fresh=.
-      router.navigate(`/?fresh=${currentItemId}`);
+        // 4. Back to Home: backend confirmed the save; the fresh record shows up
+        //    first (created_at DESC) and is briefly highlighted via ?fresh=.
+        router.navigate(`/?fresh=${currentItemId}`);
+        return;
+      }
+
+      // 部分失敗：紀錄已建立，但部分內容未套用。不假裝全部成功，
+      // 留在原畫面讓使用者直接重試（已套用的部分不會重跑）。
+      console.warn('Save completed with failures:', failures);
+      showToast(t('capture.savePartial', { n: failures.length }));
+      btnSaveConfirm.disabled = false;
+      btnSaveConfirm.innerHTML = `<span>✓ ${t('capture.btnSaveDirect')}</span>`;
     } catch (err) {
+      // 硬失敗（例如 PATCH 失敗）：編輯的值沒有落地，留在原畫面重試。
       console.error('Failed to finalize item:', err);
       showToast(`${t('capture.saveError')}: ${err.message}`);
       btnSaveConfirm.disabled = false;
