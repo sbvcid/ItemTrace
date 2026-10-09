@@ -1,6 +1,6 @@
 # ItemTrace Engineering Status
 
-最後更新：2026-10-09 15:45  
+最後更新：2026-10-09 16:05  
 當前階段：Phase 1B-A 已完成（本地 commit，未 push）  
 遠端狀態：本地領先 origin/main 4 commits（`2879904` 1A、`4318ae0` 產品規格、`6bfdeda` 工程文件、本階段）  
 測試驗證：`pytest -q` 完全通過，全 928 測試無失敗、無跳過
@@ -174,6 +174,13 @@ Commit：`feat: phase-1b-a home flow - newest-first list, save-to-home, latest c
 
 （備註：Phase 2「AI Contract 2.0」依 ROADMAP 只依賴 Phase 1A，可視產品優先級調整順序。）
 
+### AI-Native 架構研究（2026-10-09 完成，待決策）
+研究文件：`docs/engineering/AI-NATIVE-ARCHITECTURE.md`
+
+結論摘要：不換資料模型；建議把 AI 提案從 8 個固定欄位放寬為受驗證的命名空間
+（S1 → S2 → S3 → S4：提案命名空間、修訂語意、前端呈現、評測 harness，全部
+additive、無 schema migration）。若決策採用，再併入 Phase 2 施工並更新 ROADMAP。
+
 ---
 
 ## 阻塞項與風險
@@ -190,3 +197,4 @@ Commit：`feat: phase-1b-a home flow - newest-first list, save-to-home, latest c
 
 - **2026-10-09**：初始版本建立（Phase 0 audit 基線）
 - **2026-10-09**：Phase 1B-A 完成——首頁最新置頂（`created_at DESC`）、保存後回首頁＋短暫高亮、最新放大卡片；測試基線 921 → 928；狀態校準
+- **2026-10-09**：新增 AI-Native 架構研究（`docs/engineering/AI-NATIVE-ARCHITECTURE.md`）；本次未變更程式碼、schema、資料、前端或測試
