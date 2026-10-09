@@ -8,6 +8,7 @@
 2. Scenario A：第一次使用 ItemTrace，拍一件東西 → AI 整理 → 1-tap 存起來 → 找得到
 3. Scenario B：同一個人再拍第二件東西，不重設分類與結構
 4. Scenario C：拍生活隨拍/寵物/風景照片，不被強迫建立 3C 規格欄位，照片安全留存
+5. Phase 1B-A：首頁最新紀錄置頂、保存後回首頁、修改不亂序、搜尋不受影響
 """
 
 from __future__ import annotations
@@ -317,3 +318,122 @@ def test_photo_serving_and_byte_preservation(client, config):
 
     # 4. 驗證 Cache-Control 標頭存在以加速瀏覽器重複顯示
     assert "public" in res_direct.headers.get("cache-control", "")
+
+
+# ----------------------------------------------------------------------
+# Phase 1B-A：首頁基本流程（最新置頂、保存後回首頁、搜尋不受影響）
+# ----------------------------------------------------------------------
+
+
+def test_phase1b_home_lists_newest_first(client):
+    """首頁預設順序：建立時間由新到舊。"""
+    for name in ("第一件", "第二件", "第三件"):
+        assert client.post("/api/items", json={"name": name}).status_code == 201
+
+    listed = client.get("/api/items").json()
+    assert [item["id"] for item in listed] == ["ITM-0003", "ITM-0002", "ITM-0001"]
+
+
+def test_phase1b_patching_old_item_keeps_creation_order(client):
+    """修改舊紀錄後，它不會跳到最前面（排序看 created_at 而非 updated_at）。"""
+    for name in ("第一件", "第二件", "第三件"):
+        client.post("/api/items", json={"name": name})
+
+    res = client.patch("/api/items/ITM-0001", json={"name": "第一件（改名）"})
+    assert res.status_code == 200
+
+    listed = client.get("/api/items").json()
+    assert [item["id"] for item in listed] == ["ITM-0003", "ITM-0002", "ITM-0001"]
+    assert listed[-1]["name"] == "第一件（改名）"
+
+
+def test_phase1b_saved_capture_lands_first_on_home(client, config, monkeypatch):
+    """保存成功後回首頁：剛剛存下的紀錄出現在第一筆，帶著縮圖與照片數。"""
+    from shop import ai_client, ai_config
+    from shop.ai_config import AiConfig
+
+    monkeypatch.setattr(
+        ai_config, "load_config",
+        lambda *a, **k: AiConfig(api_key="sk-test-key", model="gemini-2.5-flash"),
+    )
+
+    def fake_vision_ai(api_key, model, data_urls, **kwargs):
+        return {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({"suggestions": [
+                        {"field": "name", "value": "牧田 18V 震動電鑽",
+                         "confidence": 0.95, "source_photo_index": 0},
+                    ]})
+                }
+            }]
+        }
+
+    monkeypatch.setattr(ai_client, "call_ai_provider", fake_vision_ai)
+
+    def capture_and_save(filename):
+        """走與前端 Capture 相同的一條龍：上傳 → intake → AI → 接受建議。"""
+        files = [("files", (filename, make_jpeg(exif="2026:10:07 15:00:00"),
+                            "image/jpeg"))]
+        upload = client.post("/api/inbox/photos", files=files).json()
+        intake = client.post("/api/inbox/intake", json={
+            "files": [upload["entries"][0]["relative"]], "kind": "intake",
+        }).json()
+        item_id = intake["item_id"]
+        for s in client.post(f"/api/items/{item_id}/ai/analyze").json():
+            assert client.post(f"/api/suggestions/{s['id']}/accept").status_code == 200
+        return item_id
+
+    first_id = capture_and_save("first.jpg")
+    second_id = capture_and_save("second.jpg")
+
+    home = client.get("/api/items").json()
+    assert home[0]["id"] == second_id          # 最新保存的在第一個位置
+    assert home[1]["id"] == first_id
+    assert home[0]["name"] == "牧田 18V 震動電鑽"
+    assert home[0]["thumbnail"] is not None
+    assert home[0]["photo_count"] == 1
+
+
+def test_phase1b_search_results_stay_correct(client):
+    """首頁排序調整不影響搜尋正確性：命中的紀錄正確、仍由新到舊。"""
+    client.post("/api/items", json={"name": "RTX 4070 顯示卡", "brand": "ASUS"})
+    client.post("/api/items", json={"name": "RTX 4070 Ti 顯示卡", "brand": "MSI"})
+    client.post("/api/items", json={"name": "機械鍵盤", "brand": "Logitech"})
+
+    found = client.get("/api/items?q=4070").json()
+    assert [item["id"] for item in found] == ["ITM-0002", "ITM-0001"]
+    assert all("4070" in item["name"] for item in found)
+
+    assert client.get("/api/items?q=不存在的字串").json() == []
+
+
+def test_phase1b_frontend_wiring_static_checks(client):
+    """Phase 1B-A 前端接線的靜態原始碼檢查。
+
+    注意：這是對服務出的 JavaScript/CSS 文字做字串檢查，
+    不是瀏覽器端對端測試。實際的點擊、導覽與視覺呈現未在此驗證。
+    """
+    # Capture：保存成功後回首頁並帶上 fresh 參照；不再直達詳細頁。
+    capture_js = client.get("/views/capture.js").text
+    assert "router.navigate(`/?fresh=${currentItemId}`)" in capture_js
+    assert "/i/${currentItemId}" not in capture_js
+
+    # Home：讀取 fresh 參照、最新卡片放大、剛存入的卡片高亮。
+    home_js = client.get("/views/home.js").text
+    assert "URLSearchParams(window.location.search).get('fresh')" in home_js
+    assert "record-card-featured" in home_js
+    assert "record-card-fresh" in home_js
+    assert "record-fresh-badge" in home_js
+
+    # CSS 與 i18n：呈現樣式與文字標籤（非只靠顏色）皆存在。
+    css = client.get("/app.css").text
+    assert ".record-card-featured" in css
+    assert ".record-card-fresh" in css
+    assert "@keyframes fresh-record-glow" in css
+
+    zh = client.get("/i18n/zh-TW.js").text
+    en = client.get("/i18n/en.js").text
+    for key in ("freshBadge", "latestBadge"):
+        assert key in zh
+        assert key in en

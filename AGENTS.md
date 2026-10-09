@@ -48,10 +48,10 @@
 **技術棧**：
 - 後端：Python + FastAPI + SQLite (WAL mode)
 - 前端：零建置 ESM 純 JavaScript SPA
-- 測試：pytest (921 tests)
+- 測試：pytest (928 tests)
 - 部署：local-first, 無外部依賴
 
-**當前階段**：Phase 0 - 基線盤點與 V3 前端整合評估
+**當前階段**：Phase 1B-A 完成 - 首頁基本流程（最新置頂、保存後回首頁）
 
 ---
 

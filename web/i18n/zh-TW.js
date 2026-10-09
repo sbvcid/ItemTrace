@@ -32,6 +32,8 @@ export default {
     cardLifeRecord: '生活紀錄',
     photoCount: '{n} 張',
     modelPrefix: '型號：{model}',
+    latestBadge: '最新紀錄',
+    freshBadge: '✨ 剛剛存入',
   },
   capture: {
     headerTitle: '拍照記錄',

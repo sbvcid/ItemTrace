@@ -72,11 +72,33 @@ def test_list_items_filters_and_paginates(repo):
     assert len(repo.list_items(category="主機板")) == 2
     assert len(repo.list_items(status="active")) == 5
     assert len(repo.list_items(status="void")) == 0
-    assert [item.id for item in repo.list_items(limit=2)] == ["ITM-0001", "ITM-0002"]
+    # 預設由新到舊：created_at DESC，同一秒以 id DESC 決勝。
+    assert [item.id for item in repo.list_items(limit=2)] == ["ITM-0005", "ITM-0004"]
     assert [item.id for item in repo.list_items(limit=2, offset=2)] == [
         "ITM-0003",
-        "ITM-0004",
+        "ITM-0002",
     ]
+
+
+def test_list_items_sorts_by_created_at_desc(repo):
+    """排序看 created_at 而不是 id：時間戳被更正過的資料依真實建立時間排。"""
+    older_id = repo.create_item(name="較早建立").id
+    newer_id = repo.create_item(name="較晚建立").id
+    repo.conn.execute(
+        "UPDATE items SET created_at = '2099-01-01T00:00:00' WHERE id = ?",
+        (older_id,),
+    )
+    assert [item.id for item in repo.list_items()] == [older_id, newer_id]
+
+
+def test_update_item_does_not_change_list_order(repo):
+    """修改舊紀錄只動 updated_at，不會讓它跳到清單最前面。"""
+    first = repo.create_item(name="第一件")
+    second = repo.create_item(name="第二件")
+    assert [item.id for item in repo.list_items()] == [second.id, first.id]
+
+    repo.update_item(first.id, {"name": "第一件（改名）"})
+    assert [item.id for item in repo.list_items()] == [second.id, first.id]
 
 
 def test_list_items_rejects_bad_paging(repo):

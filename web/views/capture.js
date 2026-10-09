@@ -2,7 +2,7 @@
  * Capture View (/capture)
  *
  * Core Experience Vertical Slice:
- * 📷 拍照 → AI 理解/整理 → 看見 vs 推測 → ✓ 存起來 → 直達詳細頁
+ * 📷 拍照 → AI 理解/整理 → 看見 vs 推測 → ✓ 存起來 → 回首頁看見最新紀錄
  */
 
 import { api, getPhotoUrl } from '../core/api.js';
@@ -521,8 +521,9 @@ export async function createCaptureView(params, router) {
 
       showToast(t('capture.saveSuccess'));
 
-      // 4. Navigate immediately to Record Detail view
-      router.navigate(`/i/${currentItemId}`);
+      // 4. Back to Home: backend confirmed the save; the fresh record shows up
+      //    first (created_at DESC) and is briefly highlighted via ?fresh=.
+      router.navigate(`/?fresh=${currentItemId}`);
     } catch (err) {
       console.error('Failed to finalize item:', err);
       showToast(`${t('capture.saveError')}: ${err.message}`);

@@ -40,7 +40,7 @@
   - Capture / Home / Record Detail / Settings 四大頁面
 
 - **測試基線確立**：
-  - 共 921 個測試（全 pytest 框架）
+  - 共 928 個測試（全 pytest 框架；Phase 1B-A 後）
   - 36 個測試檔案，涵蓋 API、DB、前端、列印、i18n
   - **現況：全部通過** ✓
   - 包含 V3 核心流程驗收測試（test_v3_core_slice.py）
@@ -81,7 +81,7 @@
 
 ---
 
-### Phase 1A：V3 前端正式整合（NEXT）
+### Phase 1A：V3 前端正式整合（COMPLETED 2026-10-09，commit `2879904`）
 
 **目標**：將驗證完成的 V3 前端與核心測試納入版本控制，建立可回退的 Git checkpoint。
 
@@ -100,7 +100,7 @@
 **API 狀態**：
 - ✓ `PATCH /api/items/{id}` 已實作（欄位編輯）
 - ✓ `/api/items?q=...` 已實作（搜尋）
-- ⏳ `GET /api/items?sort=created_desc` 需確認實作
+- ✓ 列表預設排序 `created_at DESC`（Phase 1B-A 實作；不需 sort 參數）
 
 **資料庫狀態**：
 - ✓ 無需 migration（所有必要欄位已存在）
@@ -122,7 +122,7 @@ Commit: "feat: phase-1a integrate V3 SPA frontend and core tests"
 
 ---
 
-### Phase 1B：首頁流程改進與編輯完善
+### Phase 1B：首頁流程改進與編輯完善（1B-A 首頁基本流程 COMPLETED 2026-10-09）
 
 **依賴**：Phase 1A
 
@@ -146,7 +146,7 @@ Commit: "feat: phase-1a integrate V3 SPA frontend and core tests"
 **API 需求**：
 - ✓ `PATCH /api/items/{id}` 已實作
 - ✓ `items.attributes` 已存在
-- ⏳ `GET /api/items?sort=created_desc` 改進
+- ✓ `GET /api/items` 預設 `created_at DESC`（Phase 1B-A；不需 sort 參數）
 
 **驗收標準**：
 - 首頁紀錄按倒序排列
@@ -423,7 +423,7 @@ Phase 1A (V3 Frontend Integration) ← 核心基礎
 **API 需求**：
 - `PATCH /api/items/{id}` —— 欄位局部編輯（已實作 ✓）
 - `PATCH /api/items/{id}/attributes` —— 生活備忘單獨編輯（新增）
-- `GET /api/items?q=...&sort=created_desc` —— 倒序排列搜尋（改進）
+- ✓ `GET /api/items` 預設 `created_at DESC`，搜尋沿用同一順序（Phase 1B-A 實作）
 
 **資料庫狀態**：
 - ✓ `items.attributes` JSON 欄位已存在（schema.sql line 13）
@@ -709,4 +709,5 @@ Phase 7 (Windows Release)
 ## 修改歷史
 
 - **2026-10-09**：初始版本建立，基於 Phase 0 audit 結果
+- **2026-10-09（Phase 1B-A）**：Phase 1A 標記 COMPLETED；列表排序方案確定為預設 `created_at DESC`（不走 sort 參數）；測試基線更新為 928
 

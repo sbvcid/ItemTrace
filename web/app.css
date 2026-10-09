@@ -430,6 +430,104 @@ body {
   max-width: 100%;
 }
 
+/* Latest Record (Featured) & Fresh-Save Highlight (Phase 1B-A) */
+.record-card-featured {
+  grid-column: 1 / -1;
+}
+
+.record-card-featured .record-thumb-container {
+  aspect-ratio: 16 / 9;
+}
+
+.record-card-featured .record-body {
+  padding: 14px 18px 16px;
+  gap: 6px;
+}
+
+.record-card-featured .record-name {
+  font-size: 1.3rem;
+  letter-spacing: -0.02em;
+}
+
+.record-card-featured .record-meta {
+  font-size: 0.88rem;
+  white-space: normal;
+}
+
+.record-badges-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.record-latest-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--color-brand);
+  background: var(--color-primary-subtle);
+  border: 1px solid var(--border-default);
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+}
+
+.record-fresh-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-ai-dark);
+  background: var(--color-ai-surface);
+  border: 1px solid var(--color-ai-border);
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+}
+
+.record-photo-total {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.record-condition {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.record-created {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* 短暫、克制的光圈動畫：資訊本體另有文字標籤，不依賴顏色。 */
+.record-card-fresh {
+  animation: fresh-record-glow 2.6s cubic-bezier(0.16, 1, 0.3, 1) 1;
+}
+
+@keyframes fresh-record-glow {
+  0% {
+    border-color: var(--color-ai-border);
+    box-shadow: 0 0 0 3px hsl(262, 60%, 54%, 0.28), var(--shadow-md);
+  }
+  70% {
+    border-color: var(--color-ai-border);
+    box-shadow: 0 0 0 3px hsl(262, 60%, 54%, 0.10), var(--shadow-sm);
+  }
+  100% {
+    border-color: var(--border-default);
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .record-card-fresh {
+    animation: none;
+  }
+}
+
 /* Empty States */
 .empty-state {
   text-align: center;

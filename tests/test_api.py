@@ -176,11 +176,12 @@ def test_list_items_filters_and_paginates(client):
         create_item(client, name=f"item{index}", category="主機板" if index < 2 else "顯卡")
     assert len(client.get("/api/items").json()) == 5
     assert len(client.get("/api/items?category=主機板").json()) == 2
+    # 預設由新到舊：created_at DESC，同一秒以 id DESC 決勝。
     assert [item["id"] for item in client.get("/api/items?limit=2").json()] == [
-        "ITM-0001", "ITM-0002",
+        "ITM-0005", "ITM-0004",
     ]
     assert [item["id"] for item in client.get("/api/items?limit=2&offset=2").json()] == [
-        "ITM-0003", "ITM-0004",
+        "ITM-0003", "ITM-0002",
     ]
 
 

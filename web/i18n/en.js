@@ -32,6 +32,8 @@ export default {
     cardLifeRecord: 'Everyday item',
     photoCount: '{n} photos',
     modelPrefix: 'Model: {model}',
+    latestBadge: 'Latest record',
+    freshBadge: '✨ Just saved',
   },
   capture: {
     headerTitle: 'Capture Record',

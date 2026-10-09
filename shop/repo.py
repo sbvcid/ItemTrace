@@ -214,12 +214,16 @@ class Repository:
                 text, text, text, text, text, text, text, normalized, *params
             ]
             rows = self.conn.execute(
-                f"SELECT i.* FROM items i{where} ORDER BY i.id LIMIT ? OFFSET ?",  # noqa: S608
+                f"SELECT i.* FROM items i{where}"
+                " ORDER BY i.created_at DESC, i.id DESC LIMIT ? OFFSET ?",  # noqa: S608
                 (*params, limit, offset),
             ).fetchall()
         else:
+            # 首頁預設由新到舊：排序看 created_at，不看 updated_at —— 修改舊
+            # 紀錄不會讓它跳到最前面。同一秒建立的紀錄用 id DESC 決勝。
             rows = self.conn.execute(
-                f"SELECT * FROM items{where} ORDER BY id LIMIT ? OFFSET ?",  # noqa: S608
+                f"SELECT * FROM items{where}"
+                " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",  # noqa: S608
                 (*params, limit, offset),
             ).fetchall()
         return [Item.from_row(row) for row in rows]
