@@ -1,0 +1,44 @@
+{
+  "scenario_id": "L1_label_sony",
+  "provider": "google",
+  "model": "gemini-3.5-flash-lite",
+  "recorded_at": "2026-10-10T03:24:21",
+  "photos": [
+    "label_sony.jpg"
+  ],
+  "context": "",
+  "response_text": "```json\n{\n  \"suggestions\": [\n    {\n      \"field\": \"brand\",\n      \"value\": \"SONY\",\n      \"confidence\": 1.0,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"model\",\n      \"value\": \"WH-1000XM5\",\n      \"confidence\": 1.0,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"name\",\n      \"value\": \"SONY WH-1000XM5\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"identifier:serial\",\n      \"value\": \"4528653\",\n      \"confidence\": 1.0,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"attribute:origin\",\n      \"value\": \"Made in Malaysia\",\n      \"confidence\": 1.0,\n      \"source_photo_index\": 0\n    }\n  ]\n}\n```",
+  "valid": true,
+  "parsed": [
+    {
+      "field": "brand",
+      "value": "SONY",
+      "confidence": 1.0,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "model",
+      "value": "WH-1000XM5",
+      "confidence": 1.0,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "name",
+      "value": "SONY WH-1000XM5",
+      "confidence": 0.95,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "identifier:serial",
+      "value": "4528653",
+      "confidence": 1.0,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "attribute:origin",
+      "value": "Made in Malaysia",
+      "confidence": 1.0,
+      "source_photo_id": "PH0"
+    }
+  ]
+}

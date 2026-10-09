@@ -1,0 +1,57 @@
+{
+  "scenario_id": "L3_receipt_updates",
+  "provider": "google",
+  "model": "gemini-3.5-flash-lite",
+  "recorded_at": "2026-10-10T03:24:28",
+  "photos": [
+    "unknown_part.jpg",
+    "receipt_makita.jpg"
+  ],
+  "context": "name: 不明金屬零件\nnotes（使用者自己的備註）: 五金行買的，忘了名字",
+  "response_text": "```json\n{\n  \"suggestions\": [\n    {\n      \"field\": \"name\",\n      \"value\": \"牧田 18V 震動電鑽\",\n      \"confidence\": 0.99,\n      \"source_photo_index\": 1\n    },\n    {\n      \"field\": \"brand\",\n      \"value\": \"牧田\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 1\n    },\n    {\n      \"field\": \"model\",\n      \"value\": \"DHP484\",\n      \"confidence\": 0.99,\n      \"source_photo_index\": 1\n    },\n    {\n      \"field\": \"category\",\n      \"value\": \"工具\",\n      \"confidence\": 0.9,\n      \"source_photo_index\": 1\n    },\n    {\n      \"field\": \"attribute:vendor\",\n      \"value\": \"光華商場\",\n      \"confidence\": 0.99,\n      \"source_photo_index\": 1\n    },\n    {\n      \"field\": \"attribute:amount\",\n      \"value\": \"NT$12,900\",\n      \"confidence\": 0.99,\n      \"source_photo_index\": 1\n    },\n    {\n      \"field\": \"attribute:purchase_date\",\n      \"value\": \"2026-05-10\",\n      \"confidence\": 0.99,\n      \"source_photo_index\": 1\n    }\n  ]\n}\n```",
+  "valid": true,
+  "parsed": [
+    {
+      "field": "name",
+      "value": "牧田 18V 震動電鑽",
+      "confidence": 0.99,
+      "source_photo_id": "PH1"
+    },
+    {
+      "field": "brand",
+      "value": "牧田",
+      "confidence": 0.95,
+      "source_photo_id": "PH1"
+    },
+    {
+      "field": "model",
+      "value": "DHP484",
+      "confidence": 0.99,
+      "source_photo_id": "PH1"
+    },
+    {
+      "field": "category",
+      "value": "工具",
+      "confidence": 0.9,
+      "source_photo_id": "PH1"
+    },
+    {
+      "field": "attribute:vendor",
+      "value": "光華商場",
+      "confidence": 0.99,
+      "source_photo_id": "PH1"
+    },
+    {
+      "field": "attribute:amount",
+      "value": "NT$12,900",
+      "confidence": 0.99,
+      "source_photo_id": "PH1"
+    },
+    {
+      "field": "attribute:purchase_date",
+      "value": "2026-05-10",
+      "confidence": 0.99,
+      "source_photo_id": "PH1"
+    }
+  ]
+}

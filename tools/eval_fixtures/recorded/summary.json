@@ -1,0 +1,9 @@
+{
+  "provider": "google",
+  "model": "gemini-3.5-flash-lite",
+  "started_at": "2026-10-10T03:24:21",
+  "finished_at": "2026-10-10T03:24:47",
+  "calls": 7,
+  "quality_misses": 0,
+  "note": "合成 fixture 評測；非使用者資料"
+}

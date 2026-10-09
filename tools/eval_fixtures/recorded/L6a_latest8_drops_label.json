@@ -1,0 +1,45 @@
+{
+  "scenario_id": "L6a_latest8_drops_label",
+  "provider": "google",
+  "model": "gemini-3.5-flash-lite",
+  "recorded_at": "2026-10-10T03:24:39",
+  "photos": [
+    "receipt_strap.jpg",
+    "noise_02.jpg",
+    "noise_03.jpg",
+    "noise_04.jpg",
+    "noise_05.jpg",
+    "noise_06.jpg",
+    "noise_07.jpg",
+    "noise_08.jpg"
+  ],
+  "context": "name: 相機鏡頭",
+  "response_text": "```json\n{\n  \"suggestions\": [\n    {\n      \"field\": \"name\",\n      \"value\": \"相機背帶\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"attribute:vendor\",\n      \"value\": \"相機王\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"attribute:amount\",\n      \"value\": \"NT$690\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"attribute:purchase_date\",\n      \"value\": \"2026-06-01\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 0\n    }\n  ]\n}\n```",
+  "valid": true,
+  "parsed": [
+    {
+      "field": "name",
+      "value": "相機背帶",
+      "confidence": 0.95,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "attribute:vendor",
+      "value": "相機王",
+      "confidence": 0.95,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "attribute:amount",
+      "value": "NT$690",
+      "confidence": 0.95,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "attribute:purchase_date",
+      "value": "2026-06-01",
+      "confidence": 0.95,
+      "source_photo_id": "PH0"
+    }
+  ]
+}

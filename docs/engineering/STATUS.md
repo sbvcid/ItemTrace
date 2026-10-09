@@ -1,30 +1,39 @@
 # ItemTrace Engineering Status
 
-最後更新：2026-10-09 18:55  
-當前階段：Phase 2B 已完成（本地 commit，未 push）  
-遠端狀態：本地領先 origin/main（本階段 commit 後 7 ahead；未 push）  
-測試驗證：`pytest -q` 完全通過，全 955 測試無失敗、無跳過
+最後更新：2026-10-10 03:40  
+當前階段：Phase 2C-A 完成（評測與政策；本地 commit，未 push）  
+遠端狀態：本地領先 origin/main（本階段 commit 後 8 ahead；未 push）  
+測試驗證：`pytest -q` 完全通過，全 962 測試無失敗、無跳過
 
 ---
 
 ## 當前階段
 
-**Phase 2B：證據累積與情境式重新理解** ← **COMPLETED**
+**Phase 2C-A：AI 評測與自主性政策** ← **COMPLETED**（評測／政策階段；未改產品程式碼）
 
-完成時間：2026-10-09  
-Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`（本地，未 push）
+完成時間：2026-10-10（資料收集 03:24）  
+Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地，未 push）
 
 完成內容：
-- ✓ 詳情頁可「加入照片」到既有紀錄（新 observation → 上傳 → 自動重新分析），不建立新紀錄；stable id、created_at、原照片全保留
-- ✓ 分析把「既有詮釋（欄位＋attributes＋使用者備註）」與全部（或最新 8 張）證據一起送給 AI；prompt 明確以照片為準
-- ✓ 契約最小擴充：`attribute:<key>` 提案（key pattern 由軟體強制、值非空、單輪上限 24 筆）；`description` 為慣例 key
-- ✓ accept 屬性為「單鍵合併」，不覆蓋使用者自己填的 attributes；使用者備註不被分析覆蓋
-- ✓ 嚴格驗證整批失敗（非法 key／超量）；新的 UI：待確認清單（套用／拒絕／全部套用）＋屬性顯示區塊
-- ✓ 失敗語意：照片先落地；分析失敗顯示「照片已保存，但 AI 整理未完成」＋重試；失敗保留既有 pending
-- ✓ 搜尋保留：`q` 額外命中曾被接受（accepted）的舊建議值；pending/superseded/rejected 猜測不入搜尋
-- ✓ 修正併發缺陷（瀏覽器測試抓到）：per-request 連線並行 accept → `database is locked`；`db.transaction` 改 `BEGIN IMMEDIATE` ＋ 回歸測試
-- ✓ 新增 15 測試（AI 7 ＋ repo 3 ＋ search 2 ＋ V3 情境/靜態 2 ＋ 交易併發 1）；全 955 通過
-- ✓ 瀏覽器端到端（臨時資料根目錄、假 provider）：加入收據 → 自動分析 → 待確認清單 → 全部套用 → 名稱/屬性更新、備註保留 → 搜尋命中；另驗失敗橫幅＋重試
+- ✓ Harness：`tools/evaluate_models.py`（離線重播＝契約回歸守門；`--live --allow-live` 受控即時模式、呼叫上限）＋`tools/make_eval_images.py`（合成 fixture，無個資）
+- ✓ 情境集 7 個：清楚標籤／陌生物件／收據改變詮釋／矛盾證據／證據不足／九張照片之兩種選擇變體
+- ✓ 真實模型評測（`google / gemini-3.5-flash-lite`，free tier，**8 次呼叫**、僅合成圖）：7/7 輸出合法；收據情境正確更新品名＋vendor/amount/date；不確定時空陣列；使用者資料未動
+- ✓ 發現：模型自報信心無鑑別力（全場 0.90~1.00）；模型自發使用 `attribute:<key>` 且本輪詞彙一致（origin／vendor／amount／purchase_date）
+- ✓ 發現（需政策）：矛盾證據被靜默合併（L4）；最新-8 會丟最早的身分標籤導致誤標（L6a：name→相機背帶；L6b 含標籤則型號/序號全對）
+- ✓ 建議：證據選擇「最早 2＋最新 6」；自主性分層（T0 身分/識別碼永不自動；T1 描述性屬性自動、僅空值、可復原、不依賴信心）；2C-B 驗收條件 8 條
+- ✓ 報告：`docs/engineering/AI-EVALUATION-REPORT.md`；+7 harness 測試；全 962 通過
+- ✓ 未改產品程式碼、schema、API；未 push；未傳送任何真實資料
+
+### Phase 2C-A 評測結論摘要（細節見報告）
+
+| 面向 | 結論 |
+|---|---|
+| 契約承載力 | 7/7 合法；`attribute:<key>` 被自發且一致地使用 |
+| 情境式更新 | 收據正確改變詮釋（L3 ✓）；矛盾證據無示警（L4 ✗ —— 政策必須覆蓋） |
+| 不確定處理 | 無字／全黑 → 空陣列，不發明（L2／L5 ✓） |
+| 證據選擇 | 最新-8 會丟最早身分照（L6a ✗）；最早 2＋最新 6 可修（L6b ✓） |
+| 信心值 | 無鑑別力，不可作政策依據 |
+| 可檢索性 | 正確欄位可搜；L6a 型誤標會破壞檢索 |
 
 ### Phase 2B 契約規則（實作即規格）
 
@@ -53,6 +62,7 @@ Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`�
 - Phase 1A：V3 SPA 前端整合與核心驗收（`2879904`）
 - Phase 1B-A：首頁基本流程（`98edc0c`）
 - Phase 2A：AI 建議生命週期與部分失敗語意（`15f2e9b`）
+- Phase 2B：證據累積與情境式重新理解（`22b0c22`）
 
 ---
 
@@ -60,9 +70,9 @@ Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`�
 
 | 項目 | 數值 | 備註 |
 |---|---|---|
-| 測試檔案數 | 36 | conftest + 35 test_*.py |
-| 總測試數 | 955 | 全 pytest 計數（Phase 2B +15） |
-| 通過 | 955 ✓ | 100% pass rate |
+| 測試檔案數 | 37 | conftest + 36 test_*.py（Phase 2C-A 新增 test_evaluate_models.py） |
+| 總測試數 | 962 | 全 pytest 計數（Phase 2C-A +7） |
+| 通過 | 962 ✓ | 100% pass rate |
 | 失敗 | 0 | 零失敗 |
 | 跳過 | 0 | 無跳過 |
 | 覆蓋率 | 未測 | 建議後續補充 |
@@ -76,8 +86,9 @@ Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`�
 - 前端與 UI：test_capture_ui.py (6), test_inbox_ui.py (35)
 - 列印：test_print.py (31), test_print_settings_api.py (20)
 - **V3 核心驗收**：test_v3_core_slice.py (13) —— 原始 5 情境 + Phase 1B-A 5 項 + Phase 2A 1 項 + Phase 2B 2 項
+- **評測 harness**：test_evaluate_models.py (7) —— 離線重播、契約回歸守門、live 需 --allow-live（不碰網路）
 
-**最近運行**：2026-10-09，`pytest -q --junitxml` → tests=955, failures=0, errors=0, skipped=0
+**最近運行**：2026-10-10，`pytest -q --junitxml` → tests=962, failures=0, errors=0, skipped=0
 
 ---
 
@@ -88,7 +99,7 @@ Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`�
 | 狀態 | 定義 | 範例 |
 |---|---|---|
 | **Implemented** | 程式碼存在且功能可用 | SQLite schema, FastAPI endpoints, V3 前端已實作 |
-| **Tested** | 實作已驗證，測試通過 | 955 個 pytest 全通過，V3 core slice test 驗收 |
+| **Tested** | 實作已驗證，測試通過 | 962 個 pytest 全通過，V3 core slice test 驗收 |
 | **Committed** | 變更已進入版本控制 | main branch 上的所有程式碼 |
 | **Pushed** | 變更已推送到遠端 | origin/main 的最新狀態（多個本地 commit 未 push；見下方同步狀態） |
 
@@ -102,7 +113,8 @@ Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`�
 - ✓ V3 前端（Capture/Home/Detail/Settings 完整實作） — **Implemented, Tested, Committed（2879904）, Not Pushed**
 - ✓ 首頁最新紀錄置頂與保存後回首頁（Phase 1B-A） — **Implemented, Tested, Committed（98edc0c）, Not Pushed**
 - ✓ AI 建議生命週期與部分失敗語意（Phase 2A） — **Implemented, Tested, Committed（15f2e9b）, Not Pushed**
-- ✓ 證據累積與情境式重新理解（Phase 2B） — **Implemented, Tested, Committed（本階段）, Not Pushed**
+- ✓ 證據累積與情境式重新理解（Phase 2B） — **Implemented, Tested, Committed（22b0c22）, Not Pushed**
+- ✓ AI 評測 harness 與自主性政策（Phase 2C-A；工具＋文件，未改產品行為） — **Implemented, Tested, Committed（本階段）, Not Pushed**
 
 ### 後端基礎
 - ✓ SQLite + WAL + STRICT 約束 — **Implemented, Tested, Committed, Pushed**
@@ -117,7 +129,7 @@ Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`�
 ### 前端基礎
 - ✓ 零建置 ESM 架構 — **Implemented, Tested, Committed（2879904）**
 - ✓ 輕量路由 + 狀態管理 — **Implemented, Tested, Committed（2879904）**
-- ✓ 繁中 + 英文 i18n — **Implemented, Tested, Committed**（Phase 1B-A 新增 2 keys × 2）
+- ✓ 繁中 + 英文 i18n — **Implemented, Tested, Committed**（1B-A +2、2A +1、2B +19 keys × 2）
 - ✓ 手機 + 桌面響應式排版 — **Implemented, Tested, Committed**
 - ✓ 照片展示與 lazy loading — **Implemented, Tested, Committed**
 
@@ -131,17 +143,17 @@ Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`�
 
 ## 未完成工作
 
-### 立即待做（Phase 2C：模型評測 harness —— study S4，建議）
-1. **模型評測與回歸**
-   - 固定評測案例集（商品標籤／序號混淆／收據／寵物／不明零件／多照片）
-   - `tools/evaluate_models.py`：離線 fixture 重播 ＋ 可選真實 provider；輸出 JSON 報告
-   - 契約（prompt/schema）變更時偵測回歸；換模型只改 `ai_config.local.json`
+### 立即待做（Phase 2C-B：實作評測結論 —— 選擇策略＋T1 自動套用，建議）
+1. **證據選擇**：>8 張時「最早 2＋最新 6」（≤8 全送不變）；單元測試覆蓋邊界
+2. **自動套用政策 T1**：描述性 `attribute:*` 自動更新（僅空值或用戶未動過的鍵），身分/識別碼永不自動；不依賴模型信心
+3. **可回復＋可見**：每次自動變更的事件/復原＋「AI 已自動更新」通知；衝突（新身分 ≠ 既有）升級回確認清單
+4. **驗收**：`AI-EVALUATION-REPORT.md` §6 的 8 條全部滿足；含 fake-provider 回歸＋一次瀏覽器 E2E
 
 ### 替代順序
 - Phase 1B-B 紀錄編輯完善（ROADMAP Phase 1B 剩餘項）
 
 ### 短期（Phase 2–3）
-- Phase 2（2A、2B 完成）：AI Contract 2.0 —— 提案命名空間 ✓、證據累積與情境式理解 ✓、模型評測（S4）待做
+- Phase 2（2A、2B、2C-A 完成）：AI Contract 2.0 —— 提案命名空間 ✓、證據累積 ✓、評測 harness ✓、**自動套用政策實作（2C-B）待做**
 - Phase 3：垃圾桶 & 30 天保留 + 永久刪除
 
 ### 中期（Phase 4–6）
@@ -165,6 +177,10 @@ Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`�
 | i18n 覆蓋率 | 低 | 完整 | 前端全文字已翻譯（1B-A +2、2A +1、2B +19 keys × 2） |
 | `matched_identifier` 不在列表 API | 低 | 已知 | 前端序號欄位目前退回顯示 model；需要的話後續階段補 |
 | 外部 adapter 重新分析不觸發 supersede | 低 | 已知 | tools/analyze_item.py 走通用 `POST /suggestions` 逐筆建立；只有伺服器端 analyze 具「最新詮釋」語意 |
+| 矛盾證據被靜默合併 | 中 | 已驗證（評測 L4） | 2C-B：身分衝突升級確認；購買屬性僅空值自動；詳見 AI-EVALUATION-REPORT §5 |
+| 最新-8 選擇會丟最早的身分照 | 中 | 已驗證（評測 L6a） | 2C-B：改「最早 2＋最新 6」（L6b 證明可行） |
+| 模型自報信心無鑑別力 | 低 | 已驗證（全場 0.9~1.0） | 政策不得依賴信心；信心僅記錄 |
+| `attribute:description` 未被模型自發產生 | 低 | 開放 | 生活描述 prompt 調校＋再評測（2C-B/後續） |
 | 生活備忘欄位設計 | 中 | 開放 | Phase 1B-B；參考 FEATURE-PLAN.md, JOB-TO-BE-DONE.md |
 | 搜尋效能基線 | 低 | 未測 | Phase 5 時詳細評估 |
 
@@ -203,7 +219,7 @@ Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`�
 
 ---
 
-## Phase 2B 變更清單（本階段 commit）
+## Phase 2B 變更清單（commit `22b0c22`，前次）
 
 | 檔案 | 變更 |
 |---|---|
@@ -223,34 +239,52 @@ Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`�
 
 ---
 
+## Phase 2C-A 變更清單（本階段 commit）
+
+| 檔案 | 變更 |
+|---|---|
+| `tools/evaluate_models.py` | 新增評測 harness：離線重播（契約回歸守門、CI 可跑）＋`--live --allow-live` 受控即時模式（呼叫上限、逐情境錄製） |
+| `tools/make_eval_images.py` | 合成 fixture 產生器（PIL；無個資） |
+| `tools/eval_fixtures/scenarios.json` | 7 個評測情境＋結構化期望 |
+| `tools/eval_fixtures/images/`（15 張） | 合成文字圖／雜訊圖（標籤、收據、不明物件、全黑、雜訊） |
+| `tools/eval_fixtures/recorded/`（8 檔） | 真實模型輸出的錄製（`gemini-3.5-flash-lite`，free tier，僅合成圖）＋summary |
+| `tests/test_evaluate_models.py` | +7（錄製存在、契約回歸守門、離線 CLI、live 需二次確認、期望語義） |
+| `docs/engineering/AI-EVALUATION-REPORT.md` | 評測報告＋證據選擇建議＋自主性政策＋2C-B 驗收條件 |
+| `docs/engineering/STATUS.md`, `ROADMAP.md`, `AGENTS.md` | 狀態校準 |
+
+**未變更**：產品程式碼（shop/、web/）、schema、API、測試未刪修（既有 955 全保留）。
+
+---
+
 ## 本地與遠端同步狀態
 
 | 項 | 狀態 |
 |---|---|
 | Branch | main |
-| Ahead/Behind | 7 ahead, 0 behind（未 push；本階段 commit 後） |
+| Ahead/Behind | 8 ahead, 0 behind（未 push；本階段 commit 後） |
 | Uncommitted Changes | 0（本階段變更全數進入獨立 commit） |
 | 衝突 | 無 |
-| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b` —— 未修改、未 amend、未 rebase |
+| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22` —— 未修改、未 amend、未 rebase |
 
 ---
 
 ## 下一個明確任務
 
-### Phase 2C：模型評測 harness（study S4；建議）
+### Phase 2C-B：實作評測結論（證據選擇＋T1 自動套用；依 AI-EVALUATION-REPORT §6）
 檢查清單：
-- [ ] 評測案例集（商品／序號混淆／收據／寵物／不明零件／多照片）＋離線 fixture 重播
-- [ ] `tools/evaluate_models.py` 產出 JSON 報告（準確率／失敗模式／延遲）
-- [ ] 契約（prompt/schema）變更時的回歸偵測；換模型只改設定檔
-- [ ] 全測試通過
+- [ ] 證據選擇「最早 2＋最新 6」（>8 張）；邊界單元測試（8/9/12 張）
+- [ ] T1 自動套用：描述性 `attribute:*`（僅空值或 AI 上次套用的鍵；身分/識別碼永不自動；不依賴信心）
+- [ ] 通知與復原：「✨ AI 已自動更新」＋一鍵復原（事件 prev/next）；衝突升級回確認清單
+- [ ] 驗收 8 條全滿足（fake-provider 回歸＋一次瀏覽器 E2E）；全測試通過
 
 （替代順序：Phase 1B-B 紀錄編輯完善 —— 見 ROADMAP Phase 1B 剩餘項。）
 
 ### AI-Native 架構研究對照（`docs/engineering/AI-NATIVE-ARCHITECTURE.md`）
 - ✓ S1（提案命名空間）→ Phase 2B：`attribute:<key>` 受驗證契約
 - ✓ S2（修訂語意＋可靠性修正）→ Phase 2A
-- ◐ S3（前端呈現/可溯性）→ Phase 2B 完成審閱＋屬性顯示＋失敗重試；來源標籤（✨AI/✍手動）尚待
-- 待做：S4（模型評測 harness）＝ Phase 2C
+- ◐ S3（前端呈現/可溯性）→ 審閱＋屬性顯示＋失敗重試完成；來源標籤（✨AI/✍手動）＝ 2C-B 隨自動套用一起補
+- ✓ S4（模型評測 harness）→ Phase 2C-A（評測＋政策；含真實模型證據）
+- 下一步 S5：受控自動套用（可回復；見 AI-EVALUATION-REPORT §5/§6）
 - 研究結論：不換資料模型；全部 additive、無 schema migration
 
 ---
@@ -272,3 +306,4 @@ Commit：`feat: phase-2b evidence accumulation and contextual reinterpretation`�
 - **2026-10-09**：新增 AI-Native 架構研究（`docs/engineering/AI-NATIVE-ARCHITECTURE.md`）；本次未變更程式碼、schema、資料、前端或測試
 - **2026-10-09**：Phase 2A 完成——AI 建議生命週期（成功分析 supersede 舊 pending／失敗保留／superseded 終態）與 capture 部分失敗語意（誠實回報＋原地重試不重複）；測試基線 928 → 940
 - **2026-10-09**：Phase 2B 完成——證據累積（詳情頁加入照片、不建新紀錄）、情境式重新理解（既有詮釋＋新證據）、`attribute:<key>` 契約、失敗保留與重試、accepted 詞彙搜尋保留、`BEGIN IMMEDIATE` 併發修正；測試基線 940 → 955
+- **2026-10-10**：Phase 2C-A 完成——評測 harness＋合成 fixture；實際評測 `gemini-3.5-flash-lite`（8 次呼叫、free tier、僅合成圖）：契約 7/7 合法、`attribute:<key>` 被自發使用、信心無鑑別力、L4 矛盾證據合併、L6a 選擇策略丟失身分；產出證據選擇建議與 T0/T1 自主性政策＋2C-B 驗收條件；測試基線 955 → 962

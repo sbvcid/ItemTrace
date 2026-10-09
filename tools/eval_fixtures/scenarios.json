@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "description": "Phase 2C-A 評測情境。expectations 是「期望行為」的結構化檢查；kind 語義見 tools/evaluate_models.py 的 evaluate_expectation。所有圖片都是 tools/make_eval_images.py 產生的合成圖。",
+  "scenarios": [
+    {
+      "id": "L1_label_sony",
+      "title": "可辨識商品標籤",
+      "purpose": "基本能力：從清楚標籤讀出品牌／型號／序號。",
+      "photos": ["label_sony.jpg"],
+      "context": "",
+      "expectations": [
+        {"kind": "field_value_contains", "field": "brand", "contains": "sony", "ci": true},
+        {"kind": "field_value_contains", "field": "model", "contains": "wh-1000xm5", "ci": true},
+        {"kind": "any_value_contains", "contains": "4528653"}
+      ]
+    },
+    {
+      "id": "L2_unknown_no_text",
+      "title": "無文字的陌生物件",
+      "purpose": "不確定時不得發明品牌／型號／序號。",
+      "photos": ["unknown_part.jpg"],
+      "context": "",
+      "expectations": [
+        {"kind": "no_field", "field": "brand"},
+        {"kind": "no_field", "field": "model"},
+        {"kind": "no_field_prefix", "prefix": "identifier:"},
+        {"kind": "count_at_most", "n": 3}
+      ]
+    },
+    {
+      "id": "L3_receipt_updates",
+      "title": "後補收據改變既有詮釋",
+      "purpose": "情境式重新理解：以收據更新品名並補 vendor／amount／date；不回吐使用者備註。",
+      "photos": ["unknown_part.jpg", "receipt_makita.jpg"],
+      "context": "name: 不明金屬零件\nnotes（使用者自己的備註）: 五金行買的，忘了名字",
+      "expectations": [
+        {"kind": "any_value_contains_any", "contains": ["牧田", "makita"], "ci": true},
+        {"kind": "any_attribute_value_contains", "contains": "光華"},
+        {"kind": "any_attribute_value_contains_any", "contains": ["12,900", "12900"]},
+        {"kind": "any_attribute_value_contains_any", "contains": ["2026-05-10", "2026/05/10", "2026-5-10"]},
+        {"kind": "no_field", "field": "notes"}
+      ]
+    },
+    {
+      "id": "L4_contradiction",
+      "title": "矛盾證據（標籤 vs 發票）",
+      "purpose": "觀察模型如何處理互相矛盾的來源；硬檢查只有「不得把兩個品牌併成同一個值」。",
+      "photos": ["label_toshiba.jpg", "receipt_seagate.jpg"],
+      "context": "",
+      "expectations": [
+        {"kind": "no_value_combines", "tokens": ["toshiba", "seagate"], "ci": true}
+      ]
+    },
+    {
+      "id": "L5_insufficient_dark",
+      "title": "證據不足（近乎全黑）",
+      "purpose": "證據不足時保留不確定：不發明識別資訊。",
+      "photos": ["dark_blank.jpg"],
+      "context": "",
+      "expectations": [
+        {"kind": "no_field", "field": "brand"},
+        {"kind": "no_field", "field": "model"},
+        {"kind": "no_field_prefix", "prefix": "identifier:"},
+        {"kind": "count_at_most", "n": 3}
+      ]
+    },
+    {
+      "id": "L6a_latest8_drops_label",
+      "title": "九張照片／現行最新-8 選擇（標籤被丟棄）",
+      "purpose": "模擬現行策略：最早的身份標籤（label_nikon）不在送出的照片內 → 預期無法辨識 50mm 型號／序號；若照樣產出反而是幻覺。",
+      "photos": ["receipt_strap.jpg", "noise_02.jpg", "noise_03.jpg", "noise_04.jpg", "noise_05.jpg", "noise_06.jpg", "noise_07.jpg", "noise_08.jpg"],
+      "context": "name: 相機鏡頭",
+      "expectations": [
+        {"kind": "no_value_contains_any", "contains": ["nikkor", "2234567", "50mm"], "ci": true}
+      ]
+    },
+    {
+      "id": "L6b_label_included",
+      "title": "九張照片／保留最早標籤的替代選擇",
+      "purpose": "同一筆紀錄若保留最早的身份標籤（label_nikon）＋最新 7 張 → 應能讀出鏡頭型號／序號，證明選擇策略是關鍵。",
+      "photos": ["label_nikon.jpg", "receipt_strap.jpg", "noise_02.jpg", "noise_03.jpg", "noise_04.jpg", "noise_05.jpg", "noise_06.jpg", "noise_07.jpg"],
+      "context": "name: 相機鏡頭",
+      "expectations": [
+        {"kind": "any_value_contains_any", "contains": ["nikkor", "50mm"], "ci": true},
+        {"kind": "any_value_contains", "contains": "2234567"}
+      ]
+    }
+  ]
+}

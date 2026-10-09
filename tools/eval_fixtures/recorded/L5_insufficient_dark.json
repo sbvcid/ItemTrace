@@ -1,0 +1,13 @@
+{
+  "scenario_id": "L5_insufficient_dark",
+  "provider": "google",
+  "model": "gemini-3.5-flash-lite",
+  "recorded_at": "2026-10-10T03:24:36",
+  "photos": [
+    "dark_blank.jpg"
+  ],
+  "context": "",
+  "response_text": "```json\n{\n  \"suggestions\": []\n}\n```",
+  "valid": true,
+  "parsed": []
+}

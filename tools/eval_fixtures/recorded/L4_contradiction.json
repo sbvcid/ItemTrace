@@ -1,0 +1,63 @@
+{
+  "scenario_id": "L4_contradiction",
+  "provider": "google",
+  "model": "gemini-3.5-flash-lite",
+  "recorded_at": "2026-10-10T03:24:31",
+  "photos": [
+    "label_toshiba.jpg",
+    "receipt_seagate.jpg"
+  ],
+  "context": "",
+  "response_text": "```json\n{\n  \"suggestions\": [\n    {\n      \"field\": \"name\",\n      \"value\": \"2TB HDD\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"brand\",\n      \"value\": \"TOSHIBA\",\n      \"confidence\": 0.99,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"model\",\n      \"value\": \"DT01ACA200\",\n      \"confidence\": 0.99,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"category\",\n      \"value\": \"硬碟\",\n      \"confidence\": 0.9,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"identifier:serial\",\n      \"value\": \"X4T2ABC\",\n      \"confidence\": 0.99,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"attribute:vendor\",\n      \"value\": \"PChome\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 1\n    },\n    {\n      \"field\": \"attribute:amount\",\n      \"value\": \"NT$1,890\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 1\n    },\n    {\n      \"field\": \"attribute:purchase_date\",\n      \"value\": \"2026-03-02\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 1\n    }\n  ]\n}\n```",
+  "valid": true,
+  "parsed": [
+    {
+      "field": "name",
+      "value": "2TB HDD",
+      "confidence": 0.95,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "brand",
+      "value": "TOSHIBA",
+      "confidence": 0.99,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "model",
+      "value": "DT01ACA200",
+      "confidence": 0.99,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "category",
+      "value": "硬碟",
+      "confidence": 0.9,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "identifier:serial",
+      "value": "X4T2ABC",
+      "confidence": 0.99,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "attribute:vendor",
+      "value": "PChome",
+      "confidence": 0.95,
+      "source_photo_id": "PH1"
+    },
+    {
+      "field": "attribute:amount",
+      "value": "NT$1,890",
+      "confidence": 0.95,
+      "source_photo_id": "PH1"
+    },
+    {
+      "field": "attribute:purchase_date",
+      "value": "2026-03-02",
+      "confidence": 0.95,
+      "source_photo_id": "PH1"
+    }
+  ]
+}
