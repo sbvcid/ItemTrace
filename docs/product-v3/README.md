@@ -1,94 +1,102 @@
-# ItemTrace V3 — Product Proposal
+# ItemTrace V3 — Product Proposal (Consistency Pass)
 
-> 狀態：Proposal（設計提案，尚未施工）
-> 日期：2026-10-07
-> 範圍：產品重新定義 → UX 架構 → 視覺系統 → 前端架構 → 後端演進分級 → 施工階段
-> 前提：舊 frontend（`ui/`）已移除，不作為設計約束；backend（`shop/`）視為成熟資產。
-
----
-
-## 一句話
-
-**ItemTrace V3 是一份「實體物品的可信履歷」：用手機在一分鐘內把一件東西變成一份會持續長大的紀錄，日後找得到、認得出、而且證明得了它當時的樣子。**
-
-V2 是「一個有 Inbox、列表、詳細頁的資料管理工具」。
-V3 是「物品履歷」：拍照即建檔、AI 打草稿、人確認、在每一次物品**轉手的時刻**追加快照、用一張貼在實體上的 QR 標籤把實體與紀錄綁在一起。
+> 狀態：Proposal（產品方向精準校準完成）  
+> 日期：2026-10-07  
+> 產品核心一句話：**「拍下來，AI 幫你記住，以後找得到。」**  
+> 定位本質：**一個極簡的拍照記錄工具，底層由 AI 自動整理現實世界中值得留下來的東西。**
 
 ---
 
-## 閱讀順序
+## 零、在開始之前：最根本的七個問題
 
-給下一個 Agent：**依序讀完 1–5 才動手寫任何 code。** 6–14 是施工時的規格。
+在深入任何規格前，我們先用最白話、不帶技術術語的語言回答這七個問題：
 
-| # | 文件 | 回答的問題 |
-|---|---|---|
-| 1 | [PRODUCT-VISION.md](PRODUCT-VISION.md) | 這個產品是什麼、為什麼存在、原則、Flywheel |
-| 2 | [TARGET-USERS.md](TARGET-USERS.md) | 為誰設計、不為誰設計 |
-| 3 | [JOB-TO-BE-DONE.md](JOB-TO-BE-DONE.md) | 使用者雇用 ItemTrace 做什麼、核心使用情境 |
-| 4 | [PRODUCT-ARCHITECTURE.md](PRODUCT-ARCHITECTURE.md) | 產品物件模型、狀態模型、重大決策紀錄（Inbox、Item、Timeline…） |
-| 5 | [INFORMATION-ARCHITECTURE.md](INFORMATION-ARCHITECTURE.md) | 導覽、路由、畫面清單、術語表 |
-| 6 | [USER-JOURNEYS.md](USER-JOURNEYS.md) | 11 條完整旅程，逐階段的目標／摩擦／回應／錯誤 |
-| 7 | [AI-EXPERIENCE.md](AI-EXPERIENCE.md) | AI 的角色、審核模型、狀態、失敗處理 |
-| 8 | [FEATURE-PLAN.md](FEATURE-PLAN.md) | Core / Important / Optional / Future / Reject；Keep / Change / Merge / Remove / Add |
-| 9 | [BACKEND-IMPACT.md](BACKEND-IMPACT.md) | Level 0–3 後端變更規格、不可動的資產 |
-| 10 | [UX-DESIGN.md](UX-DESIGN.md) | 互動模型、畫面規格、狀態、Responsive 策略、無障礙 |
-| 11 | [VISUAL-DIRECTION.md](VISUAL-DIRECTION.md) | 視覺方向、字體、色彩角色、照片處理、AI 呈現 |
-| 12 | [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md) | Tokens、元件規格 |
-| 13 | [FRONTEND-ARCHITECTURE.md](FRONTEND-ARCHITECTURE.md) | `web/` 結構、技術選型、狀態、上傳佇列、測試 |
-| 14 | [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | 施工階段、驗收標準、風險與取捨 |
+### 1. ItemTrace 到底是什麼？
+**一款「拍下來，AI 幫你記住，以後找得到」的本機隨手記錄工具。**  
+它不是一套沈重繁瑣的 inventory 物品庫軟體，也不是冰冷的資產管理系統。它的本質是：**當你在生活中看到、買到、遇到任何覺得值得留下來的東西，拿起手機隨手一拍，AI 幫忙理解、整理並記住，讓你在需要時一秒找回來。**
 
----
+### 2. 使用者為什麼第一次打開它？
+**「我想留下這個東西的資訊，但我完全不想花時間整理它。」**  
+買了新 3C、拆箱新器材、在路上或店裡看到感興趣的東西、或是整理抽屜裡的工具——使用者想把型號、規格、序號或特徵留下來，但極度討厭手動打字填表單。「討厭手打」是痛苦的表象，最核心的障礙是「不想花心力整理」。使用者聽說 ItemTrace「只要拍下來，AI 自己會幫忙看懂並整理好」，所以打開試試看。
 
-## 十個最重要的產品變化
+### 3. 使用者完成什麼後會覺得「這真的很好用」？
+**拍完照片，AI 已經把東西是什麼、廠牌、型號、規格，甚至難辨認的序號全部看懂並整理好了。**  
+使用者看一眼：「AI 整理好了，都對！」點一下「✓ 存起來」，一份漂亮的紀錄立刻留下來。**全程沒打一個字，花不到 15 秒。**  
+使用者會感受到純粹的輕鬆：「這才是我要的，完全不用我花心思整理！」
 
-| # | 變化 | 一句話理由 |
-|---|---|---|
-| 1 | **定位收斂為「可信履歷」**，不是泛用居家盤點 | backend 最強的資產是 provenance；泛用盤點是低留存的擁擠市場 |
-| 2 | **Inbox 作為一個「地方」被移除**，改成「拍照建檔 Capture Session」+ 只在有東西時出現的「未整理照片」 | 使用者想建立的是「一件東西」，不是「整理一堆照片」 |
-| 3 | **Observation → 快照 Snapshot，並且帶「目的」**（取得、出貨前、收回、維修…） | 有價值的紀錄發生在物品轉手的時刻 |
-| 4 | **Item Detail → 物品履歷 Dossier**：照片優先、身分其次、時間軸收尾 | 打開一件東西時，第一個問題是「是這個嗎？」 |
-| 5 | **Events + Observations 合併成一條時間軸** | 使用者不區分「資料變更」和「拍照紀錄」，他只想知道「發生過什麼」 |
-| 6 | **AI 從按鈕變成背景草稿員**：拍完自動辨識、建議直接長在欄位上、識別碼一律逐筆確認 | AI 的價值是省掉打字，不是多一個要記得按的按鈕 |
-| 7 | **「待確認」是一個衍生的佇列**，不是 Item 的狀態 | 尊重 backend「沒有 draft」的決策，同時給使用者明確的待辦 |
-| 8 | **列印 → 標籤 Label，帶 QR 連回履歷** | 讓實體物品自己帶著通往紀錄的入口，形成回訪迴圈 |
-| 9 | **Evidence Export → 證據包**：一個 zip + 一份人看得懂的報告 | 需要證據的對象（買家、平台客服、保險）讀不懂 JSON |
-| 10 | **手機是一級公民**：Capture 與查詢以 390px 為主場設計；桌機負責審核、整理、輸出 | 物品在哪裡，拍照就在哪裡；印表機在哪裡，輸出就在哪裡 |
+### 4. 為什麼他下次還會使用？
+* **拍一下就搞定**：留下任何紀錄毫無負擔，看到任何值得記的東西隨手拍。
+* **找回極快**：幾個月後想查「上次看到那個東西叫什麼」「保固序號是多少」「當初拍的細節」，搜兩個字立刻秒回。
+* **隨手補充**：日後想補張照片、隨手記個備註，打開就能加。
+* **資料全在本地**：單純一個資料夾，不需要帳號，不擔心雲端收費或隱私外洩。
 
----
+### 5. AI 在裡面到底做什麼？
+**「AI 負責理解現實世界的畫面，自動整理好內容。」**  
+使用者隨手拍下外觀、標籤或包裝，AI 負責理解畫面內容並整理出結構化草稿。更重要的是，**AI 會理解照片內容**：如果是值得長期留存的物品，整理出名稱、規格與序號；如果只是隨手拍的照片（例如風景或寵物），它就只是一張照片，**不強迫每一張照片都硬轉成複雜的物品資料**。
 
-## 後端結論（摘要）
+### 6. 普通人是否可以完全不理解底層資料模型就使用？
+**絕對可以，而且必須可以！**  
+「物品（Item）」不是使用者要預先建立的資料表，而是 **AI 整理後的產出結果**。  
+使用者不需要知道什麼是 `Observation`、`Suggestion`、`Identifier` 抽象或 `Event`。使用者眼裡只有：**拍下這張照片 → AI 整理的內容 → 看一眼存起來 → 以後找回來。**
 
-* **V3 不需要任何 Level 3（核心資料模型破壞性）變更。** 六張核心表、events／revert、suggestion 與事實分離、identifier 正規化與撞號語意、照片不可變與 sha256、intake 原子性、template allowlist、預覽即列印 pipeline、AI key 安全模型 —— 全部原樣保留。
-* 需要的是一組 **Level 1** 小型增補（SPA 服務、縮圖、列表衍生欄位、修改後接受、supersede、證據 zip、capture session、QR binding、網路資訊、備份 API）與四項 **Level 2**（AI 背景工作、證據報告、快照目的欄位與遷移機制、LAN 開關）。
-* 詳見 [BACKEND-IMPACT.md](BACKEND-IMPACT.md)。
-
-> 結論的語氣是：**資料模型是對的，錯的是包在它外面的產品形狀。**
+### 7. 二手賣家是不是核心，還是只是重要 Use Case？
+**二手賣家是重要 Use Case（Strong Use Case），但絕非產品的核心身分。**  
+產品的核心身分是**「所有想要極低成本把身邊值得留下的東西記住的普通人」**。  
+出貨快照、收回比對、標籤列印與封存包匯出全部屬於**「進階能力（Advanced Capability）」**，安靜沉在次級選單中，需要時隨時能用，但絕不跳到第一線把普通使用者嚇跑。
 
 ---
 
-## 最終 IA（摘要）
+## 一、產品四層分級架構（The 4-Layer Product Architecture）
+
+為了不讓進階能力破壞日常極簡體驗，ItemTrace 嚴格劃分四個層級：
 
 ```text
-手機（底部列）           桌機（左側欄）
-┌──────────────────┐    ┌──────────────┬──────────────────────────┐
-│ 物品庫 │ ◉拍照 │ 待確認 │    │ 物品庫        │                          │
-└──────────────────┘    │ 待確認  (3)   │      內容區               │
-                        │ 未整理照片 (12)*│                          │
-                        │ ─────────    │                          │
-                        │ 設定          │                          │
-                        └──────────────┴──────────────────────────┘
-                        * 只在非空時出現
-
-物品履歷 /i/ITM-0042   ← QR 標籤直接開這裡
-  照片 → 身分（含 AI 建議）→ 事實與識別碼 → 時間軸（快照 + 變更）
-  動作：新增快照 · 標籤 · 證據包 · ⋯（標記離手／作廢／比對快照）
+┌────────────────────────────────────────────────────────────────────────┐
+│ 1. Core Experience (核心體驗) ── 任何使用者第一次用就能享受到的極簡體驗 │
+│    • 隨手拍照 (Capture)                                                │
+│    • AI 自動理解與整理 (AI Understand & Organize)                      │
+│    • 超低摩擦確認 (看一下，✓ 存起來)                                    │
+│    • 直觀檢視與隨手找回 (View & Effortless Search)                      │
+├────────────────────────────────────────────────────────────────────────┤
+│ 2. Supporting Experience (支援體驗) ── 讓日常生活紀錄更完整             │
+│    • 追加照片與生活筆記 (Add Photo & Note)                              │
+│    • 補充日常資訊 (購買資訊、保固、存放位置)                            │
+│    • 電腦端與手機端查看                                                │
+│    • 狀態切換 (在手邊 / 已不在手邊 / 作廢)                              │
+├────────────────────────────────────────────────────────────────────────┤
+│ 3. Advanced Capability (進階能力) ── 特殊情境與特定需求 (平常安靜隱形)  │
+│    • 標籤貼紙列印 (Label Printing)                                     │
+│    • 轉手/出貨/送修快照與前後比對 (Compare)                             │
+│    • 一鍵匯出完整紀錄封存包 (Archive Package ZIP)                       │
+│    • 相機大批照片匯入整理 (/unsorted)                                  │
+├────────────────────────────────────────────────────────────────────────┤
+│ 4. Infrastructure (底層資產) ── 默默守護資料安全與開源價值 (無感知)   │
+│    • 原始照片不可覆寫與 SHA-256 去重                                   │
+│    • Events 變更完整歷史與單欄位精確復原 (Revert)                      │
+│    • SQLite WAL 安全本機備份與完整性檢查 (Backup & Verify)             │
+│    • 開放 API 契約與開源自足資料夾結構                                │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 文件撰寫原則
+## 二、閱讀導引（docs/product-v3/ 目錄索引）
 
-* 每個重大決策都以 **Problem → Insight → Decision → Why → Trade-off → Alternative** 記錄（集中在 [PRODUCT-ARCHITECTURE.md §5](PRODUCT-ARCHITECTURE.md#5-重大決策紀錄)）。
-* 中文為主、技術名詞保留英文；UI 文案以 zh-TW 為準，en 為對照。
-* 「backend 名稱」與「產品名稱」分開記錄（術語表見 [INFORMATION-ARCHITECTURE.md §7](INFORMATION-ARCHITECTURE.md#7-術語表)）。施工時 API 用 backend 名稱，UI 只出現產品名稱。
+本套 Proposal 構成了未來 V3 實作的唯一準則：
 
+| # | 文件 | 核心回答的問題 |
+|---|---|---|
+| 1 | [PRODUCT-VISION.md](PRODUCT-VISION.md) | 產品定位、願景、七大生活化原則、無摩擦記住飛輪 |
+| 2 | [TARGET-USERS.md](TARGET-USERS.md) | 共同核心需求（不想花時間整理）、廣泛生活場景、賣家作為進階 Use Case |
+| 3 | [JOB-TO-BE-DONE.md](JOB-TO-BE-DONE.md) | 真正的核心 Job：想留下記錄但不想花時間整理；三層 Use Cases |
+| 4 | [PRODUCT-ARCHITECTURE.md](PRODUCT-ARCHITECTURE.md) | 四層架構、Item 作為 AI 整理結果、生活化心智模型 vs 技術解耦 |
+| 5 | [INFORMATION-ARCHITECTURE.md](INFORMATION-ARCHITECTURE.md) | 極簡入口「📷 拍照」與「🔍 找回來」、生活化術語對照表 |
+| 6 | [USER-JOURNEYS.md](USER-JOURNEYS.md) | 核心旅程（拍照→AI理解整理→存起來→找回來）與進階旅程 |
+| 7 | [AI-EXPERIENCE.md](AI-EXPERIENCE.md) | 「AI 幫我理解與整理」低摩擦確認、OCR 視覺輔助、不強迫建 Item |
+| 8 | [FEATURE-PLAN.md](FEATURE-PLAN.md) | Core/Supporting/Advanced/Infra 分級清單與拒絕的想法 |
+| 9 | [BACKEND-IMPACT.md](BACKEND-IMPACT.md) | 後端作為底層資產（0 項 Level 3 變更）、增量端點規格 |
+| 10 | [UX-DESIGN.md](UX-DESIGN.md) | 現代生活工具 UX、相機第一觸發點、直覺找回、雙端適配 |
+| 11 | [VISUAL-DIRECTION.md](VISUAL-DIRECTION.md) | 現代工藝生活感美學、溫潤藏青色、AI Sparkle |
+| 12 | [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md) | 現代簡潔 CSS Tokens、大快門按鈕、AI 整理卡片規範 |
+| 13 | [FRONTEND-ARCHITECTURE.md](FRONTEND-ARCHITECTURE.md) | 零編譯純 ESM 架構、開源友善、`web/` 目錄、微型 Store |
+| 14 | [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | Core Loop First 分期計畫（Phase 0 至 4）、驗收標準、重大取捨 |
