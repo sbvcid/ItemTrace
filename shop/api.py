@@ -119,16 +119,41 @@ def create_app(config: Config | None = None) -> FastAPI:
     _register_error_handlers(app)
     app.include_router(router)
     app.include_router(settings_router)
-    _register_ui(app)
 
     @app.get("/files/{path:path}", include_in_schema=False)
     def serve_file(path: str, cfg: Annotated[Config, Depends(get_config)]) -> FileResponse:
         return _serve_file(cfg, path)
 
+    _register_web(app)
+    _register_ui(app)
+
     return app
 
 
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
+
+
+def _register_web(app: FastAPI) -> None:
+    """掛載 ItemTrace V3 現代零建置 Web 介面（web/ 目錄）。
+
+    SPA 路由契約：
+    1. 非 /api/* 與非 /files/* 的請求，若檔案存在則返回靜態檔案（如 .css, .js）。
+    2. 其他前端路由（/capture, /i/:id, /settings 等）回退至 web/index.html 由客戶端 router 處理。
+    3. 不干擾 /api/* 的 404 回應。
+    """
+    if not WEB_DIR.is_dir() or not (WEB_DIR / "index.html").is_file():
+        return
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str) -> FileResponse:
+        if full_path.startswith("api/"):
+            raise NotFoundError(f"API 端點不存在：/{full_path}")
+        if full_path:
+            candidate = (WEB_DIR / full_path).resolve()
+            if candidate.is_file() and candidate.is_relative_to(WEB_DIR.resolve()):
+                return FileResponse(candidate)
+        return FileResponse(WEB_DIR / "index.html")
 
 
 def _register_ui(app: FastAPI) -> None:
@@ -1041,18 +1066,27 @@ def stats(repo: Repo, limit: Annotated[int, Query(ge=1, le=200)] = 10) -> StatsO
 def _serve_file(cfg: Config, path: str) -> FileResponse:
     """提供已歸檔照片與 inbox 待處理照片。
 
-    photos.filename 與 InboxEntry.relative 存的都是相對 DATA_ROOT 的路徑
-    （SPEC-v1 §3），所以網址要寫成 /files/files/ITM-0001/original/a.jpg、
-    /files/inbox/a.jpg —— 前段 /files/ 是掛載點，後段才是資料庫存的相對路徑。
+    支援兩種路徑格式：
+    1. 相對 files_dir：例如 ITM-0001/original/a.jpg（前端常見之 /files/ITM-0001/...）
+    2. 相對 data_root：例如 files/ITM-0001/original/a.jpg 或 inbox/a.jpg（相容舊式 /files/files/... 或 /files/inbox/...）
 
     只開放 files/ 與 inbox/ 兩個子樹：DATA_ROOT 底下還有 catalog.db 與
     config.json，解析後不在這兩個目錄內一律 404。
     """
-    target = (cfg.data_root / path).resolve()
     roots = (cfg.files_dir.resolve(), cfg.inbox_dir.resolve())
-    if not any(target.is_relative_to(root) for root in roots) or not target.is_file():
-        raise NotFoundError(f"找不到檔案：{path}")
-    return FileResponse(target)
+    candidates = [
+        (cfg.data_root / path).resolve(),
+        (cfg.files_dir / path).resolve(),
+        (cfg.inbox_dir / path).resolve(),
+    ]
+    for target in candidates:
+        try:
+            if any(target.is_relative_to(root) for root in roots) and target.is_file():
+                return FileResponse(target, headers={"Cache-Control": "public, max-age=86400"})
+        except (ValueError, OSError):
+            continue
+
+    raise NotFoundError(f"找不到檔案：{path}")
 
 
 def _photo_reader(cfg: Config):
