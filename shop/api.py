@@ -45,7 +45,7 @@ from .ai_config import AiConfigError
 from .config import Config, ConfigError
 from .errors import ConflictError, NotFoundError, ValidationError
 from . import evidence as evidence_mod
-from .models import Item
+from .models import Item, Photo
 from .repo import Repository
 from .settings import router as settings_router
 from .schemas import (
@@ -566,13 +566,26 @@ def analyze_item_photos(
     item_id: str,
     repo: Repo,
     cfg: Annotated[Config, Depends(get_config)],
+    auto: Annotated[
+        bool,
+        Query(description="依政策自動套用低風險項目（可復原）；預設全部待確認"),
+    ] = False,
 ) -> list[SuggestionOut]:
     """用商品的 original 照片跑 AI 分析（手機「AI 自動填入」按鈕）。
 
     結果是 **pending suggestions** —— 推論，不是事實。
-    主表資料完全不受影響：要有人逐筆接受（POST
+    **預設（auto=false）**主表完全不受影響：要有人逐筆接受（POST
     /api/suggestions/{id}/accept）才會寫進商品（推論與事實分離，
-    SPEC-v1 §1）。這個端點自己永不修改 items。
+    SPEC-v1 §1）。capture 的審閱流程與外部 adapter 都走這條。
+
+    **auto=true（Phase 2C-B，詳情頁補證據後的重讀）**：依決定性的
+    自主性政策（不看模型自報信心）把合格項目直接套用 ——
+    描述性屬性、空的身分欄位、以及先前由系統自動填入的身分值；
+    使用者編輯或確認過的欄位、識別碼、category/condition/notes
+    一律留待確認；購買資訊只在「現值為空且同一張照片也提供身分
+    資訊」時自動，否則升級為衝突確認。自動套用產生
+    status='accepted'、source='auto' 的建議（可用
+    POST /api/suggestions/{id}/undo 復原）。
 
     Phase 2B：照片會連同「目前的已知資訊」一起送出 —— 後補的證據
     （例如收據）能修正既有詮釋，而不是只看新照片從零猜。已知資訊
@@ -589,10 +602,7 @@ def analyze_item_photos(
             f"{item_id} 沒有 original 照片，沒有東西可以辨識。"
             " 先用 Inbox 建檔並上傳照片。"
         )
-    # 新證據一定要進這一輪：照片超過上限時保留最新的幾張，
-    # 但仍以時間順序送出（source_photo_index 的語意不變）。
-    if len(photos) > ai_client.MAX_PHOTOS:
-        photos = photos[-ai_client.MAX_PHOTOS:]
+    photos = _select_photos_for_analysis(photos)
 
     try:
         ai = ai_config.load_config()
@@ -621,14 +631,16 @@ def analyze_item_photos(
 
     # Phase 2A：成功的一輪是「最新詮釋」—— 舊 pending 在同一個交易內
     # 失效（superseded），失敗的分析（上面已 raise）永遠碰不到既有建議。
-    created, _superseded = repo.replace_pending_suggestions(
+    # Phase 2C-B：auto=true 時同一交易內先套用政策合格的項目。
+    applied, created, _superseded = repo.commit_analysis(
         item_id,
         parsed,
         model_name=ai.model,
+        auto=auto,
         source="external",
         actor="external",
     )
-    return to_outs(created)
+    return to_outs([*applied, *created])
 
 
 @router.post(
@@ -648,6 +660,20 @@ def accept_suggestion(suggestion_id: str, repo: Repo) -> SuggestionOut:
 )
 def reject_suggestion(suggestion_id: str, repo: Repo) -> SuggestionOut:
     return to_out(repo.reject_suggestion(suggestion_id))
+
+
+@router.post(
+    "/api/suggestions/{suggestion_id}/undo",
+    response_model=SuggestionOut,
+    tags=["suggestions"],
+)
+def undo_suggestion(suggestion_id: str, repo: Repo) -> SuggestionOut:
+    """復原一次「自動套用」（Phase 2C-B）：值回到前一個狀態。
+
+    只允許 source='auto' 且 status='accepted' 的建議；復原本身記為
+    使用者動作（寫回 actor=user），之後同一欄位不再被自動覆蓋。
+    """
+    return to_out(repo.undo_auto_suggestion(suggestion_id))
 
 
 # ----------------------------------------------------------------------
@@ -1144,6 +1170,19 @@ def _analysis_context(item: Item) -> str:
             + json.dumps(item.attributes, ensure_ascii=False, sort_keys=True)
         )
     return "\n".join(lines)
+
+
+def _select_photos_for_analysis(photos: list[Photo]) -> list[Photo]:
+    """Phase 2C-B 證據選擇：≤8 全送；>8 取「最早 2＋最新 6」。
+
+    評測（AI-EVALUATION-REPORT §4／L6）顯示：只取最新 8 張會把最早的
+    intake 照片擠掉，而它通常是標籤／序號所在；最新的照片則是剛補的
+    證據。兩端各留、中段冗餘先捨 —— 決定性、維持時間順序
+    （source_photo_index 的語意不變）。
+    """
+    if len(photos) <= ai_client.MAX_PHOTOS:
+        return photos
+    return photos[:2] + photos[-(ai_client.MAX_PHOTOS - 2):]
 
 
 def _minutes_between(earlier: str, later: str) -> float:

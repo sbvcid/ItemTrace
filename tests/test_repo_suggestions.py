@@ -327,3 +327,59 @@ def test_accept_attribute_suggestion_does_not_touch_fixed_fields(repo, item):
     assert after.attributes == {"color": "霧面黑"}
     assert after.name == "主機板"          # fixture 的原始名稱
     assert after.brand == ""
+
+
+# ----------------------------------------------------------------------
+# Phase 2C-B：自動套用政策（純函式＋原子性）
+# ----------------------------------------------------------------------
+
+
+def test_conflicting_fields_helper():
+    """同一輪同一欄位出現不同值 → 矛盾欄位。"""
+    from shop.repo import _conflicting_fields
+
+    entries = [
+        {"field": "brand", "value": "TOSHIBA"},
+        {"field": "brand", "value": "SEAGATE"},
+        {"field": "model", "value": "M1"},
+        {"field": "model", "value": "M1"},
+    ]
+    assert _conflicting_fields(entries) == {"brand"}
+
+
+def test_drop_unchanged_entries_helper(repo, item):
+    """與現值相同、以及 (field, value) 完全重複的提案都會被丟掉。"""
+    from shop.repo import _drop_unchanged_entries
+
+    live = repo.get_item(item.id)          # fixture：name=主機板
+    entries = [
+        {"field": "name", "value": "主機板"},            # 與現值相同 → 丟
+        {"field": "brand", "value": "ASUS"},             # 空 → 留
+        {"field": "brand", "value": "ASUS"},             # 完全重複 → 丟
+        {"field": "attribute:color", "value": "黑"},     # 新鍵 → 留
+        {"field": "identifier:serial", "value": "SN1"},  # 不在主表 → 留
+    ]
+    kept = _drop_unchanged_entries(live, entries)
+    assert [entry["field"] for entry in kept] == [
+        "brand", "attribute:color", "identifier:serial"
+    ]
+
+
+def test_commit_analysis_auto_rolls_back_entirely_on_invalid_entry(repo, item):
+    """auto 模式中任一筆不合法 → supersede、待確認、自動套用全部回滾。"""
+    stale = repo.add_suggestion(item.id, "brand", "ASUS")
+
+    with pytest.raises(ValidationError):
+        repo.commit_analysis(
+            item.id,
+            [
+                {"field": "brand", "value": "Makita",
+                 "confidence": 0.9, "source_photo_id": None},
+                {"field": "attribute:Bad Key", "value": "x"},  # 非法 → 整批失敗
+            ],
+            auto=True,
+        )
+
+    assert repo.get_suggestion(stale.id).status == "pending"   # supersede 回滾
+    assert repo.get_item(item.id).brand == ""                  # 沒有自動套用
+    assert [s.id for s in repo.list_suggestions(item_id=item.id)] == [stale.id]

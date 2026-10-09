@@ -157,7 +157,7 @@ Commit: "feat: phase-1a integrate V3 SPA frontend and core tests"
 
 ---
 
-### Phase 2：AI Contract 2.0 與視覺紀錄基礎（2A、2B、2C-A COMPLETED；2C-B 自動套用待做）
+### Phase 2：AI Contract 2.0 與視覺紀錄基礎（2A、2B、2C-A、2C-B COMPLETED；核心完成）
 
 **依賴**：Phase 1A
 
@@ -168,6 +168,8 @@ Commit: "feat: phase-1a integrate V3 SPA frontend and core tests"
 **已完成（Phase 2B，2026-10-09）**：證據累積與情境式重新理解 —— 既有紀錄可加入新照片（不建新紀錄）；分析帶入既有詮釋與新證據；`attribute:<key>` 契約（pattern 驗證、單鍵合併、不覆蓋使用者資料）；失敗保留照片與 pending 並可重試；accepted 詞彙保留於搜尋；併發寫入改 `BEGIN IMMEDIATE`。零 schema migration；15 個新測試，全 955 通過。細則見 `STATUS.md`。
 
 **已完成（Phase 2C-A，2026-10-10）**：AI 評測與自主性政策 —— `tools/evaluate_models.py`（離線重播契約守門＋`--live` 受控模式）＋合成 fixture；實際評測 `gemini-3.5-flash-lite`（8 次呼叫、free tier、僅合成圖）：7/7 契約合法、收據情境正確更新、不確定時不發明；發現「矛盾證據被靜默合併」（L4）與「最新-8 丟失最早身分照」（L6a）；建議證據選擇「最早 2＋最新 6」與 T0/T1 自主性政策（不依賴模型信心）。報告：`AI-EVALUATION-REPORT.md`；+7 測試，全 962 通過。
+
+**已完成（Phase 2C-B，2026-10-10）**：可回復的 AI 自動更新與證據感知自主性 —— 證據選擇「最早 2＋最新 6」；`commit_analysis(auto=1)` 依決定性政策自動套用（描述屬性／空身分／auto 來源修訂），使用者編輯、確認、清空、復原過的欄位永不自動覆蓋；購買資訊僅在「同張照片提供身分」時自動、否則升級衝突確認（L4 錄製回放為回歸測試）；`POST /api/suggestions/{id}/undo` 還原前值並鎖定欄位；詳情頁「已自動更新＋復原」banner 與來源照片標示。零 schema migration；+21 測試，全 983 通過；瀏覽器 E2E 驗證。細則見 `STATUS.md`。
 
 **工作範圍**：
 1. **AI Contract 升級**
@@ -719,4 +721,5 @@ Phase 7 (Windows Release)
 - **2026-10-09（Phase 2A）**：建議生命週期與部分失敗語意完成（supersede／失敗保留／重試不重複／誠實回報）；零 schema migration；測試基線更新為 940；下一階段 = Phase 2B 提案命名空間（study S1，待決策）
 - **2026-10-09（Phase 2B）**：證據累積與情境式重新理解完成（加照片到既有紀錄、上下文分析、`attribute:<key>` 契約、失敗保留＋重試、accepted 詞彙搜尋保留、`BEGIN IMMEDIATE` 併發修正）；零 schema migration；測試基線更新為 955；下一階段 = Phase 2C 模型評測 harness（study S4）
 - **2026-10-10（Phase 2C-A）**：評測與政策完成（harness＋合成 fixture、7 情境實測 `gemini-3.5-flash-lite`、證據選擇建議「最早 2＋最新 6」、T0/T1 自主性政策、2C-B 驗收條件）；零產品程式碼變更；測試基線更新為 962；下一階段 = Phase 2C-B 自動套用實作
+- **2026-10-10（Phase 2C-B）**：可回復的自動套用完成（選擇策略、決定性政策、使用者保護、衝突升級、undo、banner/來源標示）；零 schema migration；測試基線更新為 983；Phase 2 核心完成；下一階段 = Phase 3 垃圾桶與資料生命週期（收尾選項：description prompt 調校、屬性來源標籤）
 

@@ -768,22 +768,26 @@ def test_analyze_sends_existing_context_and_new_evidence(
     assert detail["item"]["attributes"] == {"purchase_date": "2026-05-10"}
 
 
-def test_analyze_keeps_newest_evidence_when_over_photo_limit(
+def test_analysis_keeps_oldest_and_newest_evidence_when_over_photo_limit(
     repo, config, client, ai_config_file, fake_provider
 ):
-    """照片超過上限時保留最新的：新證據一定要進這一輪。"""
+    """>8 張時取「最早 2＋最新 6」（Phase 2C-B）：兩端都不能丟。"""
     item, photos, _ = add_item_with_photos(repo, config, count=8)
     newest = add_evidence_photo(client, item.id, filename="receipt9.jpg", tag=77)
 
     calls = fake_provider(provider_response([
-        {"field": "name", "value": "第九張才有的名字", "confidence": 0.9,
+        {"field": "name", "value": "最早照片才有的標籤", "confidence": 0.9,
+         "source_photo_index": 0},
+        {"field": "model", "value": "最新證據才有的型號", "confidence": 0.9,
          "source_photo_index": 7},
     ]))
     response = client.post(f"/api/items/{item.id}/ai/analyze")
     assert response.status_code == 201
 
     assert len(calls[0]["data_urls"]) == 8      # 上限就是 8
-    assert response.json()[0]["source_photo_id"] == newest["id"]
+    by_field = {s["field"]: s for s in response.json()}
+    assert by_field["name"]["source_photo_id"] == photos[0].id    # 最早進來了
+    assert by_field["model"]["source_photo_id"] == newest["id"]   # 最新也在
 
 
 def test_attribute_suggestions_are_strictly_validated(
@@ -916,3 +920,414 @@ def test_failed_reinterpretation_keeps_photo_and_retry_is_clean(
     assert by_id[first[0]["id"]]["status"] == "superseded"
     assert len(detail["photos"]) == 2                   # 重試不重複照片
     assert detail["suggestion_counts"]["pending"] == len(retried.json())
+
+
+# ----------------------------------------------------------------------
+# H. Phase 2C-B：證據選擇＋可回復的自動套用＋衝突升級
+# ----------------------------------------------------------------------
+
+
+def _recorded_response_text(scenario_id: str) -> str:
+    """讀 tools/eval_fixtures 錄下的真實模型輸出（純字串，不碰網路）。"""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / "tools" / "eval_fixtures" / "recorded" / f"{scenario_id}.json"
+    return json.loads(path.read_text(encoding="utf-8"))["response_text"]
+
+
+def test_photo_selection_boundaries():
+    """≤8 全送；9 → [0,1,3..8]（最早 2＋最新 6）；12 → [0,1,6..11]。"""
+    from shop.api import _select_photos_for_analysis
+
+    assert _select_photos_for_analysis(list(range(8))) == list(range(8))
+    assert _select_photos_for_analysis(list(range(9))) == [0, 1, 3, 4, 5, 6, 7, 8]
+    assert _select_photos_for_analysis(list(range(12))) == [0, 1, 6, 7, 8, 9, 10, 11]
+
+
+def test_auto_fill_empty_identity_and_notify(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """空的身分欄位自動填入；category 維持待確認；事件 actor=system。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    created_at = client.get(f"/api/items/{item.id}").json()["item"]["created_at"]
+
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Makita", "confidence": 0.9,
+         "source_photo_index": 0},
+        {"field": "model", "value": "DHP484", "confidence": 0.9,
+         "source_photo_index": 0},
+        {"field": "category", "value": "工具", "confidence": 0.8,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    by_field = {s["field"]: s for s in body}
+
+    assert by_field["brand"]["status"] == "accepted"
+    assert by_field["brand"]["source"] == "auto"
+    assert by_field["model"]["status"] == "accepted"
+    assert by_field["category"]["status"] == "pending"      # T2：維持確認
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["brand"] == "Makita"
+    assert detail["item"]["model"] == "DHP484"
+    assert detail["item"]["id"] == item.id                  # 穩定 ID
+    assert detail["item"]["created_at"] == created_at       # 建立時間不變
+
+    events = client.get(f"/api/items/{item.id}/events").json()
+    brand_changes = [e for e in events
+                     if e["type"] == "field.changed" and e["field"] == "brand"]
+    assert len(brand_changes) == 1
+    assert brand_changes[0]["actor"] == "system"
+    assert len([e for e in events if e["type"] == "suggestion.auto_applied"]) == 2
+
+
+def test_auto_apply_rules_ignore_model_confidence(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """低信心但符合規則（空值＋有照片來源）→ 一樣自動；規則不看自報信心。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Makita", "confidence": 0.05,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert body[0]["status"] == "accepted"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "Makita"
+
+
+def test_auto_requires_photo_source(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """沒有來源照片 → 證據支持不足，不自動。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Makita", "confidence": 0.9,
+         "source_photo_index": None},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert body[0]["status"] == "pending"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == ""
+
+
+def test_user_typed_identity_is_never_auto_overwritten(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """使用者打過的名字：新證據只能進確認清單，不得自動覆蓋。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    client.patch(f"/api/items/{item.id}", json={"name": "不明金屬零件"})
+
+    fake_provider(provider_response([
+        {"field": "name", "value": "牧田 18V 震動電鑽", "confidence": 0.99,
+         "source_photo_index": 0},
+        {"field": "brand", "value": "牧田", "confidence": 0.95,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    by_field = {s["field"]: s for s in body}
+
+    assert by_field["name"]["status"] == "pending"          # 使用者編輯 → 保護
+    assert by_field["brand"]["status"] == "accepted"        # 空的 → 自動
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["name"] == "不明金屬零件"
+    assert detail["item"]["brand"] == "牧田"
+
+
+def test_user_confirmed_identity_is_not_silently_revised(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """使用者確認過的（accept）值：新證據只能進確認清單。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    first = client.post(f"/api/items/{item.id}/ai/analyze").json()   # 非 auto
+    accepted = client.post(f"/api/suggestions/{first[0]['id']}/accept")
+    assert accepted.status_code == 200
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "ASUS"
+
+    fake_provider(provider_response([
+        {"field": "brand", "value": "acer", "confidence": 0.99,
+         "source_photo_index": 0},
+    ]))
+    second = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert second[0]["status"] == "pending"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "ASUS"
+
+
+def test_ai_derived_identity_can_be_auto_revised_and_old_term_searchable(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """系統自動填入的身分值可被新證據自動修訂；舊詞彙仍可搜尋。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Makita", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    first = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert first[0]["status"] == "accepted"
+
+    fake_provider(provider_response([
+        {"field": "brand", "value": "牧田", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    second = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert second[0]["status"] == "accepted"
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["brand"] == "牧田"
+    # 舊詞彙（曾自動套用 → accepted）仍找得到
+    assert [i["id"] for i in client.get("/api/items?q=Makita").json()] == [item.id]
+    assert [i["id"] for i in client.get("/api/items?q=牧田").json()] == [item.id]
+
+
+def test_user_edited_attribute_is_never_auto_overwritten(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """使用者填過的屬性鍵：不得自動覆蓋（單鍵合併也要尊重來源）。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    client.patch(f"/api/items/{item.id}", json={"attributes": {"color": "紅色"}})
+
+    fake_provider(provider_response([
+        {"field": "attribute:color", "value": "藍色", "confidence": 0.99,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert body[0]["status"] == "pending"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["attributes"] == {
+        "color": "紅色"
+    }
+
+
+def test_descriptive_attribute_auto_revision_keeps_old_searchable(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """描述性屬性：空值自動填入、auto 來源可修訂；舊描述仍可搜尋。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "attribute:description", "value": "灰色的金屬零件",
+         "confidence": 0.8, "source_photo_index": 0},
+    ]))
+    first = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert first[0]["status"] == "accepted"
+
+    fake_provider(provider_response([
+        {"field": "attribute:description", "value": "附購買收據的 18V 電鑽",
+         "confidence": 0.85, "source_photo_index": 0},
+    ]))
+    second = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert second[0]["status"] == "accepted"
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["attributes"]["description"] == "附購買收據的 18V 電鑽"
+    assert [i["id"] for i in client.get("/api/items?q=灰色的金屬零件").json()] == [
+        item.id
+    ]
+
+
+def test_contradictory_evidence_is_escalated_not_merged(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """Phase 2C-A 的 L4 實測情境：標籤（TOSHIBA）與另一張收據（PChome）
+    不得被靜默併成一筆 —— 身分可自動填入，但購買資訊必須進衝突確認。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    add_evidence_photo(client, item.id, filename="seagate_receipt.jpg", tag=42)
+
+    fake_provider({"choices": [{"message": {
+        "content": _recorded_response_text("L4_contradiction")}}]})
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    by_field = {s["field"]: s for s in body}
+
+    # 身分（來自標籤照片）自動填入
+    assert by_field["brand"]["status"] == "accepted"
+    assert by_field["model"]["status"] == "accepted"
+    # 識別碼與分類維持確認
+    assert by_field["identifier:serial"]["status"] == "pending"
+    assert by_field["category"]["status"] == "pending"
+    # 購買資訊（來自另一張收據）升級為衝突，不得默默寫入
+    for field in ("attribute:vendor", "attribute:amount",
+                  "attribute:purchase_date"):
+        assert by_field[field]["status"] == "pending"
+        assert by_field[field]["source"] == "external_conflict"
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["brand"] == "TOSHIBA"
+    assert detail["item"]["attributes"] == {}                # 沒有被併入
+    assert len(detail["identifiers"]) == 0                   # 序號未自動建立
+
+
+def test_receipt_on_same_photo_auto_fills_identity_and_purchase(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """Phase 2C-A 的 L3 實測情境：收據同時提供身分與購買資訊 → 可自動；
+    使用者手打的品名與備註必須原封不動。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    client.patch(f"/api/items/{item.id}", json={
+        "name": "不明金屬零件", "notes": "五金行買的，忘了名字",
+    })
+    add_evidence_photo(client, item.id, filename="makita_receipt.jpg", tag=43)
+
+    fake_provider({"choices": [{"message": {
+        "content": _recorded_response_text("L3_receipt_updates")}}]})
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    by_field = {s["field"]: s for s in body}
+
+    assert by_field["brand"]["status"] == "accepted"
+    assert by_field["model"]["status"] == "accepted"
+    assert by_field["attribute:vendor"]["status"] == "accepted"
+    assert by_field["attribute:amount"]["status"] == "accepted"
+    assert by_field["attribute:purchase_date"]["status"] == "accepted"
+    assert by_field["name"]["status"] == "pending"           # 使用者打的
+    assert by_field["category"]["status"] == "pending"       # T2
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["name"] == "不明金屬零件"           # 未被覆蓋
+    assert detail["item"]["notes"] == "五金行買的，忘了名字"   # 備註完好
+    assert detail["item"]["brand"] == "牧田"
+    assert detail["item"]["attributes"]["vendor"] == "光華商場"
+    assert len(detail["photos"]) == 2
+
+
+def test_duplicate_conflicting_values_escalate(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """同一輪對同一欄位給出兩種值 → 該欄位不得自動。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "TOSHIBA", "confidence": 0.99,
+         "source_photo_index": 0},
+        {"field": "brand", "value": "SEAGATE", "confidence": 0.98,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert [s["status"] for s in body] == ["pending", "pending"]
+    assert all(s["source"] == "external_conflict" for s in body)
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == ""
+
+
+def test_auto_skips_identical_values(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """與現值相同（或完全重複）的提案不占用建議；重試不產生重複列。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Makita", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    client.post(f"/api/items/{item.id}/ai/analyze?auto=1")
+    before = client.get(f"/api/items/{item.id}").json()["suggestion_counts"]
+
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Makita", "confidence": 0.9,
+         "source_photo_index": 0},
+        {"field": "brand", "value": "Makita", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert body == []
+    after = client.get(f"/api/items/{item.id}").json()["suggestion_counts"]
+    assert after == before
+
+
+def test_undo_restores_previous_value_and_locks_the_field(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """復原：值回到前值、建議變 rejected；之後同欄位不再自動。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Makita", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    suggestion_id = body[0]["id"]
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "Makita"
+
+    undo = client.post(f"/api/suggestions/{suggestion_id}/undo")
+    assert undo.status_code == 200
+    assert undo.json()["status"] == "rejected"
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["brand"] == ""                     # 回到空值
+    events = client.get(f"/api/items/{item.id}/events").json()
+    restored = [e for e in events
+                if e["type"] == "field.changed" and e["field"] == "brand"
+                and e["actor"] == "user"]
+    assert len(restored) == 1
+    assert len([e for e in events if e["type"] == "suggestion.undone"]) == 1
+
+    # 復原後 = 使用者表達了意圖 → 再分析不自動
+    fake_provider(provider_response([
+        {"field": "brand", "value": "acer", "confidence": 0.99,
+         "source_photo_index": 0},
+    ]))
+    again = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert again[0]["status"] == "pending"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == ""
+
+
+def test_undo_attribute_removes_new_key_and_keeps_others(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """屬性復原：新鍵整個移除；其他屬性（含使用者填的）不受影響。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    client.patch(f"/api/items/{item.id}", json={"attributes": {"warranty": "兩年"}})
+
+    fake_provider(provider_response([
+        {"field": "attribute:origin", "value": "Made in Malaysia",
+         "confidence": 0.9, "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert body[0]["status"] == "accepted"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["attributes"] == {
+        "warranty": "兩年", "origin": "Made in Malaysia"
+    }
+
+    undo = client.post(f"/api/suggestions/{body[0]['id']}/undo")
+    assert undo.status_code == 200
+    assert client.get(f"/api/items/{item.id}").json()["item"]["attributes"] == {
+        "warranty": "兩年"
+    }
+
+
+def test_undo_rejects_non_auto_suggestions(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """只有自動套用（source=auto、accepted）的建議可以復原。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    pending = client.post(f"/api/items/{item.id}/ai/analyze").json()
+    assert client.post(f"/api/suggestions/{pending[0]['id']}/undo").status_code == 400
+
+    client.post(f"/api/suggestions/{pending[0]['id']}/accept")
+    assert client.post(f"/api/suggestions/{pending[0]['id']}/undo").status_code == 400
+
+
+def test_failed_auto_analysis_changes_nothing(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """auto 模式失敗：不自動、不動既有 pending、不新增事件。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    first = client.post(f"/api/items/{item.id}/ai/analyze").json()
+
+    before_events = len(client.get(f"/api/items/{item.id}/events").json())
+    fake_provider(raises=ai_client.ProviderError(
+        f"AI 服務暫時無法使用（model={MODEL}）：HTTP 503"
+    ))
+    failed = client.post(f"/api/items/{item.id}/ai/analyze?auto=1")
+    assert failed.status_code == 400
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["brand"] == ""
+    pending = [s for s in detail["suggestions"] if s["status"] == "pending"]
+    assert [s["id"] for s in pending] == [first[0]["id"]]
+    events = client.get(f"/api/items/{item.id}/events").json()
+    assert len(events) == before_events
+    assert not [e for e in events if e["type"] == "suggestion.auto_applied"]

@@ -74,8 +74,10 @@ export const api = {
   },
 
   // AI Vision Analysis
-  async analyzeItem(itemId) {
-    return request(`/api/items/${itemId}/ai/analyze`, {
+  // auto: 依政策自動套用低風險項目（Phase 2C-B；可復原）
+  async analyzeItem(itemId, { auto = false } = {}) {
+    const suffix = auto ? '?auto=1' : '';
+    return request(`/api/items/${itemId}/ai/analyze${suffix}`, {
       method: 'POST',
     });
   },
@@ -108,6 +110,13 @@ export const api = {
 
   async rejectSuggestion(suggestionId) {
     return request(`/api/suggestions/${suggestionId}/reject`, {
+      method: 'POST',
+    });
+  },
+
+  // 復原一次「自動套用」（Phase 2C-B）
+  async undoSuggestion(suggestionId) {
+    return request(`/api/suggestions/${suggestionId}/undo`, {
       method: 'POST',
     });
   },

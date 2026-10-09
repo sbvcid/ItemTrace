@@ -1316,3 +1316,36 @@ body {
   line-height: 1.5;
   word-break: break-word;
 }
+
+/* ------------------------------------------------------------------ */
+/* Phase 2C-B: reversible auto-updates + conflict review               */
+/* ------------------------------------------------------------------ */
+
+.detail-analysis-status.is-applied {
+  background: var(--color-ai-surface, var(--bg-subtle));
+  border-color: var(--color-ai-border, var(--border-default));
+  color: var(--color-ai-dark, var(--text-primary));
+}
+
+.suggestion-photo {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.suggestion-row.is-conflict {
+  border-left: 3px solid hsl(38, 85%, 55%);
+  padding-left: 10px;
+}
+
+.suggestion-conflict-note {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: hsl(28, 80%, 32%);
+}

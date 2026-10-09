@@ -94,6 +94,34 @@ SUGGESTION_COLUMNS = (
     "source_photo_id", "status", "created_at", "decided_at",
 )
 
+# ----------------------------------------------------------------------
+# Phase 2C-B：自動套用政策（AI-NATIVE-ARCHITECTURE.md S5；評測見
+# docs/engineering/AI-EVALUATION-REPORT.md §5）
+# ----------------------------------------------------------------------
+
+#: suggestions.source 的語義（自由文字，無 schema 限制）。
+SUGGESTION_SOURCE_EXTERNAL = "external"
+#: 系統依政策自動套用（status=accepted；可用 POST /suggestions/{id}/undo 復原）。
+SUGGESTION_SOURCE_AUTO = "auto"
+#: 需要人工確認：證據歸屬不明或同一輪出現矛盾值。
+SUGGESTION_SOURCE_CONFLICT = "external_conflict"
+
+#: 身分欄位：空值可自動填入；「AI 自動填入」的值可被新證據自動修訂；
+#: 使用者編輯或確認過的永不自動覆蓋（改走確認清單）。
+IDENTITY_FIELDS = ("name", "brand", "model")
+
+#: 維持 proposal-and-confirm 的固定欄位（評測政策 T2；識別碼 T0 另外處理）。
+CONFIRM_ONLY_FIELDS = ("category", "condition", "notes")
+
+#: 收據類購買資訊：只在「現值為空」且「同一張來源照片也提供了身分資訊」
+#: 時才自動（評測 L3 ✓ vs L4 ✗ 的差別）；否則升級為衝突確認 ——
+#: 不把可能屬於別件物品的購買資訊默默併進這筆紀錄。
+PURCHASE_METADATA_KEYS = frozenset({
+    "vendor", "seller", "store", "shop", "amount", "price", "cost",
+    "currency", "purchase_date", "purchase_price", "invoice_number",
+    "receipt_number",
+})
+
 TEMPLATE_COLUMNS = (
     "id", "name", "html", "width", "height", "unit", "created_at", "updated_at",
 )
@@ -824,10 +852,10 @@ class Repository:
         entries: list[Mapping[str, Any]],
         *,
         model_name: str = "",
-        source: str = "external",
+        source: str = SUGGESTION_SOURCE_EXTERNAL,
         actor: str = "external",
     ) -> tuple[list[Suggestion], int]:
-        """以新一輪分析結果原子性取代既有 pending 建議。
+        """以新一輪分析結果原子性取代既有 pending 建議（auto=False 路徑）。
 
         生命週期規則（Phase 2A）：成功的新分析＝目前最新的詮釋 ——
         先把該商品所有 pending 標成 superseded，再寫入這一批。
@@ -837,25 +865,18 @@ class Repository:
         空的一輪（模型不確定）同樣是有效結果：舊 pending 一樣失效，
         否則它們已不在最新結果中、卻會永遠停在 pending。
 
+        Phase 2C-B 起委派給 commit_analysis(auto=False)，行為不變。
         回傳 (created, superseded_count)。主表全程不動。
         """
-        with db.transaction(self.conn):
-            self.get_item(item_id)
-            superseded = self._supersede_pending(item_id, actor=actor)
-            created = [
-                self.add_suggestion(
-                    item_id,
-                    entry["field"],
-                    entry["value"],
-                    confidence=entry.get("confidence"),
-                    source=source,
-                    model_name=model_name,
-                    source_photo_id=entry.get("source_photo_id"),
-                    actor=actor,
-                )
-                for entry in entries
-            ]
-        return created, superseded
+        _applied, pending, superseded = self.commit_analysis(
+            item_id,
+            entries,
+            model_name=model_name,
+            auto=False,
+            source=source,
+            actor=actor,
+        )
+        return pending, superseded
 
     def _supersede_pending(self, item_id: str, *, actor: str) -> int:
         """把商品現有 pending 建議標成 superseded 並留下事件。"""
@@ -881,6 +902,261 @@ class Repository:
                 payload={"model_name": before.model_name},
             )
         return len(rows)
+
+    def commit_analysis(
+        self,
+        item_id: str,
+        entries: list[Mapping[str, Any]],
+        *,
+        model_name: str = "",
+        auto: bool = False,
+        source: str = SUGGESTION_SOURCE_EXTERNAL,
+        actor: str = "external",
+    ) -> tuple[list[Suggestion], list[Suggestion], int]:
+        """一輪分析的完整落地（同交易）。
+
+        Phase 2A 規則不變：先 supersede 舊 pending，再寫入這一輪。
+        auto=False（capture 的審閱流程、外部 adapter）＝全部留 pending。
+        auto=True（詳情頁補證據後的重讀）＝先依政策自動套用合格項目
+        （status=accepted、source='auto'、actor=system，可復原），其餘
+        （含衝突升級）留 pending。與現值相同的提案直接跳過（無事可做）。
+
+        回傳 (applied, pending, superseded_count)。
+        """
+        with db.transaction(self.conn):
+            item = self.get_item(item_id)
+            superseded = self._supersede_pending(item_id, actor=actor)
+            applied: list[Suggestion] = []
+            pending: list[Suggestion] = []
+            if not auto:
+                for entry in entries:
+                    pending.append(
+                        self.add_suggestion(
+                            item_id,
+                            entry["field"],
+                            entry["value"],
+                            confidence=entry.get("confidence"),
+                            source=source,
+                            model_name=model_name,
+                            source_photo_id=entry.get("source_photo_id"),
+                            actor=actor,
+                        )
+                    )
+                return applied, pending, superseded
+
+            # 1. 去掉與現值相同（或完全相同重複）的提案
+            meaningful = _drop_unchanged_entries(item, entries)
+            # 2. 同一輪對同一欄位出現不同值 → 該欄位視為矛盾，不得自動
+            conflicts = _conflicting_fields(meaningful)
+            # 3. 這輪有哪些照片提供了「身分等級」資訊（供購買資訊歸屬判斷）
+            identity_photos = {
+                entry["source_photo_id"]
+                for entry in meaningful
+                if entry.get("source_photo_id")
+                and (
+                    entry["field"] in IDENTITY_FIELDS
+                    or entry["field"].startswith(IDENTIFIER_FIELD_PREFIX)
+                )
+            }
+            provenance = self._field_provenance(
+                item, {entry["field"] for entry in meaningful}
+            )
+
+            for entry in meaningful:
+                mode = _auto_decision(
+                    entry,
+                    item=item,
+                    provenance=provenance,
+                    identity_photos=identity_photos,
+                    conflicting_fields=conflicts,
+                )
+                if mode == "auto":
+                    applied.append(self._apply_auto(item_id, entry, model_name))
+                else:
+                    pending.append(
+                        self.add_suggestion(
+                            item_id,
+                            entry["field"],
+                            entry["value"],
+                            confidence=entry.get("confidence"),
+                            source=(
+                                SUGGESTION_SOURCE_CONFLICT
+                                if mode == "conflict"
+                                else source
+                            ),
+                            model_name=model_name,
+                            source_photo_id=entry.get("source_photo_id"),
+                            actor=actor,
+                        )
+                    )
+            return applied, pending, superseded
+
+    def _field_provenance(
+        self, item: Item, fields: set[str]
+    ) -> dict[str, str]:
+        """每個欄位目前的來源：none（空/無紀錄）| auto（系統自動套用）| user。
+
+        身分欄位：最新一筆 field.changed 事件的 actor（user → 使用者編輯或
+        確認過，受保護；system → AI 自動套用，可被新證據修訂）。
+        屬性鍵：attributes 的整包事件中，該鍵「最後一次被改動」的 actor。
+        事件查不到（例如更早的資料）時保守視為 none —— 非空值就不會被
+        自動覆蓋。
+        """
+        result: dict[str, str] = {}
+        identity_needed = {f for f in fields if f in IDENTITY_FIELDS}
+        attribute_needed = {
+            f[len(ATTRIBUTE_FIELD_PREFIX):] for f in fields if attribute_key(f)
+        }
+        if identity_needed or attribute_needed:
+            for event in self.list_events("item", item.id, limit=500):
+                if event.type != "field.changed":
+                    continue
+                if event.field in identity_needed and event.field not in result:
+                    result[event.field] = (
+                        "user" if event.actor == "user" else "auto"
+                    )
+                elif event.field == "attributes" and attribute_needed:
+                    before = (
+                        event.prev_value if isinstance(event.prev_value, dict) else {}
+                    )
+                    after = (
+                        event.next_value if isinstance(event.next_value, dict) else {}
+                    )
+                    for key in list(attribute_needed):
+                        name = f"{ATTRIBUTE_FIELD_PREFIX}{key}"
+                        if name in result:
+                            continue
+                        if before.get(key) != after.get(key):
+                            result[name] = "user" if event.actor == "user" else "auto"
+        for name in fields:
+            result.setdefault(name, "none")
+        return result
+
+    def _apply_auto(
+        self, item_id: str, entry: Mapping[str, Any], model_name: str
+    ) -> Suggestion:
+        """系統依政策自動套用一個值（actor=system；可復原）。
+
+        留下三種痕跡：suggestions 的 accepted 列（source='auto'，供來源
+        追溯與搜尋保留）、field.changed 事件（actor=system，供欄位來源
+        判定）、suggestion.auto_applied 事件（帶前值，供 undo 還原）。
+        """
+        with db.transaction(self.conn):
+            item = self.get_item(item_id)
+            field = entry["field"]
+            key = attribute_key(field)
+            self._check_photo_ref(item_id, entry.get("source_photo_id"))
+            if key is not None:
+                previous = item.attributes.get(key)
+            else:
+                previous = getattr(item, field, "") or None
+
+            stamp = db.now()
+            suggestion = Suggestion(
+                id=ids.new_id(),
+                item_id=item_id,
+                field=field,
+                value=entry["value"],
+                confidence=entry.get("confidence"),
+                source=SUGGESTION_SOURCE_AUTO,
+                model_name=model_name,
+                source_photo_id=entry.get("source_photo_id"),
+                status="accepted",
+                created_at=stamp,
+                decided_at=stamp,
+            )
+            _validate_suggestion(suggestion)
+            _insert(self.conn, "suggestions", SUGGESTION_COLUMNS, suggestion)
+            events.append(
+                self.conn,
+                entity_type="suggestion",
+                entity_id=suggestion.id,
+                type="suggestion.created",
+                actor="system",
+                payload=_snapshot(suggestion),
+            )
+
+            if key is not None:
+                merged = {**item.attributes, key: entry["value"]}
+                self.update_item(item_id, {"attributes": merged}, actor="system")
+            else:
+                self.update_item(item_id, {field: entry["value"]}, actor="system")
+
+            events.append(
+                self.conn,
+                entity_type="suggestion",
+                entity_id=suggestion.id,
+                type="suggestion.auto_applied",
+                actor="system",
+                field=field,
+                prev_value=previous,
+                next_value=entry["value"],
+                payload={
+                    "model_name": model_name,
+                    "confidence": entry.get("confidence"),
+                    "source_photo_id": entry.get("source_photo_id"),
+                    "previous_value": previous,
+                },
+            )
+            return suggestion
+
+    def undo_auto_suggestion(
+        self, suggestion_id: str, *, actor: str = "user"
+    ) -> Suggestion:
+        """復原一次自動套用：值回到 auto_applied 的前值，建議標為 rejected。
+
+        只允許 source='auto' 且 status='accepted' 的建議。復原本身是
+        使用者動作，寫回時 actor=user —— 之後同一欄位不會再被自動覆蓋
+        （使用者已表達意圖），新證據只會進確認清單。
+        """
+        with db.transaction(self.conn):
+            suggestion = self.get_suggestion(suggestion_id)
+            if (
+                suggestion.source != SUGGESTION_SOURCE_AUTO
+                or suggestion.status != "accepted"
+            ):
+                raise ValidationError("只有『自動套用』的建議可以復原")
+            applied_event = next(
+                (
+                    event
+                    for event in self.list_events(
+                        "suggestion", suggestion_id, limit=50
+                    )
+                    if event.type == "suggestion.auto_applied"
+                ),
+                None,
+            )
+            if applied_event is None:
+                raise ValidationError("找不到這筆自動套用的復原資訊")
+
+            previous = applied_event.prev_value
+            key = suggestion.attribute_key
+            item = self.get_item(suggestion.item_id)
+            if key is not None:
+                merged = dict(item.attributes)
+                if previous is None:
+                    merged.pop(key, None)
+                else:
+                    merged[key] = previous
+                self.update_item(suggestion.item_id, {"attributes": merged}, actor=actor)
+            else:
+                restored = previous if isinstance(previous, str) else ""
+                self.update_item(suggestion.item_id, {suggestion.field: restored}, actor=actor)
+
+            after = replace(suggestion, status="rejected", decided_at=db.now())
+            _update(self.conn, "suggestions", SUGGESTION_COLUMNS, after, suggestion_id)
+            events.append(
+                self.conn,
+                entity_type="suggestion",
+                entity_id=suggestion_id,
+                type="suggestion.undone",
+                actor=actor,
+                field=suggestion.field,
+                prev_value=suggestion.value,
+                next_value=previous,
+                payload={"previous_value": previous},
+            )
+            return after
 
     def find_photos_by_sha256(
         self, sha256: str, *, item_id: str | None = None, role: str | None = None
@@ -1224,6 +1500,109 @@ def _require_pending(suggestion: Suggestion) -> None:
             f"suggestion {suggestion.id} 已是 {suggestion.status}，"
             "建議一經決定就是歷史，不能再改"
         )
+
+
+# ----------------------------------------------------------------------
+# Phase 2C-B：自動套用政策的純函式（可單獨測試）
+# ----------------------------------------------------------------------
+
+
+def _current_value(item: Item, field: str) -> Any:
+    """該欄位在 items 上的現值：屬性回 attributes[key]，其餘回欄位字串。"""
+    key = attribute_key(field)
+    if key is not None:
+        return item.attributes.get(key)
+    if field in SUGGESTABLE_FIELDS:
+        return getattr(item, field, "") or ""
+    return None  # identifier:* 等：不在主表上，沒有現值可比較
+
+
+def _drop_unchanged_entries(
+    item: Item, entries: list[Mapping[str, Any]]
+) -> list[Mapping[str, Any]]:
+    """去掉與現值相同、以及 (field, value) 完全重複的提案。
+
+    相同的值沒有事可做：既不需要自動套用，也不值得占一筆 pending。
+    """
+    kept: list[Mapping[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in entries:
+        marker = (entry["field"], entry["value"])
+        if marker in seen:
+            continue
+        seen.add(marker)
+        current = _current_value(item, entry["field"])
+        if current is not None and str(current) == entry["value"]:
+            continue
+        kept.append(entry)
+    return kept
+
+
+def _conflicting_fields(entries: list[Mapping[str, Any]]) -> set[str]:
+    """同一輪分析中，同一欄位出現兩種以上不同值 → 矛盾欄位（不得自動）。"""
+    seen: dict[str, str] = {}
+    conflicts: set[str] = set()
+    for entry in entries:
+        previous = seen.get(entry["field"])
+        if previous is not None and previous != entry["value"]:
+            conflicts.add(entry["field"])
+        else:
+            seen[entry["field"]] = entry["value"]
+    return conflicts
+
+
+def _auto_decision(
+    entry: Mapping[str, Any],
+    *,
+    item: Item,
+    provenance: dict[str, str],
+    identity_photos: set[str],
+    conflicting_fields: set[str],
+) -> str:
+    """回傳 "auto" | "pending" | "conflict"。
+
+    規則（AI-EVALUATION-REPORT.md §5，全部決定性、不看模型自報信心）：
+      - 沒有來源照片 → 證據支持不足，不自動。
+      - 同一欄位這輪有矛盾值 → conflict。
+      - identifier:* → 永遠 pending（T0）。
+      - category/condition/notes → pending（T2）。
+      - name/brand/model：空值自動填入；來源是 auto 的值可自動修訂；
+        使用者編輯或確認過的（user）→ pending。使用者清空（或復原）
+        過的欄位即使現在是空的，也不再自動填入（user 意圖優先）。
+      - 購買資訊（vendor/amount/…）：只在現值為空、使用者沒動過、且
+        「同一張照片也提供了身分等級資訊」時自動；否則 conflict
+        （可能屬於別件物品）。
+      - 其他描述性 attribute：空值自動填入；auto 來源可修訂；user → pending。
+    """
+    field = entry["field"]
+    photo = entry.get("source_photo_id")
+    if field in conflicting_fields:
+        return "conflict"
+    if photo is None:
+        return "pending"
+    if field.startswith(IDENTIFIER_FIELD_PREFIX) or field in CONFIRM_ONLY_FIELDS:
+        return "pending"
+
+    if field in IDENTITY_FIELDS:
+        current = _current_value(item, field)
+        state = provenance.get(field, "none")
+        if not current:
+            return "pending" if state == "user" else "auto"
+        return "auto" if state == "auto" else "pending"
+
+    key = attribute_key(field)
+    if key is not None:
+        current = item.attributes.get(key)
+        state = provenance.get(field, "none")
+        if key in PURCHASE_METADATA_KEYS:
+            if current or state == "user":
+                return "pending"
+            return "auto" if photo in identity_photos else "conflict"
+        if not current:
+            return "pending" if state == "user" else "auto"
+        return "auto" if state == "auto" else "pending"
+
+    return "pending"
 
 
 # ----------------------------------------------------------------------

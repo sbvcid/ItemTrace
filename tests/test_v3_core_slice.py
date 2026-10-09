@@ -11,6 +11,7 @@
 5. Phase 1B-A：首頁最新紀錄置頂、保存後回首頁、修改不亂序、搜尋不受影響
 6. Phase 2A：capture 部分失敗語意（靜態接線檢查；非瀏覽器端對端測試）
 7. Phase 2B：證據累積——補照片到既有紀錄、情境式重新理解、更新後仍可搜尋
+8. Phase 2C-B：證據選擇、可回復的自動套用、衝突升級（含紀錄回放）
 """
 
 from __future__ import annotations
@@ -580,5 +581,30 @@ def test_phase2b_detail_evidence_wiring_static_checks(client):
     en = client.get("/i18n/en.js").text
     for key in ("addPhoto", "reanalyze", "analysisFailed", "analysisRetry",
                 "pendingTitle", "applyAll", "attributesTitle"):
+        assert key in zh
+        assert key in en
+
+
+def test_phase2c_b_detail_autonomy_static_checks(client):
+    """Phase 2C-B 前端接線靜態檢查（非瀏覽器端對端測試）：
+
+    detail 頁以 auto=1 觸發分析、顯示「已自動更新＋復原」、
+    衝突列有標示與來源照片編號；api.js 有 undo 與 auto 參數。
+    """
+    detail_js = client.get("/views/record-detail.js").text
+    assert "api.analyzeItem(itemId, { auto: true })" in detail_js
+    assert "analysisApplied" in detail_js
+    assert "undoSuggestion" in detail_js
+    assert "external_conflict" in detail_js
+    assert "conflictNote" in detail_js
+
+    api_js = client.get("/core/api.js").text
+    assert "?auto=1" in api_js
+    assert "undoSuggestion" in api_js
+
+    zh = client.get("/i18n/zh-TW.js").text
+    en = client.get("/i18n/en.js").text
+    for key in ("analysisApplied", "undo", "undoDone", "undoFailed",
+                "conflictNote"):
         assert key in zh
         assert key in en

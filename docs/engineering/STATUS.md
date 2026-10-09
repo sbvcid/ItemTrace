@@ -1,28 +1,43 @@
 # ItemTrace Engineering Status
 
-最後更新：2026-10-10 03:40  
-當前階段：Phase 2C-A 完成（評測與政策；本地 commit，未 push）  
-遠端狀態：本地領先 origin/main（本階段 commit 後 8 ahead；未 push）  
-測試驗證：`pytest -q` 完全通過，全 962 測試無失敗、無跳過
+最後更新：2026-10-10 06:20  
+當前階段：Phase 2C-B 完成（可回復自動套用；本地 commit，未 push）  
+遠端狀態：本地領先 origin/main（本階段 commit 後 9 ahead；未 push）  
+測試驗證：`pytest -q` 完全通過，全 983 測試無失敗、無跳過
 
 ---
 
 ## 當前階段
 
-**Phase 2C-A：AI 評測與自主性政策** ← **COMPLETED**（評測／政策階段；未改產品程式碼）
+**Phase 2C-B：可回復的 AI 自動更新與證據感知自主性** ← **COMPLETED**
 
-完成時間：2026-10-10（資料收集 03:24）  
-Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地，未 push）
+完成時間：2026-10-10  
+Commit：`feat: phase-2c-b reversible ai updates and evidence-aware autonomy`（本地，未 push）
 
 完成內容：
-- ✓ Harness：`tools/evaluate_models.py`（離線重播＝契約回歸守門；`--live --allow-live` 受控即時模式、呼叫上限）＋`tools/make_eval_images.py`（合成 fixture，無個資）
-- ✓ 情境集 7 個：清楚標籤／陌生物件／收據改變詮釋／矛盾證據／證據不足／九張照片之兩種選擇變體
-- ✓ 真實模型評測（`google / gemini-3.5-flash-lite`，free tier，**8 次呼叫**、僅合成圖）：7/7 輸出合法；收據情境正確更新品名＋vendor/amount/date；不確定時空陣列；使用者資料未動
-- ✓ 發現：模型自報信心無鑑別力（全場 0.90~1.00）；模型自發使用 `attribute:<key>` 且本輪詞彙一致（origin／vendor／amount／purchase_date）
-- ✓ 發現（需政策）：矛盾證據被靜默合併（L4）；最新-8 會丟最早的身分標籤導致誤標（L6a：name→相機背帶；L6b 含標籤則型號/序號全對）
-- ✓ 建議：證據選擇「最早 2＋最新 6」；自主性分層（T0 身分/識別碼永不自動；T1 描述性屬性自動、僅空值、可復原、不依賴信心）；2C-B 驗收條件 8 條
-- ✓ 報告：`docs/engineering/AI-EVALUATION-REPORT.md`；+7 harness 測試；全 962 通過
-- ✓ 未改產品程式碼、schema、API；未 push；未傳送任何真實資料
+- ✓ 證據選擇：>8 張改「最早 2＋最新 6」（≤8 全送不變）；邊界單元測試＋整合測試（最早/最新都進得來）
+- ✓ 自動套用政策 `commit_analysis(auto=…)`（同交易；取代 2A 的 replace 路徑且相容）：描述性 `attribute:*`、空的身分欄位、AI 先前自動填入的身分值可自動；全部決定性、不看模型信心
+- ✓ 使用者保護：編輯/確認過的欄位與屬性永不自動覆蓋；使用者清空或「復原」過的欄位即使為空也不再自動填入
+- ✓ 衝突升級：同一輪同欄位矛盾值、或購買資訊來自與身分不同照片（L4）→ pending＋`source='external_conflict'`，絕不默默併入
+- ✓ 可回復：`POST /api/suggestions/{id}/undo` 還原前值（屬性鍵整個移除）、建議轉 rejected、寫回 actor=user（之後鎖定）；事件 `suggestion.auto_applied`／`suggestion.undone`
+- ✓ 搜尋保留：舊詞彙（曾自動套用＝accepted）在修訂後仍可搜尋；復原＋套用後仍可搜尋
+- ✓ UI：詳情頁 auto=1、banner「✨ AI 已自動更新 N 項＋復原」、待確認列含來源照片 `📷 #n`、衝突列有 ⚠️ 說明；失敗仍有「重試」
+- ✓ 新增 21 測試（AI 17＋repo 3＋靜態 1）；全 983 通過；順手修掉「型號整列重複」顯示 bug
+- ✓ 瀏覽器 E2E（臨時資料、假 provider）：收據自動更新 6 項 → 按「復原」全部還原（值/屬性/事件）→ 再「全部套用」名稱與分類 → 搜尋命中；console 0 errors
+- ✓ 零 schema migration；capture 與外部 adapter 維持 confirmed 流程（auto 僅用於詳情頁補證據重讀）
+
+### Phase 2C-B 自動套用規則（實作即規格）
+
+| 類別 | 規則 |
+|---|---|
+| 描述性 `attribute:*`（非購買類） | 空值自動填入；`auto` 來源可自動修訂；使用者動過 → 確認 |
+| 購買資訊（vendor/amount/price/purchase_date… ） | 僅「現值為空＋使用者未動＋同一張照片也提供身分資訊」自動；否則衝突確認 |
+| `name`／`brand`／`model` | 空值自動填入；`auto` 來源可自動修訂；user（編輯/確認/清空/復原）→ 確認 |
+| `identifier:*`、`category`、`condition`、`notes` | 永遠待確認（T0／T2） |
+| 矛盾值（同一輪同欄位不同值） | 全部轉衝突確認 |
+| 無來源照片 | 不自動（證據支持不足） |
+| 與現值相同 | 直接丟棄（不佔建議） |
+| 信心值 | 僅記錄，不參與任何決策 |
 
 ### Phase 2C-A 評測結論摘要（細節見報告）
 
@@ -63,6 +78,7 @@ Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地�
 - Phase 1B-A：首頁基本流程（`98edc0c`）
 - Phase 2A：AI 建議生命週期與部分失敗語意（`15f2e9b`）
 - Phase 2B：證據累積與情境式重新理解（`22b0c22`）
+- Phase 2C-A：AI 評測與自主性政策（`dda8b61`）
 
 ---
 
@@ -70,9 +86,9 @@ Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地�
 
 | 項目 | 數值 | 備註 |
 |---|---|---|
-| 測試檔案數 | 37 | conftest + 36 test_*.py（Phase 2C-A 新增 test_evaluate_models.py） |
-| 總測試數 | 962 | 全 pytest 計數（Phase 2C-A +7） |
-| 通過 | 962 ✓ | 100% pass rate |
+| 測試檔案數 | 37 | conftest + 36 test_*.py |
+| 總測試數 | 983 | 全 pytest 計數（Phase 2C-B +21） |
+| 通過 | 983 ✓ | 100% pass rate |
 | 失敗 | 0 | 零失敗 |
 | 跳過 | 0 | 無跳過 |
 | 覆蓋率 | 未測 | 建議後續補充 |
@@ -85,10 +101,10 @@ Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地�
 - AI & 分析：test_ai_*.py (15-78), test_analyze_item.py (78)
 - 前端與 UI：test_capture_ui.py (6), test_inbox_ui.py (35)
 - 列印：test_print.py (31), test_print_settings_api.py (20)
-- **V3 核心驗收**：test_v3_core_slice.py (13) —— 原始 5 情境 + Phase 1B-A 5 項 + Phase 2A 1 項 + Phase 2B 2 項
+- **V3 核心驗收**：test_v3_core_slice.py (14) —— 原始 5 情境 + Phase 1B-A 5 項 + Phase 2A 1 項 + Phase 2B 2 項 + Phase 2C-B 1 項
 - **評測 harness**：test_evaluate_models.py (7) —— 離線重播、契約回歸守門、live 需 --allow-live（不碰網路）
 
-**最近運行**：2026-10-10，`pytest -q --junitxml` → tests=962, failures=0, errors=0, skipped=0
+**最近運行**：2026-10-10，`pytest -q --junitxml` → tests=983, failures=0, errors=0, skipped=0
 
 ---
 
@@ -99,7 +115,7 @@ Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地�
 | 狀態 | 定義 | 範例 |
 |---|---|---|
 | **Implemented** | 程式碼存在且功能可用 | SQLite schema, FastAPI endpoints, V3 前端已實作 |
-| **Tested** | 實作已驗證，測試通過 | 962 個 pytest 全通過，V3 core slice test 驗收 |
+| **Tested** | 實作已驗證，測試通過 | 983 個 pytest 全通過，V3 core slice test 驗收 |
 | **Committed** | 變更已進入版本控制 | main branch 上的所有程式碼 |
 | **Pushed** | 變更已推送到遠端 | origin/main 的最新狀態（多個本地 commit 未 push；見下方同步狀態） |
 
@@ -114,7 +130,8 @@ Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地�
 - ✓ 首頁最新紀錄置頂與保存後回首頁（Phase 1B-A） — **Implemented, Tested, Committed（98edc0c）, Not Pushed**
 - ✓ AI 建議生命週期與部分失敗語意（Phase 2A） — **Implemented, Tested, Committed（15f2e9b）, Not Pushed**
 - ✓ 證據累積與情境式重新理解（Phase 2B） — **Implemented, Tested, Committed（22b0c22）, Not Pushed**
-- ✓ AI 評測 harness 與自主性政策（Phase 2C-A；工具＋文件，未改產品行為） — **Implemented, Tested, Committed（本階段）, Not Pushed**
+- ✓ AI 評測 harness 與自主性政策（Phase 2C-A；工具＋文件，未改產品行為） — **Implemented, Tested, Committed（dda8b61）, Not Pushed**
+- ✓ 可回復的 AI 自動更新（Phase 2C-B：選擇策略、自動套用、undo、衝突升級） — **Implemented, Tested, Committed（本階段）, Not Pushed**
 
 ### 後端基礎
 - ✓ SQLite + WAL + STRICT 約束 — **Implemented, Tested, Committed, Pushed**
@@ -143,17 +160,12 @@ Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地�
 
 ## 未完成工作
 
-### 立即待做（Phase 2C-B：實作評測結論 —— 選擇策略＋T1 自動套用，建議）
-1. **證據選擇**：>8 張時「最早 2＋最新 6」（≤8 全送不變）；單元測試覆蓋邊界
-2. **自動套用政策 T1**：描述性 `attribute:*` 自動更新（僅空值或用戶未動過的鍵），身分/識別碼永不自動；不依賴模型信心
-3. **可回復＋可見**：每次自動變更的事件/復原＋「AI 已自動更新」通知；衝突（新身分 ≠ 既有）升級回確認清單
-4. **驗收**：`AI-EVALUATION-REPORT.md` §6 的 8 條全部滿足；含 fake-provider 回歸＋一次瀏覽器 E2E
-
-### 替代順序
-- Phase 1B-B 紀錄編輯完善（ROADMAP Phase 1B 剩餘項）
+### 立即待做（Phase 3：垃圾桶與資料生命週期，建議）
+- 依 `ROADMAP.md` Phase 3：垃圾桶 UI／30 天保留／永久刪除（明確使用者意圖、可稽核）
+- 收尾選項（可穿插）：`attribute:description` prompt 調校＋再評測；屬性來源標籤（✨AI／✍手動）；Phase 1B-B 紀錄編輯完善
 
 ### 短期（Phase 2–3）
-- Phase 2（2A、2B、2C-A 完成）：AI Contract 2.0 —— 提案命名空間 ✓、證據累積 ✓、評測 harness ✓、**自動套用政策實作（2C-B）待做**
+- Phase 2：AI Contract 2.0 —— **完成（2A 生命週期、2B 證據累積、2C-A 評測、2C-B 可回復自動套用）**
 - Phase 3：垃圾桶 & 30 天保留 + 永久刪除
 
 ### 中期（Phase 4–6）
@@ -177,10 +189,11 @@ Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地�
 | i18n 覆蓋率 | 低 | 完整 | 前端全文字已翻譯（1B-A +2、2A +1、2B +19 keys × 2） |
 | `matched_identifier` 不在列表 API | 低 | 已知 | 前端序號欄位目前退回顯示 model；需要的話後續階段補 |
 | 外部 adapter 重新分析不觸發 supersede | 低 | 已知 | tools/analyze_item.py 走通用 `POST /suggestions` 逐筆建立；只有伺服器端 analyze 具「最新詮釋」語意 |
-| 矛盾證據被靜默合併 | 中 | 已驗證（評測 L4） | 2C-B：身分衝突升級確認；購買屬性僅空值自動；詳見 AI-EVALUATION-REPORT §5 |
-| 最新-8 選擇會丟最早的身分照 | 中 | 已驗證（評測 L6a） | 2C-B：改「最早 2＋最新 6」（L6b 證明可行） |
+| 矛盾證據被靜默合併 | 中 | 已解決 | Phase 2C-B：L4 錄製輸出回放 → 購買資訊轉 `external_conflict` 確認，絕不自動併入 |
+| 最新-8 選擇會丟最早的身分照 | 中 | 已解決 | Phase 2C-B：「最早 2＋最新 6」；邊界與兩端整合測試 |
 | 模型自報信心無鑑別力 | 低 | 已驗證（全場 0.9~1.0） | 政策不得依賴信心；信心僅記錄 |
-| `attribute:description` 未被模型自發產生 | 低 | 開放 | 生活描述 prompt 調校＋再評測（2C-B/後續） |
+| `attribute:description` 未被模型自發產生 | 低 | 開放 | 2C-B 已支援自動套用與修訂；prompt 調校＋再評測仍在後續 |
+| 屬性逐鍵來源標籤（✨AI／✍手動） | 低 | 開放 | 目前以 banner＋事件/建議可追溯；逐鍵 UI 標籤後續 |
 | 生活備忘欄位設計 | 中 | 開放 | Phase 1B-B；參考 FEATURE-PLAN.md, JOB-TO-BE-DONE.md |
 | 搜尋效能基線 | 低 | 未測 | Phase 5 時詳細評估 |
 
@@ -239,7 +252,7 @@ Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地�
 
 ---
 
-## Phase 2C-A 變更清單（本階段 commit）
+## Phase 2C-A 變更清單（commit `dda8b61`，前次）
 
 | 檔案 | 變更 |
 |---|---|
@@ -256,35 +269,53 @@ Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地�
 
 ---
 
+## Phase 2C-B 變更清單（本階段 commit）
+
+| 檔案 | 變更 |
+|---|---|
+| `shop/repo.py` | 政策常數（識別欄位／確認欄位／購買鍵／來源標記）；`commit_analysis()`（2A 生命週期＋auto 決策＋自動套用，同交易）；`_field_provenance()`（事件推導 none/auto/user）；`_apply_auto()`；`undo_auto_suggestion()`；純函式 `_auto_decision`／`_conflicting_fields`／`_drop_unchanged_entries`／`_current_value`；`replace_pending_suggestions` 改委派 |
+| `shop/api.py` | analyze 新增 `?auto=1`；`_select_photos_for_analysis`（最早 2＋最新 6）；`POST /api/suggestions/{id}/undo` |
+| `web/views/record-detail.js` | 詳情頁 auto=1；「✨ 已自動更新＋復原」banner；待確認列加來源照片 `📷 #n` 與衝突 ⚠️ 說明；修掉型號整列重複 |
+| `web/core/api.js` | `analyzeItem(id,{auto})`、`undoSuggestion` |
+| `web/i18n/zh-TW.js`, `web/i18n/en.js` | +5 keys × 2（analysisApplied／undo／undoDone／undoFailed／conflictNote） |
+| `web/app.css` | `is-applied`、`suggestion-photo`、`is-conflict`、conflict note 樣式 |
+| `tests/test_ai_analyze.py` | +17（選擇邊界、自動填入/修訂、使用者保護、L3/L4 錄製回放、矛盾、跳過同值、undo×3、失敗、信心無關） |
+| `tests/test_repo_suggestions.py` | +3（矛盾欄位、丟棄同值、auto 整批回滾） |
+| `tests/test_v3_core_slice.py` | +1（2C-B 前端接線靜態檢查） |
+| `docs/engineering/STATUS.md`, `ROADMAP.md` | 狀態校準 |
+
+**未變更**：schema（零 migration）、API 契約形狀（analyze 回應增列 auto 項目、排序 applied→pending）、media 結構、capture/settings view。
+
+---
+
 ## 本地與遠端同步狀態
 
 | 項 | 狀態 |
 |---|---|
 | Branch | main |
-| Ahead/Behind | 8 ahead, 0 behind（未 push；本階段 commit 後） |
+| Ahead/Behind | 9 ahead, 0 behind（未 push；本階段 commit 後） |
 | Uncommitted Changes | 0（本階段變更全數進入獨立 commit） |
 | 衝突 | 無 |
-| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22` —— 未修改、未 amend、未 rebase |
+| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61` —— 未修改、未 amend、未 rebase |
 
 ---
 
 ## 下一個明確任務
 
-### Phase 2C-B：實作評測結論（證據選擇＋T1 自動套用；依 AI-EVALUATION-REPORT §6）
+### Phase 3：垃圾桶與資料生命週期（依 ROADMAP）
 檢查清單：
-- [ ] 證據選擇「最早 2＋最新 6」（>8 張）；邊界單元測試（8/9/12 張）
-- [ ] T1 自動套用：描述性 `attribute:*`（僅空值或 AI 上次套用的鍵；身分/識別碼永不自動；不依賴信心）
-- [ ] 通知與復原：「✨ AI 已自動更新」＋一鍵復原（事件 prev/next）；衝突升級回確認清單
-- [ ] 驗收 8 條全滿足（fake-provider 回歸＋一次瀏覽器 E2E）；全測試通過
+- [ ] 垃圾桶頁面（void 紀錄）＋還原
+- [ ] 30 天保留與永久刪除（明確使用者意圖、可稽核；原照片保護規則先定案）
+- [ ] 補充測試、全測試通過
 
-（替代順序：Phase 1B-B 紀錄編輯完善 —— 見 ROADMAP Phase 1B 剩餘項。）
+（收尾選項：`attribute:description` prompt 調校＋再評測；屬性來源標籤；Phase 1B-B。）
 
 ### AI-Native 架構研究對照（`docs/engineering/AI-NATIVE-ARCHITECTURE.md`）
 - ✓ S1（提案命名空間）→ Phase 2B：`attribute:<key>` 受驗證契約
 - ✓ S2（修訂語意＋可靠性修正）→ Phase 2A
-- ◐ S3（前端呈現/可溯性）→ 審閱＋屬性顯示＋失敗重試完成；來源標籤（✨AI/✍手動）＝ 2C-B 隨自動套用一起補
+- ◐ S3（前端呈現/可溯性）→ 審閱＋屬性顯示＋失敗重試＋自動更新 banner/undo 完成；逐鍵來源標籤後續
 - ✓ S4（模型評測 harness）→ Phase 2C-A（評測＋政策；含真實模型證據）
-- 下一步 S5：受控自動套用（可回復；見 AI-EVALUATION-REPORT §5/§6）
+- ✓ S5（受控自動套用）→ Phase 2C-B：決定性政策、可回復、衝突升級
 - 研究結論：不換資料模型；全部 additive、無 schema migration
 
 ---
@@ -307,3 +338,4 @@ Commit：`feat: phase-2c-a ai evaluation harness and autonomy policy`（本地�
 - **2026-10-09**：Phase 2A 完成——AI 建議生命週期（成功分析 supersede 舊 pending／失敗保留／superseded 終態）與 capture 部分失敗語意（誠實回報＋原地重試不重複）；測試基線 928 → 940
 - **2026-10-09**：Phase 2B 完成——證據累積（詳情頁加入照片、不建新紀錄）、情境式重新理解（既有詮釋＋新證據）、`attribute:<key>` 契約、失敗保留與重試、accepted 詞彙搜尋保留、`BEGIN IMMEDIATE` 併發修正；測試基線 940 → 955
 - **2026-10-10**：Phase 2C-A 完成——評測 harness＋合成 fixture；實際評測 `gemini-3.5-flash-lite`（8 次呼叫、free tier、僅合成圖）：契約 7/7 合法、`attribute:<key>` 被自發使用、信心無鑑別力、L4 矛盾證據合併、L6a 選擇策略丟失身分；產出證據選擇建議與 T0/T1 自主性政策＋2C-B 驗收條件；測試基線 955 → 962
+- **2026-10-10**：Phase 2C-B 完成——證據選擇「最早 2＋最新 6」；可回復的自動套用（描述屬性／空身分／auto 修訂；決定性、不看信心）；使用者保護（編輯/確認/清空/復原皆鎖定）；衝突升級（L4 錄製回放）；`POST /suggestions/{id}/undo`；詳情頁 banner＋復原；瀏覽器 E2E（自動更新→復原→套用→搜尋）；測試基線 962 → 983

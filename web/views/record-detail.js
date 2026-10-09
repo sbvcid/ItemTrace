@@ -66,7 +66,7 @@ export async function createRecordDetailView(params, router) {
     reanalyzeBtn.disabled = on;
   }
 
-  function setStatus(kind, message) {
+  function setStatus(kind, message, action = null) {
     if (!kind) {
       analysisStatus.hidden = true;
       analysisStatus.className = 'detail-analysis-status';
@@ -75,17 +75,15 @@ export async function createRecordDetailView(params, router) {
     }
     analysisStatus.hidden = false;
     analysisStatus.className = `detail-analysis-status is-${kind}`;
-    const retryHtml = kind === 'failed'
-      ? `<button type="button" class="btn-secondary detail-tool-btn" id="btn-retry-analysis">${t('detail.analysisRetry')}</button>`
-      : '';
+    const icon = kind === 'failed' ? '⚠️' : '✨';
     analysisStatus.innerHTML = `
-      <span class="analysis-text">${kind === 'running' ? '✨' : '⚠️'} ${message}</span>
-      ${retryHtml}
+      <span class="analysis-text">${icon} ${message}</span>
+      ${action ? `<button type="button" class="btn-secondary detail-tool-btn" id="btn-status-action">${action.label}</button>` : ''}
     `;
-    const retryBtn = analysisStatus.querySelector('#btn-retry-analysis');
-    if (retryBtn) {
-      retryBtn.addEventListener('click', () => {
-        if (!busy) runAnalysis();
+    const actionBtn = analysisStatus.querySelector('#btn-status-action');
+    if (actionBtn && action) {
+      actionBtn.addEventListener('click', () => {
+        if (!busy) action.onClick();
       });
     }
   }
@@ -126,21 +124,35 @@ export async function createRecordDetailView(params, router) {
     return keys[field] ? t(keys[field]) : field;
   }
 
-  function renderReview(suggestions) {
+  function renderReview(suggestions, photos = []) {
     currentPending = (suggestions || []).filter(s => s.status === 'pending');
     if (currentPending.length === 0) {
       suggestionReview.innerHTML = '';
       return;
     }
+    const photoIndexById = new Map(
+      (photos || []).map((photo, index) => [photo.id, index + 1])
+    );
     const rows = currentPending.map(s => {
       const confidence = typeof s.confidence === 'number'
         ? `<span class="suggestion-confidence">${Math.round(s.confidence * 100)}%</span>`
         : '';
+      const photoNumber = s.source_photo_id
+        ? photoIndexById.get(s.source_photo_id)
+        : null;
+      const photoChip = photoNumber
+        ? `<span class="suggestion-photo">📷 #${photoNumber}</span>`
+        : '';
+      const isConflict = s.source === 'external_conflict';
+      const conflictNote = isConflict
+        ? `<div class="suggestion-conflict-note">⚠️ ${t('detail.conflictNote')}</div>`
+        : '';
       return `
-        <div class="suggestion-row" data-id="${s.id}">
+        <div class="suggestion-row${isConflict ? ' is-conflict' : ''}" data-id="${s.id}">
           <div class="suggestion-info">
-            <div class="suggestion-field">${fieldLabel(s.field)} ${confidence}</div>
+            <div class="suggestion-field">${fieldLabel(s.field)} ${confidence} ${photoChip}</div>
             <div class="suggestion-value">${s.value}</div>
+            ${conflictNote}
           </div>
           <div class="suggestion-actions">
             <button type="button" class="btn-mini" data-action="accept">${t('detail.apply')}</button>
@@ -212,15 +224,55 @@ export async function createRecordDetailView(params, router) {
   async function performAnalysis() {
     setStatus('running', t('detail.analysisRunning'));
     try {
-      await api.analyzeItem(itemId);
-      setStatus(null);
+      // Phase 2C-B：auto=1 —— 合格的低風險項目直接套用（可復原），
+      // 其餘（含衝突升級）留在待確認清單。
+      const created = await api.analyzeItem(itemId, { auto: true });
       await loadDetail();
+      const applied = (created || []).filter(
+        s => s.status === 'accepted' && s.source === 'auto'
+      );
+      if (applied.length > 0) {
+        const labels = applied.map(s => fieldLabel(s.field)).join('、');
+        setStatus(
+          'applied',
+          t('detail.analysisApplied', { n: applied.length, fields: labels }),
+          {
+            label: t('detail.undo'),
+            onClick: () => undoSuggestions(applied.map(s => s.id)),
+          }
+        );
+      } else {
+        setStatus(null);
+      }
       return true;
     } catch (err) {
       // 證據（照片）已經保存；只有整理沒完成 —— 誠實回報並保留重試。
       console.warn('AI reinterpretation failed:', err);
-      setStatus('failed', t('detail.analysisFailed', { err: err.message }));
+      setStatus('failed', t('detail.analysisFailed', { err: err.message }), {
+        label: t('detail.analysisRetry'),
+        onClick: () => runAnalysis(),
+      });
       return false;
+    }
+  }
+
+  async function undoSuggestions(suggestionIds) {
+    if (busy || suggestionIds.length === 0) return;
+    setBusy(true);
+    try {
+      const results = await Promise.allSettled(
+        suggestionIds.map(id => api.undoSuggestion(id))
+      );
+      const failed = results.filter(r => r.status === 'rejected').length;
+      setStatus(null);
+      await loadDetail();
+      showToast(
+        failed > 0
+          ? t('detail.undoFailed', { n: failed })
+          : t('detail.undoDone')
+      );
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -312,8 +364,9 @@ export async function createRecordDetailView(params, router) {
     const title = item.name || item.model || t('home.cardUntitled');
     const serialItems = identifiers.filter(i => i.kind === 'serial');
 
-    const serialsHtml = serialItems.length > 0
-      ? serialItems.map(i => `
+    // 只負責序號列；型號由下面的 specs grid 顯示（以前這裡的 fallback
+    // 會在沒有序號時再畫一次型號 → 型號設定後整列重複）。
+    const serialsHtml = serialItems.map(i => `
           <div class="spec-item">
             <span class="spec-label">${t('detail.serialBadge')}</span>
             <div class="spec-val mono">
@@ -321,13 +374,7 @@ export async function createRecordDetailView(params, router) {
               <button type="button" class="btn-copy" data-copy="${i.value}" title="${t('detail.copySerial')}">📋 ${t('detail.copySerial')}</button>
             </div>
           </div>
-        `).join('')
-      : (item.model ? `
-          <div class="spec-item">
-            <span class="spec-label">${t('detail.fieldModel')}</span>
-            <div class="spec-val mono">${item.model}</div>
-          </div>
-        ` : '');
+        `).join('');
 
     // 補充資訊：AI（或使用者）整理出的 attributes（Phase 2B）
     const attributeEntries = Object.entries(item.attributes || {})
@@ -427,7 +474,7 @@ export async function createRecordDetailView(params, router) {
 
     // Pending AI suggestions (kept outside detailContent so they survive
     // the detail re-render during review actions).
-    renderReview(data.suggestions);
+    renderReview(data.suggestions, data.photos);
   }
 
   loadDetail();

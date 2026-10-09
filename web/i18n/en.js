@@ -107,6 +107,11 @@ export default {
     applyPartial: '{n} suggestion(s) could not be applied (still pending)',
     descriptionLabel: 'AI description',
     attributeLabel: 'Attribute: {key}',
+    analysisApplied: 'AI auto-updated {n} item(s): {fields}',
+    undo: 'Undo',
+    undoDone: 'AI update undone',
+    undoFailed: '{n} undo(s) failed, please retry',
+    conflictNote: 'This may conflict with other evidence; review before applying',
   },
   settings: {
     headerTitle: 'Settings',

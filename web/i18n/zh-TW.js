@@ -107,6 +107,11 @@ export default {
     applyPartial: '有 {n} 筆未套用成功（仍保留為待確認）',
     descriptionLabel: 'AI 描述',
     attributeLabel: '屬性：{key}',
+    analysisApplied: 'AI 已自動更新 {n} 項：{fields}',
+    undo: '復原',
+    undoDone: '已復原 AI 自動更新',
+    undoFailed: '有 {n} 項復原失敗，請重試',
+    conflictNote: '這筆與其他證據可能不一致，請確認後再套用',
   },
   settings: {
     headerTitle: '設定',
