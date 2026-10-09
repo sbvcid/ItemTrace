@@ -39,6 +39,7 @@ from . import db, events, ids
 from .config import Config
 from .errors import ConflictError, NotFoundError, ValidationError
 from .models import (
+    ATTRIBUTE_FIELD_PREFIX,
     IDENTIFIER_FIELD_PREFIX,
     IDENTIFIER_KINDS,
     IDENTIFIER_SOURCES,
@@ -54,6 +55,7 @@ from .models import (
     Photo,
     Suggestion,
     Template,
+    attribute_key,
     dumps_object,
 )
 
@@ -199,6 +201,10 @@ class Repository:
         if q and q.strip():
             # SPEC-v1 §7.2：v1 用 LIKE，不用 FTS5（實測 FTS5 查不到兩字中文，
             # 而資料量在數千筆以內全表掃描完全夠快）。§7.3 的搜尋範圍。
+            # Phase 2B：額外命中「曾被使用者接受過」的建議值 —— 新詮釋取代
+            # 舊欄位值之後（例如收據讓「不明零件」變成正式品名），舊詞彙
+            # 仍然找得到。只認 accepted：pending / superseded / rejected
+            # 都是未經確認的猜測，不能變成可搜尋的「事實」。
             text = f"%{q.strip()}%"
             normalized = f"%{ids.normalize_identifier(q)}%"
             where = (
@@ -208,10 +214,15 @@ class Repository:
                 "    WHERE i2.name LIKE ? OR i2.brand LIKE ? OR i2.model LIKE ?"
                 "       OR i2.category LIKE ? OR i2.notes LIKE ? OR i2.attributes LIKE ?"
                 "       OR d.value LIKE ? OR d.normalized LIKE ?"
+                "       OR EXISTS ("
+                "            SELECT 1 FROM suggestions s"
+                "             WHERE s.item_id = i2.id AND s.status = 'accepted'"
+                "               AND s.value LIKE ?"
+                "       )"
                 " )" + where.replace(" WHERE ", " AND ", 1)
             )
             params = [
-                text, text, text, text, text, text, text, normalized, *params
+                text, text, text, text, text, text, text, normalized, text, *params
             ]
             rows = self.conn.execute(
                 f"SELECT i.* FROM items i{where}"
@@ -739,7 +750,9 @@ class Repository:
 
         field 是一般欄位 → 更新 items；
         field 是 identifier:<kind> → 另建 identifiers，帶上 confidence、
-        source='accepted_suggestion' 與來源照片（SPEC-v1 §5）。
+        source='accepted_suggestion' 與來源照片（SPEC-v1 §5）；
+        field 是 attribute:<key> → 單鍵合併寫入 items.attributes（Phase 2B），
+        既有其他屬性鍵（包含使用者自己填的）一律保留。
         """
         with db.transaction(self.conn):
             before = self.get_suggestion(suggestion_id)
@@ -757,6 +770,10 @@ class Repository:
                     source_photo_id=after.source_photo_id,
                     actor=actor,
                 )
+            elif after.attribute_key is not None:
+                item = self.get_item(after.item_id)
+                merged = {**item.attributes, after.attribute_key: after.value}
+                self.update_item(after.item_id, {"attributes": merged}, actor=actor)
             else:
                 self.update_item(after.item_id, {after.field: after.value}, actor=actor)
 
@@ -775,6 +792,7 @@ class Repository:
                     "model_name": after.model_name,
                     "source_photo_id": after.source_photo_id,
                     "created_identifier": after.identifier_kind is not None,
+                    "attribute_key": after.attribute_key,
                 },
             )
             return after
@@ -1284,6 +1302,15 @@ def _validate_suggestion(suggestion: Suggestion) -> None:
     _check_required("suggestions.value", suggestion.value)
     _check_confidence(suggestion.confidence)
     field = suggestion.field
+    if field.startswith(ATTRIBUTE_FIELD_PREFIX):
+        # attribute:<key>：key 的形狀由 ATTRIBUTE_KEY_PATTERN 強制。
+        # 前綴對但 key 非法要給出清楚的訊息，不能掉到下面的白名單錯誤。
+        if attribute_key(field) is None:
+            raise ValidationError(
+                f"suggestions.field 的屬性名稱不合法：{field!r}；"
+                "key 必須是小寫開頭、英數與底線、長度 1~40"
+            )
+        return
     kind = (
         field[len(IDENTIFIER_FIELD_PREFIX):]
         if field.startswith(IDENTIFIER_FIELD_PREFIX)
@@ -1295,7 +1322,7 @@ def _validate_suggestion(suggestion: Suggestion) -> None:
         raise ValidationError(
             f"suggestions.field 必須是 {', '.join(SUGGESTABLE_FIELDS)}"
             f" 或 {IDENTIFIER_FIELD_PREFIX}<kind>（{', '.join(IDENTIFIER_KINDS)}），"
-            f"得到 {field!r}"
+            f"或 {ATTRIBUTE_FIELD_PREFIX}<key>，得到 {field!r}"
         )
 
 

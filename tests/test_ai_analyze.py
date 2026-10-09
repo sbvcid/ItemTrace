@@ -62,11 +62,11 @@ def fake_provider(monkeypatch):
 
     def install(payload=None, raises=None):
         def fake(api_key, model, data_urls, *,
-                 provider=None, base_url=None, timeout=None):
+                 provider=None, base_url=None, timeout=None, context=""):
             calls.append({
                 "api_key": api_key, "model": model,
                 "data_urls": data_urls, "provider": provider,
-                "base_url": base_url,
+                "base_url": base_url, "context": context,
             })
             if raises is not None:
                 raise raises
@@ -710,3 +710,209 @@ def test_retrying_accepted_suggestion_is_refused_without_duplicate_changes(
         if e["type"] == "suggestion.accepted" and e["entity_id"] == suggestion_id
     ]
     assert len(accepted_events) == 1
+
+
+# ----------------------------------------------------------------------
+# G. 證據累積與情境式重新理解（Phase 2B）
+# ----------------------------------------------------------------------
+
+
+def add_evidence_photo(client, item_id, filename="receipt.jpg", tag=99):
+    """走與前端「加入照片」相同的路徑：新 observation → 上傳。"""
+    observation = client.post(
+        f"/api/items/{item_id}/observations", json={"kind": "recheck"}
+    ).json()
+    upload = client.post(
+        f"/api/observations/{observation['id']}/photos",
+        files=[("files", (filename, fake_jpeg(tag), "image/jpeg"))],
+    )
+    assert upload.status_code == 201, upload.text
+    body = upload.json()
+    assert len(body["archived"]) == 1
+    return body["archived"][0]
+
+
+def test_analyze_sends_existing_context_and_new_evidence(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """重跑分析時：全部（或最新）證據 + 既有詮釋一起送給 AI。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    client.patch(f"/api/items/{item.id}", json={
+        "name": "不明金屬零件",
+        "attributes": {"purchase_date": "2026-05-10"},
+    })
+    receipt = add_evidence_photo(client, item.id)
+
+    calls = fake_provider(provider_response([
+        {"field": "name", "value": "牧田 18V 震動電鑽", "confidence": 0.9,
+         "source_photo_index": 1},
+        {"field": "attribute:vendor", "value": "光華商場", "confidence": 0.8,
+         "source_photo_index": 1},
+    ]))
+
+    response = client.post(f"/api/items/{item.id}/ai/analyze")
+    assert response.status_code == 201
+    call = calls[0]
+    assert len(call["data_urls"]) == 2          # 舊照片 + 新證據
+    assert "不明金屬零件" in call["context"]     # 既有詮釋進上下文
+    assert "purchase_date" in call["context"]
+    assert "2026-05-10" in call["context"]
+
+    body = response.json()
+    assert [s["field"] for s in body] == ["name", "attribute:vendor"]
+    assert body[1]["source_photo_id"] == receipt["id"]
+
+    # 分析仍不碰主表：使用者資料原封不動
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["name"] == "不明金屬零件"
+    assert detail["item"]["attributes"] == {"purchase_date": "2026-05-10"}
+
+
+def test_analyze_keeps_newest_evidence_when_over_photo_limit(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """照片超過上限時保留最新的：新證據一定要進這一輪。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=8)
+    newest = add_evidence_photo(client, item.id, filename="receipt9.jpg", tag=77)
+
+    calls = fake_provider(provider_response([
+        {"field": "name", "value": "第九張才有的名字", "confidence": 0.9,
+         "source_photo_index": 7},
+    ]))
+    response = client.post(f"/api/items/{item.id}/ai/analyze")
+    assert response.status_code == 201
+
+    assert len(calls[0]["data_urls"]) == 8      # 上限就是 8
+    assert response.json()[0]["source_photo_id"] == newest["id"]
+
+
+def test_attribute_suggestions_are_strictly_validated(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """attribute:<key> 的 key 形狀由軟體強制：非法 key 整批失敗。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "attribute:Bad-Key", "value": "x", "confidence": 0.5,
+         "source_photo_index": 0},
+    ]))
+    response = client.post(f"/api/items/{item.id}/ai/analyze")
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "不在白名單" in detail
+    assert "attribute:<key>" in detail
+    assert client.get(f"/api/items/{item.id}/suggestions").json() == []
+
+
+def test_analysis_rejects_too_many_suggestions(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """建議數量有上限，防止模型輸出塞爆 pending。"""
+    from shop.ai_client import MAX_SUGGESTIONS
+
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": f"B{index}", "confidence": 0.5,
+         "source_photo_index": 0}
+        for index in range(MAX_SUGGESTIONS + 1)
+    ]))
+    response = client.post(f"/api/items/{item.id}/ai/analyze")
+    assert response.status_code == 400
+    assert "超過上限" in response.json()["detail"]
+    assert client.get(f"/api/items/{item.id}/suggestions").json() == []
+
+
+def test_accepting_attribute_suggestion_merges_and_preserves_other_keys(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """接受屬性建議是單鍵合併：使用者自己填的 attributes 不會被清掉。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    client.patch(f"/api/items/{item.id}", json={"attributes": {"warranty": "兩年"}})
+    fake_provider(provider_response([
+        {"field": "attribute:vendor", "value": "光華商場", "confidence": 0.8,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze").json()
+
+    accepted = client.post(f"/api/suggestions/{body[0]['id']}/accept")
+    assert accepted.status_code == 200
+
+    attributes = client.get(f"/api/items/{item.id}").json()["item"]["attributes"]
+    assert attributes == {"warranty": "兩年", "vendor": "光華商場"}
+
+
+def test_reinterpretation_updates_record_without_duplicate(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """收據情境（API 版）：同一筆紀錄被更新，id／建立時間／使用者備註不變。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    client.patch(f"/api/items/{item.id}", json={
+        "name": "不明金屬零件", "notes": "看起來像電鑽",
+    })
+    before = client.get(f"/api/items/{item.id}").json()["item"]
+    add_evidence_photo(client, item.id)
+
+    fake_provider(provider_response([
+        {"field": "name", "value": "牧田 18V 震動電鑽", "confidence": 0.95,
+         "source_photo_index": 1},
+        {"field": "attribute:vendor", "value": "光華商場", "confidence": 0.8,
+         "source_photo_index": 1},
+        {"field": "attribute:description", "value": "附購買收據的 18V 電鑽",
+         "confidence": 0.75, "source_photo_index": 1},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze").json()
+    assert [s["field"] for s in body] == [
+        "name", "attribute:vendor", "attribute:description"]
+
+    for suggestion in body:
+        assert client.post(
+            f"/api/suggestions/{suggestion['id']}/accept"
+        ).status_code == 200
+
+    after = client.get(f"/api/items/{item.id}").json()
+    assert after["item"]["id"] == item.id == before["id"]
+    assert after["item"]["created_at"] == before["created_at"]
+    assert after["item"]["name"] == "牧田 18V 震動電鑽"
+    assert after["item"]["notes"] == "看起來像電鑽"     # 使用者備註未被覆蓋
+    assert after["item"]["attributes"]["vendor"] == "光華商場"
+    assert after["item"]["attributes"]["description"] == "附購買收據的 18V 電鑽"
+    assert len(after["photos"]) == 2                    # 原照片 + 收據
+    assert len(client.get("/api/items").json()) == 1    # 沒有多出一筆紀錄
+
+
+def test_failed_reinterpretation_keeps_photo_and_retry_is_clean(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """分析失敗：照片仍在、既有 pending 不失效；重試成功且不重複媒體。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 0},
+    ]))
+    first = client.post(f"/api/items/{item.id}/ai/analyze").json()
+
+    add_evidence_photo(client, item.id)
+
+    fake_provider(raises=ai_client.ProviderError(
+        f"AI 服務暫時無法使用（model={MODEL}）：HTTP 502，provider_unavailable"
+    ))
+    failed = client.post(f"/api/items/{item.id}/ai/analyze")
+    assert failed.status_code == 400
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert len(detail["photos"]) == 2                   # 新證據還在
+    pending = [s for s in detail["suggestions"] if s["status"] == "pending"]
+    assert [s["id"] for s in pending] == [first[0]["id"]]
+
+    # 重試：成功後依 Phase 2A 生命週期 supersede 舊 pending；媒體不重複
+    fake_provider(provider_response([
+        {"field": "name", "value": "牧田 18V 震動電鑽", "confidence": 0.9,
+         "source_photo_index": 1},
+    ]))
+    retried = client.post(f"/api/items/{item.id}/ai/analyze")
+    assert retried.status_code == 201
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    by_id = {s["id"]: s for s in detail["suggestions"]}
+    assert by_id[first[0]["id"]]["status"] == "superseded"
+    assert len(detail["photos"]) == 2                   # 重試不重複照片
+    assert detail["suggestion_counts"]["pending"] == len(retried.json())

@@ -18,6 +18,7 @@ DATA_ROOT 底下還有 catalog.db 與 config.json，不能一併端出去。
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Iterator
@@ -44,6 +45,7 @@ from .ai_config import AiConfigError
 from .config import Config, ConfigError
 from .errors import ConflictError, NotFoundError, ValidationError
 from . import evidence as evidence_mod
+from .models import Item
 from .repo import Repository
 from .settings import router as settings_router
 from .schemas import (
@@ -572,19 +574,25 @@ def analyze_item_photos(
     /api/suggestions/{id}/accept）才會寫進商品（推論與事實分離，
     SPEC-v1 §1）。這個端點自己永不修改 items。
 
+    Phase 2B：照片會連同「目前的已知資訊」一起送出 —— 後補的證據
+    （例如收據）能修正既有詮釋，而不是只看新照片從零猜。已知資訊
+    只是上下文，prompt 明確要求以照片為準。
+
     AI 服務由 tools/ai_config.local.json 決定（provider /
     base_url / model / api_key），與外部 adapter
     tools/analyze_item.py 共用 shop/ai_client.py 同一份實作。
     """
-    repo.get_item(item_id)  # 商品不存在 → 404
-    photos = repo.list_photos(
-        item_id=item_id, role="original", limit=ai_client.MAX_PHOTOS
-    )
+    item = repo.get_item(item_id)  # 商品不存在 → 404
+    photos = repo.list_photos(item_id=item_id, role="original", limit=500)
     if not photos:
         raise ValidationError(
             f"{item_id} 沒有 original 照片，沒有東西可以辨識。"
             " 先用 Inbox 建檔並上傳照片。"
         )
+    # 新證據一定要進這一輪：照片超過上限時保留最新的幾張，
+    # 但仍以時間順序送出（source_photo_index 的語意不變）。
+    if len(photos) > ai_client.MAX_PHOTOS:
+        photos = photos[-ai_client.MAX_PHOTOS:]
 
     try:
         ai = ai_config.load_config()
@@ -602,6 +610,7 @@ def analyze_item_photos(
         response = ai_client.call_ai_provider(
             ai.api_key, ai.model, data_urls,
             provider=ai.provider, base_url=ai.base_url,
+            context=_analysis_context(item),
         )
         text = ai_client.extract_text(response, ai.api_key)
         parsed = ai_client.parse_suggestions(
@@ -1109,6 +1118,32 @@ def _read_photo_bytes(cfg: Config, filename: str) -> bytes:
     if not target.is_relative_to(cfg.files_dir.resolve()) or not target.is_file():
         raise NotFoundError(f"找不到照片檔案：{filename}")
     return target.read_bytes()
+
+
+def _analysis_context(item: Item) -> str:
+    """把紀錄目前的已知資訊壓成給 AI 的上下文（Phase 2B）。
+
+    這是「目前的詮釋」，不是事實 —— prompt 會要求以照片為準、
+    仍正確的值可以原樣重提。notes 是使用者自己的備註，只作為
+    理解輔助（prompt 明確說不需要重複建議）。
+    """
+    lines = []
+    for label, value in (
+        ("name", item.name),
+        ("brand", item.brand),
+        ("model", item.model),
+        ("category", item.category),
+        ("condition", item.condition),
+        ("notes（使用者自己的備註）", item.notes),
+    ):
+        if value:
+            lines.append(f"- {label}: {value}")
+    if item.attributes:
+        lines.append(
+            "- attributes: "
+            + json.dumps(item.attributes, ensure_ascii=False, sort_keys=True)
+        )
+    return "\n".join(lines)
 
 
 def _minutes_between(earlier: str, later: str) -> float:

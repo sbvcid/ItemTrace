@@ -151,7 +151,7 @@ def test_every_third_party_import_is_declared():
         re.findall(r"^\s*import\s+([a-z_]+)", source, re.M)
     )
     local = {"shop", "dataclasses", "datetime", "pathlib", "typing", "__future__",
-             "contextlib"}
+             "contextlib", "json"}
     for module in sorted(imported - local):
         # python-multipart 提供 multipart
         declared = module in requirements or (

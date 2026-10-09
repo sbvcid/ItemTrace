@@ -268,3 +268,62 @@ def test_superseded_is_terminal(repo, item):
     with pytest.raises(ValidationError):
         repo.update_suggestion(stale.id, {"value": "acer"})
     assert repo.get_item(item.id).brand == ""
+
+
+# ----------------------------------------------------------------------
+# Phase 2B：attribute:<key> 提案（通用屬性的最小契約）
+# ----------------------------------------------------------------------
+
+
+def test_attribute_suggestion_key_is_validated(repo, item):
+    """key 形狀由軟體強制：小寫開頭、英數與底線、長度 1~40。"""
+    ok = repo.add_suggestion(item.id, "attribute:vendor", "光華商場")
+    assert ok.status == "pending"
+    assert ok.attribute_key == "vendor"
+
+    for bad in (
+        "attribute:",                      # 空 key
+        "attribute:Bad-Key",               # 大寫與 dash
+        "attribute:1abc",                  # 數字開頭
+        "attribute:中文",                   # 非 ASCII
+        "attribute:" + "x" * 41,           # 超過長度上限
+    ):
+        with pytest.raises(ValidationError):
+            repo.add_suggestion(item.id, bad, "x")
+
+
+def test_accept_attribute_suggestion_merges_single_key(repo, item):
+    """接受屬性建議是單鍵合併：既有鍵（含使用者自己填的）全部保留。"""
+    repo.update_item(item.id, {"attributes": {"warranty": "兩年"}})
+    suggestion = repo.add_suggestion(
+        item.id, "attribute:vendor", "光華商場", confidence=0.8
+    )
+    accepted = repo.accept_suggestion(suggestion.id)
+
+    assert accepted.status == "accepted"
+    attributes = repo.get_item(item.id).attributes
+    assert attributes == {"warranty": "兩年", "vendor": "光華商場"}
+
+    # 事件語義：attributes 的 field.changed 帶前後完整快照
+    change = next(
+        event for event in repo.list_events("item", item.id)
+        if event.type == "field.changed" and event.field == "attributes"
+    )
+    assert change.prev_value == {"warranty": "兩年"}
+    assert change.next_value == {"warranty": "兩年", "vendor": "光華商場"}
+
+    # accepted 建議是來源紀錄：保留 confidence 與來源資訊
+    stored = repo.get_suggestion(suggestion.id)
+    assert stored.confidence == 0.8
+    assert stored.status == "accepted"
+
+
+def test_accept_attribute_suggestion_does_not_touch_fixed_fields(repo, item):
+    """屬性提案只寫 attributes；固定欄位（name 等）不受影響。"""
+    suggestion = repo.add_suggestion(item.id, "attribute:color", "霧面黑")
+    repo.accept_suggestion(suggestion.id)
+
+    after = repo.get_item(item.id)
+    assert after.attributes == {"color": "霧面黑"}
+    assert after.name == "主機板"          # fixture 的原始名稱
+    assert after.brand == ""

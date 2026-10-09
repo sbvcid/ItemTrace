@@ -124,7 +124,7 @@ def test_the_batch_is_analyzable_by_the_existing_ai_endpoint(
     )
 
     def fake_provider(api_key, model, data_urls, *,
-                      provider=None, base_url=None, timeout=None):
+                      provider=None, base_url=None, timeout=None, context=""):
         fake_provider.seen = {"data_urls": len(data_urls),
                                "provider": provider}
         return {

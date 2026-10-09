@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -27,6 +28,8 @@ __all__ = [
     "Photo",
     "Suggestion",
     "Template",
+    "ATTRIBUTE_FIELD_PREFIX",
+    "ATTRIBUTE_KEY_PATTERN",
     "IDENTIFIER_KINDS",
     "IDENTIFIER_SOURCES",
     "ITEM_STATUSES",
@@ -34,6 +37,7 @@ __all__ = [
     "PHOTO_ROLES",
     "SUGGESTABLE_FIELDS",
     "SUGGESTION_STATUSES",
+    "attribute_key",
     "dumps_object",
     "loads_object",
     "loads_value",
@@ -55,6 +59,27 @@ SUGGESTABLE_FIELDS = ("name", "brand", "model", "category", "condition", "notes"
 
 #: suggestions.field 的識別碼前綴，後面接 identifiers.kind。
 IDENTIFIER_FIELD_PREFIX = "identifier:"
+
+#: suggestions.field 的通用屬性前綴：attribute:<key> 會在 accept 時
+#: 「單鍵合併」寫入 items.attributes，不覆蓋其他既有的鍵。
+#: 這是 Phase 2B 的最小契約擴充（AI-NATIVE-ARCHITECTURE.md §5）：
+#: AI 可以決定這張照片「值得記什麼」，但 key 的形狀由軟體強制 ——
+#: 小寫開頭、英數與底線、長度上限 40。
+ATTRIBUTE_FIELD_PREFIX = "attribute:"
+ATTRIBUTE_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+
+def attribute_key(field: str) -> str | None:
+    """field 為 attribute:<key> 且 key 合法時回傳 key，否則 None。
+
+    「不是 attribute: 開頭」與「是 attribute: 但 key 非法」都會得到 None；
+    需要區分兩者的呼叫端自行用 field.startswith(ATTRIBUTE_FIELD_PREFIX)
+    判斷（_validate_suggestion 就是這樣給出可讀的錯誤訊息）。
+    """
+    if not field.startswith(ATTRIBUTE_FIELD_PREFIX):
+        return None
+    key = field[len(ATTRIBUTE_FIELD_PREFIX):]
+    return key if ATTRIBUTE_KEY_PATTERN.fullmatch(key) else None
 
 
 def dumps_object(value: Mapping[str, Any] | None) -> str:
@@ -234,6 +259,11 @@ class Suggestion:
         if self.field.startswith(IDENTIFIER_FIELD_PREFIX):
             return self.field[len(IDENTIFIER_FIELD_PREFIX):]
         return None
+
+    @property
+    def attribute_key(self) -> str | None:
+        """field 為合法的 attribute:<key> 時回傳 <key>，否則 None。"""
+        return attribute_key(self.field)
 
     @classmethod
     def from_row(cls, row: Row) -> Suggestion:

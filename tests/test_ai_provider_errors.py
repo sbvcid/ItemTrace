@@ -332,16 +332,20 @@ def test_authorization_header_is_never_in_the_message():
 # ----------------------------------------------------------------------
 
 
-def test_call_ai_provider_signature_is_unchanged():
+def test_call_ai_provider_signature_is_pinned():
+    """簽章刻意釘住：向後相容地新增參數（如 Phase 2B 的 context）時，
+    必須連同這裡與既有 fake 一起更新 —— 不允許默默漂移。"""
     import inspect
 
     parameters = inspect.signature(ai_client.call_ai_provider).parameters
     assert list(parameters) == [
         "api_key", "model", "data_urls", "provider", "base_url", "timeout",
+        "context",
     ]
     assert parameters["provider"].default == ai_client.PROVIDER
     assert parameters["base_url"].default == ai_client.DEFAULT_BASE_URL
     assert parameters["timeout"].default == ai_client.TIMEOUT
+    assert parameters["context"].default == ""
 
 
 def test_build_request_body_still_depends_on_provider():

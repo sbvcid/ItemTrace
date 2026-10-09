@@ -10,6 +10,7 @@
 4. Scenario C：拍生活隨拍/寵物/風景照片，不被強迫建立 3C 規格欄位，照片安全留存
 5. Phase 1B-A：首頁最新紀錄置頂、保存後回首頁、修改不亂序、搜尋不受影響
 6. Phase 2A：capture 部分失敗語意（靜態接線檢查；非瀏覽器端對端測試）
+7. Phase 2B：證據累積——補照片到既有紀錄、情境式重新理解、更新後仍可搜尋
 """
 
 from __future__ import annotations
@@ -456,3 +457,128 @@ def test_phase2a_capture_partial_failure_static_checks(client):
     en = client.get("/i18n/en.js").text
     assert "savePartial" in zh
     assert "savePartial" in en
+
+
+# ----------------------------------------------------------------------
+# Phase 2B：證據累積與情境式重新理解（驗收情境）
+# ----------------------------------------------------------------------
+
+
+def test_phase2b_evidence_accumulation_scenario(client, config, monkeypatch):
+    """陌生對象 → 幾天後補收據 → 同一筆紀錄被重新理解（完整驗收情境）。
+
+    1. 拍下不認識的東西並存起來（AI 不認識 → 使用者手動命名）
+    2. 補上收據照片（加在同一筆紀錄，不是新紀錄）
+    3. AI 用「既有資訊 + 新證據」重新理解
+    4. 使用者確認後同一筆紀錄更新（id / created_at / 原照片都不變，
+       使用者備註不被覆蓋）
+    5. 新的描述與屬性可被搜尋（沿用既有 LIKE 搜尋）
+    """
+    from shop import ai_client, ai_config
+    from shop.ai_config import AiConfig
+
+    monkeypatch.setattr(
+        ai_config, "load_config",
+        lambda *a, **k: AiConfig(api_key="sk-test-key", model="test/model:free"),
+    )
+
+    calls = []
+
+    def fake_vision(api_key, model, data_urls, *, provider=None, base_url=None,
+                    timeout=None, context=""):
+        calls.append({"photos": len(data_urls), "context": context})
+        if len(calls) == 1:
+            content = json.dumps({"suggestions": []})
+        else:
+            content = json.dumps({"suggestions": [
+                {"field": "name", "value": "牧田 18V 震動電鑽",
+                 "confidence": 0.9, "source_photo_index": 1},
+                {"field": "attribute:vendor", "value": "光華商場",
+                 "confidence": 0.8, "source_photo_index": 1},
+                {"field": "attribute:description", "value": "附購買收據的 18V 電鑽",
+                 "confidence": 0.75, "source_photo_index": 1},
+            ]})
+        return {"choices": [{"message": {"content": content}}]}
+
+    monkeypatch.setattr(ai_client, "call_ai_provider", fake_vision)
+
+    # 1. 拍下陌生的東西並存在一筆紀錄裡
+    files = [("files", ("unknown.jpg", make_jpeg(exif="2026:10:01 10:00:00"),
+                        "image/jpeg"))]
+    upload = client.post("/api/inbox/photos", files=files).json()
+    intake = client.post("/api/inbox/intake", json={
+        "files": [upload["entries"][0]["relative"]], "kind": "intake",
+    }).json()
+    item_id = intake["item_id"]
+    assert client.post(f"/api/items/{item_id}/ai/analyze").status_code == 201
+    client.patch(f"/api/items/{item_id}", json={
+        "name": "不明金屬零件", "notes": "五金行買的，忘了名字",
+    })
+    before = client.get(f"/api/items/{item_id}").json()["item"]
+
+    # 2. 幾天後拿到收據，加到同一筆紀錄
+    observation = client.post(
+        f"/api/items/{item_id}/observations", json={"kind": "recheck"}
+    ).json()
+    uploaded = client.post(
+        f"/api/observations/{observation['id']}/photos",
+        files=[("files", ("receipt.jpg", make_jpeg(exif="2026:10:05 12:00:00"),
+                          "image/jpeg"))],
+    )
+    assert uploaded.status_code == 201
+    assert len(uploaded.json()["archived"]) == 1
+    assert len(client.get("/api/items").json()) == 1     # 沒有多出一筆紀錄
+
+    # 3. 情境式重新理解：新證據與既有資訊一起送
+    suggestions = client.post(f"/api/items/{item_id}/ai/analyze").json()
+    assert calls[-1]["photos"] == 2
+    assert "不明金屬零件" in calls[-1]["context"]
+    assert "五金行買的，忘了名字" in calls[-1]["context"]
+
+    # 4. 使用者確認前主表不變；確認後同一筆紀錄更新
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert detail["item"]["name"] == "不明金屬零件"
+    for suggestion in suggestions:
+        assert client.post(
+            f"/api/suggestions/{suggestion['id']}/accept"
+        ).status_code == 200
+
+    after = client.get(f"/api/items/{item_id}").json()
+    assert after["item"]["id"] == before["id"]
+    assert after["item"]["created_at"] == before["created_at"]
+    assert after["item"]["name"] == "牧田 18V 震動電鑽"
+    assert after["item"]["attributes"]["vendor"] == "光華商場"
+    assert after["item"]["notes"] == "五金行買的，忘了名字"   # 使用者備註未被覆蓋
+    assert len(after["photos"]) == 2                         # 全部照片都在
+
+    # 5. 更新後仍找得到：新名稱、屬性值、描述都進既有 LIKE 搜尋
+    assert [i["id"] for i in client.get("/api/items?q=牧田").json()] == [item_id]
+    assert [i["id"] for i in client.get("/api/items?q=光華商場").json()] == [item_id]
+    assert [i["id"] for i in client.get("/api/items?q=收據").json()] == [item_id]
+
+
+def test_phase2b_detail_evidence_wiring_static_checks(client):
+    """Phase 2B 前端接線靜態檢查（非瀏覽器端對端測試）：
+
+    detail 頁能加照片、觸發情境式重新分析、呈現待確認建議；
+    失敗時有明確的重試訊息；屬性有呈現區塊。
+    """
+    detail_js = client.get("/views/record-detail.js").text
+    assert "createObservation" in detail_js
+    assert "uploadObservationPhotos" in detail_js
+    assert "performAnalysis" in detail_js
+    assert "analysisFailed" in detail_js
+    assert "acceptSuggestion" in detail_js
+    assert "rejectSuggestion" in detail_js
+    assert "attributesTitle" in detail_js
+
+    api_js = client.get("/core/api.js").text
+    assert "uploadObservationPhotos" in api_js
+    assert "rejectSuggestion" in api_js
+
+    zh = client.get("/i18n/zh-TW.js").text
+    en = client.get("/i18n/en.js").text
+    for key in ("addPhoto", "reanalyze", "analysisFailed", "analysisRetry",
+                "pendingTitle", "applyAll", "attributesTitle"):
+        assert key in zh
+        assert key in en

@@ -80,8 +80,34 @@ export const api = {
     });
   },
 
+  // Evidence accumulation (Phase 2B): add photos to an existing record
+  async createObservation(itemId, { kind = 'recheck', note = '' } = {}) {
+    return request(`/api/items/${itemId}/observations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, note }),
+    });
+  },
+
+  async uploadObservationPhotos(observationId, files) {
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append('files', file);
+    }
+    return request(`/api/observations/${observationId}/photos`, {
+      method: 'POST',
+      body: formData,
+    });
+  },
+
   async acceptSuggestion(suggestionId) {
     return request(`/api/suggestions/${suggestionId}/accept`, {
+      method: 'POST',
+    });
+  },
+
+  async rejectSuggestion(suggestionId) {
+    return request(`/api/suggestions/${suggestionId}/reject`, {
       method: 'POST',
     });
   },

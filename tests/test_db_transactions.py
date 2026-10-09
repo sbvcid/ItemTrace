@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from shop import db as db_mod
@@ -94,3 +97,46 @@ def test_update_failure_keeps_updated_at_untouched(repo):
         repo.update_item(item.id, {"quantity": 0})
     assert repo.get_item(item.id).updated_at == item.updated_at
     assert repo.get_item(item.id).quantity == 1
+
+
+def test_concurrent_writers_wait_instead_of_locked(config):
+    """兩條連線同時「先讀後寫」：第二個要排隊等待，不能噴 database is locked。
+
+    這是 Phase 2B 瀏覽器測試抓到的真實缺陷：前端一次送出多個 accept，
+    per-request 連線併發寫入。deferred BEGIN 下，A 先讀（取 WAL 快照）、
+    B 先寫又提交，A 再寫時快照已過期 → SQLITE_BUSY_SNAPSHOT（busy handler
+    救不了）。BEGIN IMMEDIATE 讓 A 在交易開頭持鎖，B 由 busy_timeout 等待。
+    """
+    from shop.repo import Repository
+
+    first_locked = threading.Event()
+    failures: list[BaseException] = []
+
+    def slow_writer():
+        try:
+            with Repository.open(config) as repo:
+                with db_mod.transaction(repo.conn):
+                    repo.conn.execute("SELECT 1").fetchone()  # 先讀，取快照
+                    first_locked.set()
+                    time.sleep(0.3)  # 持鎖期間，另一條連線必須等待
+                    repo.conn.execute(
+                        "INSERT INTO items (id, created_at, updated_at) VALUES (?,?,?)",
+                        ("ITM-9001", db_mod.now(), db_mod.now()),
+                    )
+        except BaseException as exc:  # pragma: no cover - 只有回歸時才會進來
+            failures.append(exc)
+
+    thread = threading.Thread(target=slow_writer)
+    thread.start()
+    assert first_locked.wait(timeout=5), "慢的 writer 沒有開始"
+
+    # 第二條連線：必須等到第一個提交後才寫入成功
+    with Repository.open(config) as repo:
+        repo.create_item(name="第二個 writer")
+
+    thread.join(timeout=5)
+    assert failures == [], f"先讀後寫的 writer 失敗了：{failures}"
+
+    with Repository.open(config) as repo:
+        names = {item.name for item in repo.list_items()}
+    assert "第二個 writer" in names

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -144,9 +145,17 @@ def test_request_body_pins_structured_output():
     body = analyzer.build_request_body("m", [])
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["strict"] is True
-    fields = body["response_format"]["json_schema"]["schema"]["properties"][
-        "suggestions"]["items"]["properties"]["field"]["enum"]
-    assert set(fields) == set(analyzer.ALLOWED_FIELDS)
+    field_schema = body["response_format"]["json_schema"]["schema"]["properties"][
+        "suggestions"]["items"]["properties"]["field"]
+    # Phase 2B：固定欄位之外允許 attribute:<key>。key 是動態的、不能列舉，
+    # 所以 schema 改用 pattern；固定欄位仍然被同一個 pattern 完整涵蓋。
+    pattern = field_schema["pattern"]
+    for field in analyzer.ALLOWED_FIELDS:
+        assert re.search(pattern, field), f"pattern 必須接受 {field}"
+    assert re.search(pattern, "attribute:vendor")
+    assert re.search(pattern, "attribute:description")
+    assert not re.search(pattern, "attribute:Bad-Key")
+    assert not re.search(pattern, "price")
 
 def test_request_body_google_has_no_response_format():
     """Google Gemini 的相容層不支援 json_schema strict，

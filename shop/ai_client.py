@@ -26,6 +26,7 @@ from .ai_config import (
     chat_endpoint,
     redact,
 )
+from .models import attribute_key
 
 #: 這一輪只認這些欄位。不確定就不輸出 —— 空陣列比猜測好。
 ALLOWED_FIELDS = (
@@ -39,17 +40,33 @@ ALLOWED_FIELDS = (
     "identifier:barcode",
 )
 
-PROMPT = """\
-你是商品建檔的輔助。請看這些照片，辨識商品的以下欄位：
+#: 固定欄位之外，模型可以用 attribute:<key> 表達「值得記住但放不進固定欄位」
+#: 的資訊（收據的店家/金額/日期、物品顏色、場合……）。key 的形狀由
+#: shop/models.py 的 ATTRIBUTE_KEY_PATTERN 強制。
+ATTRIBUTE_FIELD_EXAMPLE = "attribute:<key>"
 
-- name：品名
+#: 一輪分析最多接受幾筆建議。防止模型回傳無上限的陣列塞爆 pending。
+MAX_SUGGESTIONS = 24
+
+PROMPT = """\
+你是 ItemTrace 的整理助手。請看這些照片，幫使用者把這筆紀錄整理成乾淨的資料。
+
+固定欄位（照片支持哪個就輸出哪個）：
+- name：品名（自然、完整的稱呼）
 - brand：品牌
 - model：型號
-- category：分類（例如 主機板 / 顯示卡 / 記憶體 / 硬碟 / 電源 / 機殼）
+- category：分類（例如 主機板 / 顯示卡 / 工具 / 家電 / 文件 / 收據）
 - condition：外觀與品況
 - identifier:serial：序號 / 產品序號 / SN
 - identifier:imei：IMEI
 - identifier:barcode：條碼
+
+固定欄位放不下、但值得記住的資訊，用 attribute:<key> 表達：
+- key 用小寫英數與底線（snake_case），例如 attribute:vendor（店家）、
+  attribute:amount（金額）、attribute:purchase_date（購買日期）、
+  attribute:color（顏色）。
+- value 是一段簡短文字。
+- 一般性的整體描述（這東西是什麼、有什麼特別）用 attribute:description。
 
 規則：
 1. 只輸出你真的從照片上讀到的東西。不確定就不要輸出該欄位。
@@ -59,7 +76,10 @@ PROMPT = """\
 4. source_photo_index 是你讀到該值的照片索引（從 0 開始）。
    序號請務必指向那張拍到標籤／序號的照片。
 5. 照片順序就是給定的順序，不要重新編號。
-6. 完全讀不到就回傳空的 suggestions 陣列。不要解釋，不要客套。
+6. 若提供了「目前已知資訊」，那可能是舊的、不完整的、甚至錯誤的：
+   以照片為準提出更新；仍然正確的欄位可以照原值重新提出。
+   使用者自己的備註不需要重複建議。
+7. 完全讀不到就回傳空的 suggestions 陣列。不要解釋，不要客套。
 """
 
 #: 照片縮圖邊長。手機原圖 3~5MB，base64 會再膨脹 33%，直接送整批容易爆。
@@ -138,7 +158,16 @@ RESPONSE_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "field": {"type": "string", "enum": list(ALLOWED_FIELDS)},
+                    # attribute:<key> 的 key 是動態的，不能列舉；用 pattern 讓
+                    # schema 與 parse_suggestions / repo 的驗證規則一致。
+                    "field": {
+                        "type": "string",
+                        "pattern": (
+                            "^(name|brand|model|category|condition|notes"
+                            "|identifier:(serial|imei|barcode)"
+                            "|attribute:[a-z][a-z0-9_]{0,39})$"
+                        ),
+                    },
                     "value": {"type": "string"},
                     "confidence": {"type": ["number", "null"]},
                     "source_photo_index": {"type": ["integer", "null"]},
@@ -192,12 +221,20 @@ def photo_data_url(data: bytes, filename: str) -> str:
 
 
 def build_request_body(
-    model: str, data_urls: list[str], *, provider: str = PROVIDER
+    model: str,
+    data_urls: list[str],
+    *,
+    provider: str = PROVIDER,
+    context: str = "",
 ) -> dict:
     """OpenAI Chat Completions 相容的請求體。
 
     文字在最前面、照片在後面 —— OpenRouter 官方建議的順序，說是因為內容
    解析的實作如此。
+
+    `context` 是這筆紀錄目前的已知資訊（Phase 2B 的「既有詮釋」）。
+    它不是事實、可能過時或有誤，prompt 已明確要求以照片為準 ——
+    有 context 時接在 PROMPT 之後以同一則 user 訊息送出。
 
     `response_format` 只在 OpenRouter 送：它的 json_schema strict 支援最完整。
     其他 OpenAI 相容端點（例如 Google Gemini）對 json_schema 的支援參差不齊
@@ -208,7 +245,14 @@ def build_request_body(
     刻意**不**加 OpenRouter 的 `provider` 欄位。實測：免費變體只對應到一個
     endpoint，加上 provider.require_parameters 會直接 404。
     """
-    content: list[dict] = [{"type": "text", "text": PROMPT}]
+    text = PROMPT
+    if context.strip():
+        text = (
+            f"{PROMPT}\n\n"
+            "## 這筆紀錄目前的已知資訊（可能過時或有誤，以照片為準）\n"
+            f"{context.strip()}"
+        )
+    content: list[dict] = [{"type": "text", "text": text}]
     content.extend(
         {"type": "image_url", "image_url": {"url": url}} for url in data_urls
     )
@@ -376,14 +420,18 @@ def call_ai_provider(
     provider: str = PROVIDER,
     base_url: str = DEFAULT_BASE_URL,
     timeout: int = TIMEOUT,
+    context: str = "",
 ) -> dict:
     """對任意 OpenAI 相容端點送出 chat completions 請求，回傳原始 JSON。
+
+    `context` 是這筆紀錄目前的已知資訊（可為空）。舊呼叫端（外部 adapter）
+    不傳也完全相容。
 
     沒有重試：失敗就是失敗（tests/test_analyze_item.py 明確斷言只嘗試
     一次、且不換模型）。provider 暫時不可用時使用者再按一次即可。
     """
     body = json.dumps(
-        build_request_body(model, data_urls, provider=provider)
+        build_request_body(model, data_urls, provider=provider, context=context)
     ).encode("utf-8")
     endpoint = chat_endpoint(provider, base_url)
     request = urllib.request.Request(endpoint, data=body, method="POST")
@@ -503,6 +551,10 @@ def parse_suggestions(text: str, photos: list[dict]) -> list[dict]:
     raw = payload["suggestions"]
     if not isinstance(raw, list):
         raise AnalyzerError("suggestions 必須是陣列")
+    if len(raw) > MAX_SUGGESTIONS:
+        raise AnalyzerError(
+            f"建議數量超過上限（{len(raw)} > {MAX_SUGGESTIONS}）"
+        )
 
     validated: list[dict] = []
     for position, entry in enumerate(raw):
@@ -510,9 +562,12 @@ def parse_suggestions(text: str, photos: list[dict]) -> list[dict]:
             raise AnalyzerError(f"第 {position + 1} 筆建議不是物件")
 
         field = entry.get("field")
-        if field not in ALLOWED_FIELDS:
+        if not isinstance(field, str) or (
+            field not in ALLOWED_FIELDS and attribute_key(field) is None
+        ):
             raise AnalyzerError(
                 f"第 {position + 1} 筆建議的欄位不在白名單：{field!r}"
+                f"（可用 {ATTRIBUTE_FIELD_EXAMPLE} 表達自訂屬性）"
             )
 
         value = entry.get("value")

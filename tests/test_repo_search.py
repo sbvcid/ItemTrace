@@ -263,3 +263,37 @@ def test_lookup_respects_limit(repo):
         repo.add_identifier(item.id, f"SAME-SHARED-{index}")
     assert len(repo.lookup_identifiers("SAME-SHARED")) == 10
     assert len(repo.lookup_identifiers("SAME-SHARED", limit=3)) == 3
+
+
+# ----------------------------------------------------------------------
+# Phase 2B：曾被接受過的舊詮釋詞彙仍可搜尋
+# ----------------------------------------------------------------------
+
+
+def test_previously_accepted_terms_remain_searchable(repo):
+    """新詮釋取代舊欄位值後，被取代的詞彙（曾被接受）仍找得到。"""
+    item = repo.create_item()
+    accepted = repo.add_suggestion(item.id, "name", "Makita 電鑽")
+    repo.accept_suggestion(accepted.id)
+    assert repo.get_item(item.id).name == "Makita 電鑽"
+
+    repo.update_item(item.id, {"name": "牧田 18V 震動電鑽"})
+    assert [row.id for row in repo.list_items(q="Makita")] == [item.id]
+    assert [row.id for row in repo.list_items(q="牧田")] == [item.id]
+    assert [row.id for row in repo.list_items(q="電鑽")] == [item.id]
+
+
+def test_unconfirmed_guesses_are_not_searchable(repo):
+    """pending / rejected / superseded 都是未經確認的猜測，不進搜尋。"""
+    item = repo.create_item()
+
+    repo.add_suggestion(item.id, "brand", "PENDING-GUESS-1")
+    assert repo.list_items(q="PENDING-GUESS-1") == []
+
+    rejected = repo.add_suggestion(item.id, "model", "REJECTED-1")
+    repo.reject_suggestion(rejected.id)
+    assert repo.list_items(q="REJECTED-1") == []
+
+    repo.add_suggestion(item.id, "condition", "SUPERSEDED-1")
+    repo.replace_pending_suggestions(item.id, [], model_name="t")
+    assert repo.list_items(q="SUPERSEDED-1") == []

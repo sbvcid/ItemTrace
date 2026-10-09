@@ -1170,3 +1170,149 @@ body {
   from { transform: translateY(16px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+
+/* ------------------------------------------------------------------ */
+/* Phase 2B: evidence accumulation on Record Detail                    */
+/* ------------------------------------------------------------------ */
+
+.detail-toolbar-wrap {
+  padding-top: 14px;
+}
+
+.detail-toolbar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.detail-tool-btn {
+  width: auto !important;
+  padding: 9px 16px;
+  font-size: 0.9rem;
+}
+
+.detail-analysis-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  border: 1px solid var(--border-default);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+
+.detail-analysis-status.is-failed {
+  background: hsl(38, 92%, 95%);
+  border-color: hsl(38, 80%, 80%);
+  color: hsl(28, 80%, 32%);
+}
+
+.suggestion-review-card {
+  margin-top: 12px;
+  border: 1px solid var(--color-ai-border, var(--border-default));
+}
+
+.suggestion-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-bottom: 10px;
+}
+
+.suggestion-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.suggestion-row:first-of-type {
+  border-top: none;
+}
+
+.suggestion-info {
+  min-width: 0;
+}
+
+.suggestion-field {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.suggestion-confidence {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.suggestion-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.suggestion-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.btn-mini {
+  width: auto !important;
+  padding: 5px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-brand, var(--border-default));
+  color: var(--color-brand, var(--text-primary));
+  background: var(--bg-surface, #fff);
+  cursor: pointer;
+}
+
+.btn-mini-muted {
+  border-color: var(--border-default);
+  color: var(--text-muted);
+}
+
+.attribute-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.attribute-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.attribute-key {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.attribute-value {
+  font-size: 0.92rem;
+  line-height: 1.5;
+  word-break: break-word;
+}

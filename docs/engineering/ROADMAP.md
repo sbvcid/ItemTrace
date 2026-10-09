@@ -157,13 +157,15 @@ Commit: "feat: phase-1a integrate V3 SPA frontend and core tests"
 
 ---
 
-### Phase 2：AI Contract 2.0 與視覺紀錄基礎（2A 建議生命週期 COMPLETED 2026-10-09）
+### Phase 2：AI Contract 2.0 與視覺紀錄基礎（2A 生命週期、2B 證據累積 COMPLETED 2026-10-09）
 
 **依賴**：Phase 1A
 
 **目標**：擴充 AI 整合契約，支援通用視覺紀錄、自然語言描述、模型評測，為後續 AI 功能奠基。
 
 **已完成（Phase 2A，2026-10-09）**：AI 建議生命週期與部分失敗語意 —— 成功的新分析於同一交易內 supersede 舊 pending；失敗分析保留既有 pending；accept 原子化、重試不重複；capture 部分失敗誠實回報並可原地重試。零 schema migration；12 個新測試，全 940 通過。細則見 `STATUS.md`。
+
+**已完成（Phase 2B，2026-10-09）**：證據累積與情境式重新理解 —— 既有紀錄可加入新照片（不建新紀錄）；分析帶入既有詮釋與新證據；`attribute:<key>` 契約（pattern 驗證、單鍵合併、不覆蓋使用者資料）；失敗保留照片與 pending 並可重試；accepted 詞彙保留於搜尋；併發寫入改 `BEGIN IMMEDIATE`。零 schema migration；15 個新測試，全 955 通過。細則見 `STATUS.md`。
 
 **工作範圍**：
 1. **AI Contract 升級**
@@ -713,4 +715,5 @@ Phase 7 (Windows Release)
 - **2026-10-09**：初始版本建立，基於 Phase 0 audit 結果
 - **2026-10-09（Phase 1B-A）**：Phase 1A 標記 COMPLETED；列表排序方案確定為預設 `created_at DESC`（不走 sort 參數）；測試基線更新為 928
 - **2026-10-09（Phase 2A）**：建議生命週期與部分失敗語意完成（supersede／失敗保留／重試不重複／誠實回報）；零 schema migration；測試基線更新為 940；下一階段 = Phase 2B 提案命名空間（study S1，待決策）
+- **2026-10-09（Phase 2B）**：證據累積與情境式重新理解完成（加照片到既有紀錄、上下文分析、`attribute:<key>` 契約、失敗保留＋重試、accepted 詞彙搜尋保留、`BEGIN IMMEDIATE` 併發修正）；零 schema migration；測試基線更新為 955；下一階段 = Phase 2C 模型評測 harness（study S4）
 

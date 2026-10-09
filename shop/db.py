@@ -51,11 +51,18 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 
     資料與 events 必須在同一個交易裡寫入 —— 這是 SPEC-v1 §1「一切有來源」的
     底線：不可能出現「資料改了但沒紀錄」或反過來的狀態。
+
+    刻意用 BEGIN IMMEDIATE（不是 deferred BEGIN）：寫入方法幾乎都是
+    「先讀後寫」（例如 accept 先讀 suggestion 再 UPDATE）。多條連線併發時，
+    deferred 交易先讀會取到 WAL 快照，等另一條連線提交後再寫 →
+    SQLITE_BUSY_SNAPSHOT（busy handler 救不了，直接噴 database is locked）。
+    IMMEDIATE 在交易開頭就取得寫鎖，connect() 的 busy_timeout=5000 才能
+    讓第二個 writer 排隊等待 —— 本地單寫入者情境下，也就是「先到先做」。
     """
     if conn.in_transaction:
         yield conn
         return
-    conn.execute("BEGIN")
+    conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
     except BaseException:

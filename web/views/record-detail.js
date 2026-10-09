@@ -2,9 +2,12 @@
  * Record Detail View (/i/:id)
  *
  * Detailed view of a saved record:
- * - High resolution photos
- * - Structured specs and serials
- * - Fast copy action for serial numbers
+ * - High resolution photos (all original evidence, including later additions)
+ * - Structured specs, attributes and serials
+ * - Phase 2B: add evidence photos to an existing record and let AI
+ *   re-interpret in context. The photo is saved first; analysis failures
+ *   never lose it and can be retried. Pending suggestions are reviewed
+ *   and applied explicitly — nothing is overwritten silently.
  */
 
 import { api, getPhotoUrl } from '../core/api.js';
@@ -28,15 +31,64 @@ export async function createRecordDetailView(params, router) {
       </div>
     </header>
 
+    <div class="container detail-toolbar-wrap">
+      <div class="detail-toolbar">
+        <button type="button" class="btn-secondary detail-tool-btn" id="btn-add-photo">📷 <span>${t('detail.addPhoto')}</span></button>
+        <button type="button" class="btn-secondary detail-tool-btn" id="btn-reanalyze">✨ <span>${t('detail.reanalyze')}</span></button>
+      </div>
+      <div class="detail-analysis-status" id="analysis-status" hidden></div>
+      <div id="suggestion-review"></div>
+    </div>
+
     <main class="container" id="detail-content">
       <div style="text-align: center; padding: 48px 20px; color: var(--text-muted);">
         ${t('detail.loading')}
       </div>
     </main>
+
+    <input type="file" id="detail-photo-input" accept="image/*" multiple hidden />
   `;
 
   const detailContent = el.querySelector('#detail-content');
   const statusBadge = el.querySelector('#status-badge');
+  const addPhotoBtn = el.querySelector('#btn-add-photo');
+  const reanalyzeBtn = el.querySelector('#btn-reanalyze');
+  const photoInput = el.querySelector('#detail-photo-input');
+  const analysisStatus = el.querySelector('#analysis-status');
+  const suggestionReview = el.querySelector('#suggestion-review');
+
+  let busy = false;
+  let currentPending = [];
+
+  function setBusy(on) {
+    busy = on;
+    addPhotoBtn.disabled = on;
+    reanalyzeBtn.disabled = on;
+  }
+
+  function setStatus(kind, message) {
+    if (!kind) {
+      analysisStatus.hidden = true;
+      analysisStatus.className = 'detail-analysis-status';
+      analysisStatus.innerHTML = '';
+      return;
+    }
+    analysisStatus.hidden = false;
+    analysisStatus.className = `detail-analysis-status is-${kind}`;
+    const retryHtml = kind === 'failed'
+      ? `<button type="button" class="btn-secondary detail-tool-btn" id="btn-retry-analysis">${t('detail.analysisRetry')}</button>`
+      : '';
+    analysisStatus.innerHTML = `
+      <span class="analysis-text">${kind === 'running' ? '✨' : '⚠️'} ${message}</span>
+      ${retryHtml}
+    `;
+    const retryBtn = analysisStatus.querySelector('#btn-retry-analysis');
+    if (retryBtn) {
+      retryBtn.addEventListener('click', () => {
+        if (!busy) runAnalysis();
+      });
+    }
+  }
 
   async function loadDetail() {
     try {
@@ -54,6 +106,167 @@ export async function createRecordDetailView(params, router) {
       `;
     }
   }
+
+  function fieldLabel(field) {
+    if (field === 'attribute:description') return t('detail.descriptionLabel');
+    if (field.startsWith('attribute:')) {
+      return t('detail.attributeLabel', { key: field.slice('attribute:'.length) });
+    }
+    if (field.startsWith('identifier:')) {
+      return field.slice('identifier:'.length).toUpperCase();
+    }
+    const keys = {
+      name: 'detail.fieldName',
+      brand: 'detail.fieldBrand',
+      model: 'detail.fieldModel',
+      category: 'detail.fieldCategory',
+      condition: 'detail.fieldCondition',
+      notes: 'detail.fieldNotes',
+    };
+    return keys[field] ? t(keys[field]) : field;
+  }
+
+  function renderReview(suggestions) {
+    currentPending = (suggestions || []).filter(s => s.status === 'pending');
+    if (currentPending.length === 0) {
+      suggestionReview.innerHTML = '';
+      return;
+    }
+    const rows = currentPending.map(s => {
+      const confidence = typeof s.confidence === 'number'
+        ? `<span class="suggestion-confidence">${Math.round(s.confidence * 100)}%</span>`
+        : '';
+      return `
+        <div class="suggestion-row" data-id="${s.id}">
+          <div class="suggestion-info">
+            <div class="suggestion-field">${fieldLabel(s.field)} ${confidence}</div>
+            <div class="suggestion-value">${s.value}</div>
+          </div>
+          <div class="suggestion-actions">
+            <button type="button" class="btn-mini" data-action="accept">${t('detail.apply')}</button>
+            <button type="button" class="btn-mini btn-mini-muted" data-action="reject">${t('detail.reject')}</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    suggestionReview.innerHTML = `
+      <div class="detail-card suggestion-review-card">
+        <div class="suggestion-title">${t('detail.pendingTitle', { n: currentPending.length })}</div>
+        ${rows}
+        ${currentPending.length > 1 ? `
+          <button type="button" class="btn-primary" id="btn-apply-all" style="margin-top: 10px;">${t('detail.applyAll')}</button>
+        ` : ''}
+      </div>
+    `;
+
+    suggestionReview.querySelectorAll('.suggestion-row').forEach(row => {
+      const id = row.getAttribute('data-id');
+      row.querySelectorAll('button[data-action]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          handleSuggestionAction(id, btn.getAttribute('data-action'));
+        });
+      });
+    });
+
+    const applyAll = suggestionReview.querySelector('#btn-apply-all');
+    if (applyAll) {
+      applyAll.addEventListener('click', () => applyAllSuggestions());
+    }
+  }
+
+  async function handleSuggestionAction(suggestionId, action) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (action === 'accept') {
+        await api.acceptSuggestion(suggestionId);
+      } else {
+        await api.rejectSuggestion(suggestionId);
+      }
+      setStatus(null);
+      await loadDetail();
+    } catch (err) {
+      console.error('Suggestion action failed:', err);
+      showToast(`${t('detail.applyError')}: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyAllSuggestions() {
+    if (busy || currentPending.length === 0) return;
+    setBusy(true);
+    const results = await Promise.allSettled(
+      currentPending.map(s => api.acceptSuggestion(s.id))
+    );
+    const failed = results.filter(r => r.status === 'rejected').length;
+    setStatus(null);
+    await loadDetail();
+    setBusy(false);
+    if (failed > 0) {
+      showToast(t('detail.applyPartial', { n: failed }));
+    }
+  }
+
+  async function performAnalysis() {
+    setStatus('running', t('detail.analysisRunning'));
+    try {
+      await api.analyzeItem(itemId);
+      setStatus(null);
+      await loadDetail();
+      return true;
+    } catch (err) {
+      // 證據（照片）已經保存；只有整理沒完成 —— 誠實回報並保留重試。
+      console.warn('AI reinterpretation failed:', err);
+      setStatus('failed', t('detail.analysisFailed', { err: err.message }));
+      return false;
+    }
+  }
+
+  async function runAnalysis() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await performAnalysis();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  addPhotoBtn.addEventListener('click', () => {
+    if (!busy) photoInput.click();
+  });
+
+  reanalyzeBtn.addEventListener('click', () => runAnalysis());
+
+  photoInput.addEventListener('change', async () => {
+    const files = Array.from(photoInput.files || []);
+    photoInput.value = '';
+    if (files.length === 0 || busy) return;
+
+    setBusy(true);
+    setStatus('running', t('detail.uploading'));
+    try {
+      // 先保存證據，再談理解 —— 順序固定：分析失敗不會丟照片。
+      const observation = await api.createObservation(itemId, { kind: 'recheck' });
+      const result = await api.uploadObservationPhotos(observation.id, files);
+      const archived = (result.archived || []).length;
+      const skipped = (result.skipped || []).length;
+      let message = t('detail.photosAdded', { n: archived });
+      if (skipped > 0) message += t('detail.photosSkipped', { n: skipped });
+      showToast(message);
+
+      await loadDetail();       // 新照片立即可見（即使 AI 後續失敗）
+      await performAnalysis();  // 接著做情境式重新理解
+    } catch (err) {
+      console.error('Failed to add evidence photo:', err);
+      setStatus(null);
+      showToast(`${t('detail.uploadError')}: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  });
 
   function renderDetail(data) {
     const item = data.item;
@@ -116,6 +329,26 @@ export async function createRecordDetailView(params, router) {
           </div>
         ` : '');
 
+    // 補充資訊：AI（或使用者）整理出的 attributes（Phase 2B）
+    const attributeEntries = Object.entries(item.attributes || {})
+      .filter(([, value]) =>
+        value !== null && value !== undefined && String(value).trim() !== '');
+    const attributesHtml = attributeEntries.length > 0
+      ? `
+          <div class="spec-item" style="grid-column: 1 / -1;">
+            <span class="spec-label">${t('detail.attributesTitle')}</span>
+            <div class="attribute-list">
+              ${attributeEntries.map(([key, value]) => `
+                <div class="attribute-row">
+                  <span class="attribute-key">${key}</span>
+                  <span class="attribute-value">${value}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `
+      : '';
+
     detailContent.innerHTML = `
       ${photosHtml}
 
@@ -150,10 +383,11 @@ export async function createRecordDetailView(params, router) {
           ` : ''}
           ${item.notes ? `
             <div class="spec-item" style="grid-column: 1 / -1;">
-              <span class="spec-label">${t('detail.fieldCondition')}</span>
+              <span class="spec-label">${t('detail.fieldNotes')}</span>
               <div class="spec-val" style="font-weight: normal; font-size: 0.95rem; line-height: 1.5;">${item.notes}</div>
             </div>
           ` : ''}
+          ${attributesHtml}
         </div>
 
         <div style="font-size: 0.82rem; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center; padding-top: 8px;">
@@ -190,6 +424,10 @@ export async function createRecordDetailView(params, router) {
         }
       });
     });
+
+    // Pending AI suggestions (kept outside detailContent so they survive
+    // the detail re-render during review actions).
+    renderReview(data.suggestions);
   }
 
   loadDetail();
