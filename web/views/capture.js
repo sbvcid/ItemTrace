@@ -155,6 +155,11 @@ export async function createCaptureView(params, router) {
   let currentSuggestions = [];
   let isEditMode = false;
 
+  // Phase 2C-D 修正：suggestions 的 source_photo_id 是後端 photos.id 的
+  // 外鍵（不是合成格式）。intake 回傳的 archived（PhotoOut：id + filename，
+  // 順序同上傳）就是在這裡建立「照片 ID → 後端圖檔 URL」對應的依據。
+  let photoUrlById = new Map();
+
   // Phase 2A：記住本次 session 已成功套用的操作，重試時跳過，
   // 確保「再按一次存起來」不會重複套用同一個變更。
   const appliedSuggestionIds = new Set();
@@ -296,6 +301,11 @@ export async function createCaptureView(params, router) {
       // Step 2: Intake into Item
       const intakeRes = await api.intake(relativeFiles, 'intake');
       currentItemId = intakeRes.item_id;
+      photoUrlById = new Map(
+        (intakeRes.archived || [])
+          .filter(p => p && p.id && p.filename)
+          .map(p => [p.id, getPhotoUrl(p.filename)])
+      );
 
       // Step 3: Call AI vision analysis
       let suggestions = [];
@@ -428,25 +438,10 @@ export async function createCaptureView(params, router) {
       inspectBtn.style.color = 'var(--text-secondary)';
       inspectBtn.innerHTML = `🔍 ${t('capture.inspectPhoto')}`;
       inspectBtn.addEventListener('click', () => {
-        // Phase 2C-D: Use actual source_photo_id if available; fallback to first photo
-        const sourcePhotoId = sourcePhotos.serial;
-        let targetPhoto = null;
-        
-        if (sourcePhotoId) {
-          // Find the photo that matches the source ID
-          // source_photo_id format is "observation:{obs_id}:photo:{photo_index}"
-          const match = sourcePhotoId.match(/photo:(\d+)$/);
-          if (match) {
-            const photoIndex = parseInt(match[1], 10);
-            targetPhoto = capturedFiles[photoIndex]?.url;
-          }
-        }
-        
-        // Fallback: if no source ID or index not found, use first photo
-        if (!targetPhoto) {
-          targetPhoto = capturedFiles[0]?.url;
-        }
-        
+        // source_photo_id 直接對應後端照片 ID：查得到就顯示真正的來源照片
+        // 內容（/files/ 直出原始檔），查不到才退回第一張。
+        const targetPhoto = photoUrlById.get(sourcePhotos.serial)
+          || capturedFiles[0]?.url;
         if (targetPhoto) {
           inspectorImg.src = targetPhoto;
           inspectorModal.style.display = 'flex';

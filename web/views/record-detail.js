@@ -389,15 +389,25 @@ export async function createRecordDetailView(params, router) {
   });
 
   editToggleBtn.addEventListener('click', () => {
-    isEditMode = !isEditMode;
-    editToggleBtn.innerHTML = isEditMode
-      ? `<span style="color: var(--color-primary); font-weight: 700;">✓ ${t('app.confirm')}</span>`
-      : `✎ <span>${t('detail.edit')}</span>`;
-    editFormContainer.hidden = !isEditMode;
-    if (isEditMode) {
-      renderEditForm(currentItemData);
-    }
+    if (isEditMode || busy) return;
+    enterEditMode();
   });
+
+  function enterEditMode() {
+    isEditMode = true;
+    // 工具列只負責「進入編輯」；儲存與取消由表單自己的按鈕處理，
+    // 不會出現工具列顯示「確認」卻只關閉表單的語意。
+    editToggleBtn.style.display = 'none';
+    renderEditForm(currentItemData);
+    editFormContainer.hidden = false;
+  }
+
+  function exitEditMode() {
+    isEditMode = false;
+    editToggleBtn.style.display = '';
+    editFormContainer.hidden = true;
+    editFormContainer.innerHTML = '';
+  }
 
   function renderEditForm(data) {
     const item = data.item || {};
@@ -435,33 +445,41 @@ export async function createRecordDetailView(params, router) {
           <textarea class="ai-edit-input" id="edit-notes" style="min-height: 80px; resize: vertical;">${escapeHtml(item.notes || '')}</textarea>
         </div>
         
-        <button type="button" class="btn-primary" id="btn-save-edits" style="width: 100%;">✓ ${t('app.save')}</button>
+        <div style="display: flex; gap: 10px;">
+          <button type="button" class="btn-primary" id="btn-save-edits" style="flex: 1;">✓ ${t('app.save')}</button>
+          <button type="button" class="btn-secondary" id="btn-cancel-edits" style="flex: 1;">${t('app.cancel')}</button>
+        </div>
       </div>
     `;
 
-    const saveBtn = editFormContainer.querySelector('#btn-save-edits');
-    saveBtn.addEventListener('click', saveEdits);
+    editFormContainer.querySelector('#btn-save-edits')
+      .addEventListener('click', saveEdits);
+    editFormContainer.querySelector('#btn-cancel-edits')
+      .addEventListener('click', cancelEdits);
+  }
+
+  function cancelEdits() {
+    if (busy) return;
+    // 取消：不送任何請求、不改任何資料；未儲存的輸入直接捨棄。
+    exitEditMode();
   }
 
   async function saveEdits() {
-    const editName = editFormContainer.querySelector('#edit-name');
-    const editBrand = editFormContainer.querySelector('#edit-brand');
-    const editModel = editFormContainer.querySelector('#edit-model');
-    const editCategory = editFormContainer.querySelector('#edit-category');
-    const editCondition = editFormContainer.querySelector('#edit-condition');
-    const editNotes = editFormContainer.querySelector('#edit-notes');
-
     if (busy) return;
     setBusy(true);
+    const saveBtn = editFormContainer.querySelector('#btn-save-edits');
+    const cancelBtn = editFormContainer.querySelector('#btn-cancel-edits');
+    if (saveBtn) saveBtn.disabled = true;
+    if (cancelBtn) cancelBtn.disabled = true;
 
     try {
       const patchData = {};
-      const newName = (editName.value || '').trim();
-      const newBrand = (editBrand.value || '').trim();
-      const newModel = (editModel.value || '').trim();
-      const newCategory = (editCategory.value || '').trim();
-      const newCondition = (editCondition.value || '').trim();
-      const newNotes = (editNotes.value || '').trim();
+      const newName = (editFormContainer.querySelector('#edit-name').value || '').trim();
+      const newBrand = (editFormContainer.querySelector('#edit-brand').value || '').trim();
+      const newModel = (editFormContainer.querySelector('#edit-model').value || '').trim();
+      const newCategory = (editFormContainer.querySelector('#edit-category').value || '').trim();
+      const newCondition = (editFormContainer.querySelector('#edit-condition').value || '').trim();
+      const newNotes = (editFormContainer.querySelector('#edit-notes').value || '').trim();
 
       if (newName !== (currentItemData.item.name || '')) patchData.name = newName;
       if (newBrand !== (currentItemData.item.brand || '')) patchData.brand = newBrand;
@@ -471,24 +489,24 @@ export async function createRecordDetailView(params, router) {
       if (newNotes !== (currentItemData.item.notes || '')) patchData.notes = newNotes;
 
       if (Object.keys(patchData).length === 0) {
+        // 沒有變更：留在編輯模式，輸入原封不動，由使用者決定儲存或取消。
         showToast(t('detail.noChanges'));
-        setBusy(false);
         return;
       }
 
       await api.patchItem(itemId, patchData);
+      exitEditMode();
       showToast(t('detail.saveDone'));
-
-      isEditMode = false;
-      editToggleBtn.innerHTML = `✎ <span>${t('detail.edit')}</span>`;
-      editFormContainer.hidden = true;
-
+      // 儲存成功：重新載入，畫面顯示後端回報的最新資料。
       await loadDetail();
     } catch (err) {
+      // 儲存失敗：表單留在編輯模式，使用者輸入完整保留，可直接重試。
       console.error('Failed to save edits:', err);
       showToast(`${t('detail.saveError')}: ${err.message}`);
     } finally {
       setBusy(false);
+      if (saveBtn) saveBtn.disabled = false;
+      if (cancelBtn) cancelBtn.disabled = false;
     }
   }
 

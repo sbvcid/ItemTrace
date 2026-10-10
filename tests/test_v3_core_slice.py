@@ -13,6 +13,8 @@
 7. Phase 2B：證據累積——補照片到既有紀錄、情境式重新理解、更新後仍可搜尋
 8. Phase 2C-B：證據選擇、可回復的自動套用、衝突升級（含紀錄回放）
 9. Phase 2C-D：過期 undo 防護與修訂顯示（含靜態檢查）
+10. Phase 2 修正回歸：序號來源照片對應（photos.id 契約）與
+    編輯／儲存／取消操作語意
 """
 
 from __future__ import annotations
@@ -633,3 +635,164 @@ def test_phase2c_d_undo_guard_and_revisions_static_checks(client):
     for key in ("revisionChanged", "revisionFilled", "undoStale"):
         assert key in zh
         assert key in en
+
+
+# ----------------------------------------------------------------------
+# Phase 2 修正回歸：序號來源照片對應 與 編輯／儲存／取消語意
+# ----------------------------------------------------------------------
+
+
+def test_serial_source_photo_id_maps_to_real_photo_content(
+        client, monkeypatch):
+    """回歸（序號來源照片對應）：source_photo_id 是 photos.id 外鍵。
+
+    資料契約（shop/schema.sql）：suggestions.source_photo_id
+    REFERENCES photos(id) —— 是真實照片 ID，不是任何合成格式。
+    本測試鎖住前端序號查閱視窗依賴的整條對應鏈：
+      AI 宣稱序號讀自第 N 張 → suggestion.source_photo_id == 該張照片 ID
+      → 該 ID 的照片檔案經 HTTP 直出的內容 == 那張照片的原始位元。
+    多張照片時，不同欄位的來源 ID 必須指向不同照片、不同內容；
+    不得一律落在第一張。
+    """
+    from shop import ai_client, ai_config
+    from shop.ai_config import AiConfig
+
+    front_bytes = make_jpeg(exif="2026:10:07 15:00:00")
+    label_bytes = make_jpeg(exif="2026:10:07 15:00:05")
+    assert front_bytes != label_bytes, "兩張照片必須可以位元層級分辨"
+
+    # 拍兩張照片：第 0 張外觀照、第 1 張標籤（序號）照
+    upload = client.post("/api/inbox/photos", files=[
+        ("files", ("front.jpg", front_bytes, "image/jpeg")),
+        ("files", ("label.jpg", label_bytes, "image/jpeg")),
+    ])
+    assert upload.status_code == 201
+    relatives = [e["relative"] for e in upload.json()["entries"]]
+    done = client.post(
+        "/api/inbox/intake", json={"files": relatives, "kind": "intake"}
+    ).json()
+    item_id = done["item_id"]
+    assert len(done["archived"]) == 2
+
+    monkeypatch.setattr(
+        ai_config, "load_config",
+        lambda *a, **k: AiConfig(api_key="sk-test-key", model="gemini-2.5-flash"),
+    )
+
+    def fake_vision_ai(api_key, model, data_urls, **kwargs):
+        # 名稱讀自第 0 張；序號讀自第 1 張（標籤照）。
+        return {"choices": [{"message": {"content": json.dumps({
+            "suggestions": [
+                {"field": "name", "value": "Sony WH-1000XM5",
+                 "confidence": 0.95, "source_photo_index": 0},
+                {"field": "identifier:serial", "value": "5023910",
+                 "confidence": 0.99, "source_photo_index": 1},
+            ],
+        })}}]}
+
+    monkeypatch.setattr(ai_client, "call_ai_provider", fake_vision_ai)
+
+    suggestions = client.post(f"/api/items/{item_id}/ai/analyze").json()
+    by_field = {s["field"]: s for s in suggestions}
+    serial_source = by_field["identifier:serial"]["source_photo_id"]
+    name_source = by_field["name"]["source_photo_id"]
+
+    detail = client.get(f"/api/items/{item_id}").json()
+    photos = detail["photos"]
+    assert len(photos) == 2
+    photo_by_id = {p["id"]: p for p in photos}
+
+    # 來源必須是這批照片的真實 ID，且兩個欄位指向不同照片
+    assert serial_source in photo_by_id
+    assert name_source in photo_by_id
+    assert serial_source != name_source
+
+    # 序號來源照片直出的內容必須就是第 1 張（標籤照）的原始位元 ——
+    # 前端按 ID 查到的 URL 顯示的正是真正的來源照片。
+    served_serial = client.get(f"/{photo_by_id[serial_source]['filename']}")
+    assert served_serial.status_code == 200
+    assert served_serial.content == label_bytes
+
+    # 對照組：名稱欄位的來源照片就是另一張（外觀照）
+    served_name = client.get(f"/{photo_by_id[name_source]['filename']}")
+    assert served_name.content == front_bytes
+
+
+def test_capture_serial_inspect_uses_backend_photo_id_mapping(client):
+    """回歸（序號來源照片對應）前端接線靜態檢查（非瀏覽器端對端測試）：
+
+    capture 的序號查閱視窗以 intake 回傳的 archived 照片建立
+    「照片 ID → 圖檔 URL」對應，並以 suggestion.source_photo_id 直接查表；
+    查不到才退回第一張。不得再自行解析合成 ID 格式。
+    """
+    capture_js = client.get("/views/capture.js").text
+
+    # 以 intake 的 archived（PhotoOut：id + filename）建立對應
+    assert "intakeRes.archived" in capture_js
+    assert "photoUrlById" in capture_js
+
+    # 序號查閱：以真實照片 ID 查對應；退回第一張只是 fallback
+    assert "photoUrlById.get(sourcePhotos.serial)" in capture_js
+    assert "capturedFiles[0]?.url" in capture_js
+
+    # 舊的錯誤假設（合成格式 "observation:...:photo:N" 解析）必須消失
+    assert "observation:" not in capture_js
+    assert "match(/photo:" not in capture_js
+
+
+def test_record_detail_edit_save_cancel_semantics(client):
+    """回歸（編輯介面操作語意）前端接線靜態檢查（非瀏覽器端對端測試）：
+
+    詳情頁編輯介面必須明確區分進入編輯、儲存、取消：
+    - 工具列按鈕只負責進入編輯；不得顯示「確認」卻只關閉表單
+    - 表單有明確的儲存與取消按鈕；取消不送任何請求
+    - 儲存成功：離開編輯模式並重新載入最新資料
+    - 儲存失敗或沒有變更：表單留在編輯模式，使用者輸入保留可直接重試
+    """
+    detail_js = client.get("/views/record-detail.js").text
+
+    # 工具列不再出現「確認」；進入編輯時工具列按鈕藏起來，由表單接手
+    assert "app.confirm" not in detail_js
+    assert "isEditMode = !isEditMode" not in detail_js
+    assert "editToggleBtn.style.display = 'none'" in detail_js
+
+    # 表單自己的儲存與取消按鈕
+    assert 'id="btn-save-edits"' in detail_js
+    assert 'id="btn-cancel-edits"' in detail_js
+
+    save_body = _js_function_body(detail_js, "async function saveEdits")
+    cancel_body = _js_function_body(detail_js, "function cancelEdits")
+
+    # 取消：不送任何請求（無任何 api.* 呼叫），直接離開編輯模式
+    assert "api." not in cancel_body
+    assert "exitEditMode()" in cancel_body
+
+    # 儲存：PATCH 成功後先離開編輯模式、再重新載入最新資料
+    patch_at = save_body.index("await api.patchItem")
+    exit_at = save_body.index("exitEditMode()")
+    reload_at = save_body.index("await loadDetail()")
+    assert patch_at < exit_at < reload_at
+
+    # 儲存失敗（catch）：不得關閉表單 —— 使用者輸入保留，可直接重試
+    catch_start = save_body.index("} catch (err) {")
+    catch_body = save_body[catch_start:save_body.index("} finally {", catch_start)]
+    assert "exitEditMode" not in catch_body
+    assert "hidden" not in catch_body
+
+    # 沒有變更：留在編輯模式（不得趁機關閉表單）
+    no_changes_at = save_body.index("noChanges")
+    assert no_changes_at < patch_at
+
+    zh = client.get("/i18n/zh-TW.js").text
+    en = client.get("/i18n/en.js").text
+    for key in ("edit:", "editTitle:", "saveDone:", "saveError:", "noChanges:",
+                "save:", "cancel:"):
+        assert key in zh
+        assert key in en
+
+
+def _js_function_body(source: str, signature: str) -> str:
+    """抓兩格縮排 top-level 函式的原始碼片段（到同層收尾大括號）。"""
+    start = source.index(signature)
+    end = source.index("\n  }\n", start)
+    return source[start:end]
