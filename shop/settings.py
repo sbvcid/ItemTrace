@@ -200,6 +200,9 @@ def test_ai_api(body: AiSettingsUpdate, request: Request) -> AiApiTestResult:
 
     帶 `api_key` 進來時測的是「剛貼上、還沒存」的那把 key；留空則測已存的。
     `provider` / `base_url` 同理：帶進來就測剛填的，留空用已存的。
+
+    SR-1／F2：**已儲存的 key 只會送往已知 preset 端點**；自訂／非 preset
+    的 base_url 必須在這次請求明確帶上臨時 key，否則回 400。
     """
     model = (body.model or "").strip()
     incoming = (body.api_key or "").strip()
@@ -208,7 +211,6 @@ def test_ai_api(body: AiSettingsUpdate, request: Request) -> AiApiTestResult:
     except AiConfigError as exc:
         raise ValidationError(ai_config.redact(str(exc))) from None
 
-    api_key = incoming or stored.api_key
     model = model or stored.model
     incoming_provider = (body.provider or "").strip()
     provider = incoming_provider or stored.provider
@@ -220,6 +222,24 @@ def test_ai_api(body: AiSettingsUpdate, request: Request) -> AiApiTestResult:
             base_url = ai_config.PROVIDER_BASE_URLS.get(provider, "")
         if not base_url:
             base_url = stored.base_url
+
+    # SR-1（SECURITY-AUDIT F2）：已儲存的 key 只會送往**已知 preset**
+    # 端點。自訂／非 preset 的 base_url（含先前存下的 custom 端點）
+    # 必須由這次請求明確帶上臨時 key —— 不讓任何來源把長期機密
+    # 轉送到自己指定的網址。
+    preset_urls = {
+        url.rstrip("/") for url in ai_config.PROVIDER_BASE_URLS.values()
+    }
+    if incoming:
+        api_key = incoming
+    elif base_url.rstrip("/") in preset_urls:
+        api_key = stored.api_key
+    else:
+        raise ValidationError(
+            "測試非預設端點需要同時提供臨時 API key；"
+            "已儲存的 key 只會用於已知的 provider 端點。"
+        )
+
     try:
         endpoint = ai_config.chat_endpoint(provider, base_url)
     except AiConfigError as exc:

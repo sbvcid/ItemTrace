@@ -7,6 +7,7 @@
  */
 
 import { api, getPhotoUrl } from '../core/api.js';
+import { escapeHtml } from '../core/dom.js';
 import { t } from '../i18n/index.js';
 
 export async function createHomeView(params, router) {
@@ -142,6 +143,17 @@ export async function createHomeView(params, router) {
     });
   }
 
+  function attachThumbFallback(card) {
+    // SR-1／F6：CSP（script-src 'self'）會擋 inline onerror，改用事件監聽；
+    // 非圖片內容（例如誤入的 HTML 檔）載不出來時顯示佔位圖。
+    const img = card.querySelector('.record-thumb');
+    if (!img) return;
+    img.addEventListener('error', () => {
+      img.parentElement.innerHTML =
+        '<div class="record-thumb-placeholder">📷</div>';
+    });
+  }
+
   function createRecordCard(item, { featured = false, fresh = false } = {}) {
     const card = document.createElement('a');
     card.className = 'record-card';
@@ -150,12 +162,14 @@ export async function createHomeView(params, router) {
     card.href = `/i/${item.id}`;
     card.setAttribute('data-link', '');
 
-    const title = item.name || item.model || t('home.cardUntitled');
+    // SR-1／F6：紀錄欄位（含 AI 產出）一律先 escape 再進版型。
+    const rawTitle = item.name || item.model || t('home.cardUntitled');
+    const title = escapeHtml(rawTitle);
 
     // Standardized thumbnail URL resolver
     const thumbUrl = item.thumbnail ? getPhotoUrl(item.thumbnail) : null;
     const thumbHtml = thumbUrl
-      ? `<img src="${thumbUrl}" alt="${title}" class="record-thumb" loading="lazy" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'record-thumb-placeholder\\'>📷</div>';" />`
+      ? `<img src="${escapeHtml(thumbUrl)}" alt="${title}" class="record-thumb" loading="lazy" />`
       : `<div class="record-thumb-placeholder">📷</div>`;
 
     const photoBadge = !featured && item.photo_count > 1
@@ -163,11 +177,13 @@ export async function createHomeView(params, router) {
       : '';
 
     if (featured) {
-      const metaParts = [];
-      if (item.brand) metaParts.push(item.brand);
-      if (item.model && item.model !== title) metaParts.push(item.model);
-      if (item.category) metaParts.push(item.category);
-      const metaText = metaParts.join(' · ') || item.condition || t('home.cardLifeRecord');
+      const rawMetaParts = [
+        item.brand,
+        item.model && item.model !== rawTitle ? item.model : '',
+        item.category,
+      ].filter(Boolean);
+      const rawMeta = rawMetaParts.join(' · ') || item.condition || '';
+      const metaText = rawMeta ? escapeHtml(rawMeta) : t('home.cardLifeRecord');
 
       // 「最新」與「剛剛存入」用文字標籤傳達，不是只靠顏色。
       const badges = [];
@@ -177,11 +193,11 @@ export async function createHomeView(params, router) {
         badges.push(`<span class="record-photo-total">${t('home.photoCount', { n: item.photo_count })}</span>`);
       }
 
-      const conditionHtml = item.condition && item.condition !== metaText
-        ? `<div class="record-condition">${item.condition}</div>`
+      const conditionHtml = item.condition && item.condition !== rawMeta
+        ? `<div class="record-condition">${escapeHtml(item.condition)}</div>`
         : '';
       const createdHtml = item.created_at
-        ? `<div class="record-created">${t('detail.fieldCreated')} ${item.created_at.slice(0, 10)}</div>`
+        ? `<div class="record-created">${t('detail.fieldCreated')} ${escapeHtml(item.created_at.slice(0, 10))}</div>`
         : '';
 
       card.innerHTML = `
@@ -196,15 +212,17 @@ export async function createHomeView(params, router) {
           ${createdHtml}
         </div>
       `;
+      attachThumbFallback(card);
       return card;
     }
 
-    const metaParts = [];
-    if (item.brand) metaParts.push(item.brand);
-    if (item.category) metaParts.push(item.category);
-    const metaText = metaParts.join(' · ') || item.condition || t('home.cardLifeRecord');
+    const rawMetaParts = [item.brand, item.category].filter(Boolean);
+    const rawMeta = rawMetaParts.join(' · ') || item.condition || '';
+    const metaText = rawMeta ? escapeHtml(rawMeta) : t('home.cardLifeRecord');
 
-    const serialHtml = item.matched_identifier || (item.model ? t('home.modelPrefix', { model: item.model }) : null);
+    const serialHtml = item.matched_identifier
+      ? escapeHtml(item.matched_identifier)
+      : (item.model ? t('home.modelPrefix', { model: escapeHtml(item.model) }) : null);
     const badgeHtml = serialHtml
       ? `<div class="record-serial">${serialHtml}</div>`
       : '';
@@ -221,6 +239,7 @@ export async function createHomeView(params, router) {
       </div>
     `;
 
+    attachThumbFallback(card);
     return card;
   }
 

@@ -1,32 +1,28 @@
 # ItemTrace Engineering Status
 
-最後更新：2026-10-10 16:30  
-當前階段：Security Audit 1 完成（唯讀稽核；本地 commit，未 push）  
-遠端狀態：本地領先 origin/main（本階段 commit 後 12 ahead；未 push）  
-測試驗證：`pytest -q` 完全通過，全 994 測試無失敗、無跳過（稽核未改任何程式碼／設定／測試）
+最後更新：2026-10-10 18:35  
+當前階段：SR-1 安全修復完成（F1/F2/F3/F5/F6；本地 commit，未 push）  
+遠端狀態：本地領先 origin/main（本階段 commit 後 13 ahead；未 push）  
+測試驗證：`pytest -q` 完全通過，全 1013 測試無失敗、無跳過
 
 ---
 
 ## 當前階段
 
-**Security Audit 1：桌面應用唯讀安全稽核** ← **COMPLETED**（唯讀；未改程式碼／設定／依賴／schema／測試）
+**SR-1：安全修復（本機應用）** ← **COMPLETED**
 
 完成時間：2026-10-10  
-Commit：`docs: security audit 1 - desktop application`（本地，未 push）
-報告：`docs/engineering/SECURITY-AUDIT.md`
+Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media hardening`（本地，未 push）
+報告：`docs/engineering/SECURITY-AUDIT.md`（新增「SR-1 修復狀態」節）
 
 完成內容：
-- ✓ 全表面審查＋**隔離實測**（暫存資料根、合成資料、僅 127.0.0.1；canary key；不碰真實資料）
-- ✓ **F1（High, Confirmed）**：無 Host/Origin 驗證 → **DNS rebinding 下任何網頁可完整操作應用**（`Host: evil.example` 實測 200；即使 loopback 綁定亦然）
-- ✓ **F2（High, Confirmed）**：`POST /api/settings/ai/test` 可把**已存 API key 轉送到呼叫者指定的 base_url**（canary 實測被本地監聽器收到）
-- ✓ **F5（High as-configured, Confirmed）**：本 checkout 的 `config.json` 綁 **0.0.0.0**（實測 Listen 0.0.0.0）→ 不受信任網路上全暴露；程式碼預設為 127.0.0.1
-- ✓ **F3（Medium）**：無 body 的變更端點可 CSRF（void＋外站 Origin＋text/plain 實測 200）；analyze 可被觸發付費呼叫
-- ✓ **F4（Medium）**：上傳無大小/檔數上限（20MB 實測 201）、PIL 無像素上限、analyze 無限流
-- ✓ **F6（Medium）**：前端 28 處 innerHTML、0 escaping（AI/紀錄值可存成 XSS）；上傳 HTML 以 text/html 供檔且無 nosniff（實測）
-- ✓ F7（Low）資訊衛生、F8（Low）列印 --no-sandbox 執行可控 HTML（plausible）
-- ✓ **正面清單**：路徑穿越（raw-socket 5 變體全 404）、秘密不進前端/Git（0600、gitignore、無歷史）、來源判定不看標頭、SQL 參數化、shell=False、無永久刪除、部分資源界限、依賴版本高於所列 CVE 修正版
-- ✓ **情境判定**：單機＝基本可接受但 F1/F2 建議必修；私有區網＝有條件可接受（僅受控網路）；公開網路＝**不可接受**
-- ✓ 修復建議：**SR-1**（Host/Origin＋自訂標頭、test 端點禁止已存 key＋自訂 URL、上傳/像素/節流上限、前端 escaping＋nosniff、預設綁回 loopback）；詳細驗收見報告 §4
+- ✓ **F1／F3**：`shop/security.py` Host 白名單（loopback 全形式＋`server_host`＋config `allowed_hosts`）＋Origin 驗證（host／埠一致、`null` 拒絕）＋變更類一律要求 `X-Requested-With: ItemTrace`；`web/core/api.js`、adapter、驗證工具同步；未通過在路由前 403
+- ✓ **F2**：`/api/settings/ai/test` 已存 key 只送往**已知 preset**；自訂 URL 必須帶臨時 key（否則 400）——canary 實測：拒絕對照組零外送、臨時 key 流程只送臨時 key
+- ✓ **F5**：預設 loopback（實測監聽 127.0.0.1）；非 loopback 需 `"allow_lan": true` —— 現值 0.0.0.0 下 `python serve.py` **拒絕啟動 exit 2**＋明確指示；LAN 模式有警語＋README 信任模型
+- ✓ **F6**：`escapeHtml` 全面套用（home／capture／detail／router）；移除 inline `onerror`/`onclick`（CSP 相容＋失敗縮圖改事件監聽）；回應加 nosniff／Referrer-Policy／HTML CSP／frame 保護；`/files` 非圖片→octet-stream＋attachment＋`default-src 'none'; sandbox`
+- ✓ 驗證：**修復後重演原攻擊**（socket 級隔離實例）：evil Host 200→403；無標頭 POST→403；evil Origin→403；canary 外送→400＋零外送；evil.html text/html→attachment；有效綁定→127.0.0.1；瀏覽器 E2E：payload 全數純文字、`window.__xss` 未定義、0 console errors、保存流程（含新標頭）完整可用
+- ✓ 測試：+19（`tests/test_security.py` 17＋config 文件參數化 2）；全 1013 通過；未刪除／跳過／弱化既有測試（1 個既有 settings 測試依新規則更新）
+- ✓ 零 schema migration、無登入系統、未動 F4／F7／F8（依 SR-1 範圍）
 
 ### Phase 2C-D 撤銷語義（實作即規格）
 
@@ -94,6 +90,7 @@ Commit：`docs: security audit 1 - desktop application`（本地，未 push）
 - Phase 2C-B：可回復的 AI 自動更新與證據感知自主性（`7927faf`）
 - Phase 2C-C：自主性 Live 驗證（`5a4c792`；報告 AI-AUTONOMY-VALIDATION.md）
 - Phase 2C-D：撤銷安全、描述與衝突處理（`79eaecc`）
+- Security Audit 1：桌面應用唯讀安全稽核（`3e002d2`；F1–F8 報告）
 
 ---
 
@@ -101,9 +98,9 @@ Commit：`docs: security audit 1 - desktop application`（本地，未 push）
 
 | 項目 | 數值 | 備註 |
 |---|---|---|
-| 測試檔案數 | 38 | conftest + 37 test_*.py（2C-D 新增 test_validate_autonomy_live.py） |
-| 總測試數 | 994 | 全 pytest 計數（Phase 2C-D +11） |
-| 通過 | 994 ✓ | 100% pass rate |
+| 測試檔案數 | 39 | conftest + 38 test_*.py（SR-1 新增 test_security.py） |
+| 總測試數 | 1013 | 全 pytest 計數（SR-1 +19：安全 17＋文件參數化 2） |
+| 通過 | 1013 ✓ | 100% pass rate |
 | 失敗 | 0 | 零失敗 |
 | 跳過 | 0 | 無跳過 |
 | 覆蓋率 | 未測 | 建議後續補充 |
@@ -118,8 +115,9 @@ Commit：`docs: security audit 1 - desktop application`（本地，未 push）
 - 列印：test_print.py (31), test_print_settings_api.py (20)
 - **V3 核心驗收**：test_v3_core_slice.py (15) —— 原始 5 情境 + Phase 1B-A 5 項 + Phase 2A 1 項 + Phase 2B 2 項 + Phase 2C-B 1 項 + Phase 2C-D 1 項
 - **評測 harness**：test_evaluate_models.py (7)、test_validate_autonomy_live.py (2) —— 離線守門（不碰網路）
+- **安全（SR-1）**：test_security.py (17) —— Host／Origin／自訂標頭、key 不轉送（canary＋接收器）、綁定 opt-in、媒體標頭、CSP/escaping 靜態守門
 
-**最近運行**：2026-10-10，`pytest -q --junitxml` → tests=994, failures=0, errors=0, skipped=0
+**最近運行**：2026-10-10，`pytest -q --junitxml` → tests=1013, failures=0, errors=0, skipped=0
 
 ---
 
@@ -149,7 +147,8 @@ Commit：`docs: security audit 1 - desktop application`（本地，未 push）
 - ✓ 可回復的 AI 自動更新（Phase 2C-B：選擇策略、自動套用、undo、衝突升級） — **Implemented, Tested, Committed（7927faf）, Not Pushed**
 - ✓ 自主性驗證與殘餘缺口（Phase 2C-C：Live 實測、報告、fixture／錄製） — **Evaluated, Committed（5a4c792）, Not Pushed**
 - ✓ 撤銷安全、描述性理解與衝突處理（Phase 2C-D） — **Implemented, Tested, Committed（79eaecc）, Not Pushed**
-- ✓ 桌面應用安全稽核（Security Audit 1；唯讀） — **Audited, Committed（本階段）, Not Pushed**（F1–F8 見 SECURITY-AUDIT.md）
+- ✓ 桌面應用安全稽核（Security Audit 1；唯讀） — **Audited, Committed（3e002d2）, Not Pushed**（F1–F8 見 SECURITY-AUDIT.md）
+- ✓ SR-1 安全修復（Host/Origin＋標頭、key 不轉送、LAN opt-in、媒體硬化、前端 escaping） — **Implemented, Tested, Committed（本階段）, Not Pushed**
 
 ### 後端基礎
 - ✓ SQLite + WAL + STRICT 約束 — **Implemented, Tested, Committed, Pushed**
@@ -178,19 +177,14 @@ Commit：`docs: security audit 1 - desktop application`（本地，未 push）
 
 ## 未完成工作
 
-### 立即待做（Security Remediation 1（SR-1），優先；依 SECURITY-AUDIT.md §4）
-1. **F1/F3**：Host 白名單＋變更端點自訂標頭（阻斷 DNS rebinding／CSRF）＋測試
-2. **F2**：`/api/settings/ai/test` 禁止「已存 key＋自訂 base_url」組合＋canary 測試
-3. **F4**：body/單檔/檔數上限、`Image.MAX_IMAGE_PIXELS`、analyze 節流＋測試
-4. **F6**：前端 escaping util＋`nosniff`／上傳型別檢查＋Playwright XSS 斷言
-5. **F5**：預設綁回 `127.0.0.1`；開放區網改顯式選項＋啟動警告（文件／設定政策）
-6. F7/F8：安全標頭、docs 開關、模板 script 過濾（可拆）
-
-驗收：以上安全回歸測試＋既有 994 不弱化；以 SECURITY-AUDIT 附錄 A 的腳本重演（Host/Origin、key-forwarding、超限上傳、XSS）。
-
-### 接著（Phase 3：垃圾桶與資料生命週期）
+### 立即待做（Phase 3：垃圾桶與資料生命週期）
 - 依 `ROADMAP.md` Phase 3：垃圾桶 UI／30 天保留／永久刪除（明確使用者意圖、可稽核）
 - 收尾選項（可穿插）：R 型跨照片身分的下一輪評測；屬性逐鍵來源標籤；Phase 1B-B
+
+### 安全後續（F4／F7／F8；SR-1 範圍外）
+- F4：body／單檔／檔數上限、`Image.MAX_IMAGE_PIXELS`、analyze 節流（Medium）
+- F7：`/docs` 開關、錯誤訊息簡化、`Cache-Control: private`（Low）
+- F8：模板 script 過濾、評估移除 `--no-sandbox`（Low）
 
 ### 短期（Phase 2–3）
 - Phase 2：AI Contract 2.0 —— **完成（2A/2B/2C-A/2C-B/2C-C/2C-D）**
@@ -223,10 +217,13 @@ Commit：`docs: security audit 1 - desktop application`（本地，未 push）
 | `attribute:description` 未被模型自發產生 | — | 已解決 | Phase 2C-D：prompt 上線；C1 Live 回評已產生真描述（無品牌幻覺） |
 | 過期 undo 可覆寫後續編輯 | — | 已解決 | Phase 2C-D：值不符或有中間變更 → 409 零副作用；批次逐欄位＋UI 逐項說明 |
 | 跨照片身分「沉默擇一」 | 中 | 部分解決（2C-D） | C6（無上下文）：兩身分都輸出→衝突 ✓；R 型（有上下文）模型仍可能擇一 → 限制已記錄（AI-AUTONOMY-VALIDATION §2C-D） |
-| 【安全】F1 DNS rebinding／Host 未驗證 | **High** | 開放（已確認） | SECURITY-AUDIT §1；SR-1 修（Host＋Origin/自訂標頭） |
-| 【安全】F2 API key 可被轉送攻擊者 URL | **High** | 開放（已確認） | 同上；SR-1 修（test 端點限制） |
-| 【安全】F5 現值綁 0.0.0.0 | **High（as-configured）** | 開放（部分為設計） | 信任區網模型；SR-1 改預設 loopback＋顯式開放 |
-| 【安全】F3 CSRF／F4 資源上限／F6 前端 XSS | Medium | 開放 | SECURITY-AUDIT §1；SR-1 修 |
+| 【安全】F1 DNS rebinding／Host 未驗證 | High | **已解決（SR-1）** | `shop/security.py` Host 白名單＋Origin 驗證；實測 evil Host→403 |
+| 【安全】F2 API key 可被轉送攻擊者 URL | High | **已解決（SR-1）** | 已存 key 只送往 preset；自訂 URL 需臨時 key（canary 實測零外送） |
+| 【安全】F5 現值綁 0.0.0.0 | High（as-configured） | **已解決（SR-1）** | 非 loopback 需 `allow_lan: true`；實測 0.0.0.0 未 opt-in → serve.py 拒啟 exit 2 |
+| 【安全】F3 CSRF | Medium | **已解決（SR-1）** | 變更類一律要求 `X-Requested-With: ItemTrace`＋Origin 驗證；實測無標頭→403 |
+| 【安全】F6 前端 XSS／媒體 | Medium | **已解決（SR-1）** | escapeHtml 全面＋CSP/nosniff＋非圖片附件化；瀏覽器 E2E 驗證 |
+| 【安全】F4 資源上限 | Medium | 開放（SR-1 範圍外） | upload/像素/節流上限；列安全後續 |
+| 【安全】F7／F8 縱深 | Low | 開放（SR-1 範圍外） | docs 開關、模板 script 過濾等；列安全後續 |
 | 屬性逐鍵來源標籤（✨AI／✍手動） | 低 | 開放 | 目前以 banner＋事件/建議可追溯；逐鍵 UI 標籤後續 |
 | 生活備忘欄位設計 | 中 | 開放 | Phase 1B-B；參考 FEATURE-PLAN.md, JOB-TO-BE-DONE.md |
 | 搜尋效能基線 | 低 | 未測 | Phase 5 時詳細評估 |
@@ -359,7 +356,7 @@ Commit：`docs: security audit 1 - desktop application`（本地，未 push）
 
 ---
 
-## Security Audit 1 變更清單（本階段 commit；唯讀稽核）
+## Security Audit 1 變更清單（commit `3e002d2`，前次；唯讀稽核）
 
 | 檔案 | 變更 |
 |---|---|
@@ -370,33 +367,49 @@ Commit：`docs: security audit 1 - desktop application`（本地，未 push）
 
 ---
 
+## SR-1 變更清單（本階段 commit）
+
+| 檔案 | 變更 |
+|---|---|
+| `shop/security.py` | 新增：Host 白名單（loopback 全形式＋`server_host`＋`allowed_hosts`）、Origin 驗證、`X-Requested-With` 變更端點要求、`require_lan_opt_in`、APP_CSP |
+| `shop/api.py` | create_app 安裝安全 middleware（Host/Origin/標頭＋回應 nosniff／Referrer-Policy／HTML CSP／frame 保護）；`_serve_file`→`_file_response`（非圖片 attachment/octet-stream＋嚴格 CSP） |
+| `shop/config.py` | `allow_lan`（預設 false）＋`allowed_hosts` 欄位與讀取 |
+| `serve.py` | LAN opt-in 守門（未設定拒啟 exit 2＋指示）＋區網模式警語 |
+| `shop/settings.py` | F2：已存 key 只送往 preset；自訂 URL 需臨時 key |
+| `web/core/dom.js` | 新增 `escapeHtml` |
+| `web/core/api.js` | 所有請求帶 `X-Requested-With` |
+| `web/views/{home,capture,record-detail}.js`、`web/core/router.js` | escaping 全面套用；inline `onerror`/`onclick` 移除（事件監聽；失敗縮圖 fallback） |
+| `tools/analyze_item.py`、`tools/validate_autonomy_live.py` | 客戶端同步帶標頭 |
+| `config.example.json`、`README.md` | 新設定欄位文件＋SR-1 安全說明 |
+| `tests/test_security.py` | 新增 17 測試；`tests/conftest.py` 兩個 TestClient 建設加 base_url/標頭 |
+| `tests/test_settings_api.py` | 1 個既有測試依新規則更新（自訂 URL 帶臨時 key） |
+| `docs/engineering/SECURITY-AUDIT.md`、`STATUS.md`、`ROADMAP.md`、`DECISIONS.md`(D9)、`AGENTS.md` | 修復狀態與政策 |
+
+**未變更**：schema（零 migration）、`config.json`（**使用者現值 0.0.0.0 未動**——serve.py 會先拒啟並要求明示 opt-in）、無登入系統、F4／F7／F8 未動。
+
+---
+
 ## 本地與遠端同步狀態
 
 | 項 | 狀態 |
 |---|---|
 | Branch | main |
-| Ahead/Behind | 12 ahead, 0 behind（未 push；本階段 commit 後） |
+| Ahead/Behind | 13 ahead, 0 behind（未 push；本階段 commit 後） |
 | Uncommitted Changes | 0（本階段變更全數進入獨立 commit） |
 | 衝突 | 無 |
-| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61`、`7927faf`、`5a4c792`、`79eaecc` —— 未修改、未 amend、未 rebase |
+| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61`、`7927faf`、`5a4c792`、`79eaecc`、`3e002d2` —— 未修改、未 amend、未 rebase |
 
 ---
 
 ## 下一個明確任務
 
-### Security Remediation 1（SR-1；依 SECURITY-AUDIT.md §4）——優先
+### Phase 3：垃圾桶與資料生命週期（依 ROADMAP）
 檢查清單：
-- [ ] F1/F3：Host 白名單＋變更端點自訂標頭（middleware）＋阻斷測試
-- [ ] F2：test 端點禁止「已存 key＋自訂 base_url」＋canary 監聽測試
-- [ ] F4：body／單檔／檔數上限＋`Image.MAX_IMAGE_PIXELS`＋analyze 節流
-- [ ] F6：前端 escaping util＋`nosniff`／上傳型別檢查＋Playwright XSS 斷言
-- [ ] F5：預設 loopback＋顯式「開放區網」選項與啟動警告
-- [ ] F7/F8（可拆）：安全標頭、docs 開關、模板 script 過濾
+- [ ] 垃圾桶頁面（void 紀錄）＋還原
+- [ ] 30 天保留與永久刪除（明確使用者意圖、可稽核；原照片保護規則先定案）
+- [ ] 補充測試、全測試通過
 
-### 接著（Phase 3：垃圾桶與資料生命週期）
-- 垃圾桶頁面（void 紀錄）＋還原；30 天保留與永久刪除（明確使用者意圖、可稽核）
-
-（收尾選項可穿插：R 型跨照片身分的下一輪 prompt 評測；屬性逐鍵來源標籤；Phase 1B-B。）
+（收尾選項可穿插：R 型跨照片身分的下一輪 prompt 評測；屬性逐鍵來源標籤；Phase 1B-B；安全後續 F4／F7／F8。）
 
 ### AI-Native 架構研究對照（`docs/engineering/AI-NATIVE-ARCHITECTURE.md`）
 - ✓ S1（提案命名空間）→ Phase 2B：`attribute:<key>` 受驗證契約
@@ -430,3 +443,4 @@ Commit：`docs: security audit 1 - desktop application`（本地，未 push）
 - **2026-10-10**：Phase 2C-C 完成——Live 驗證（7 次成功＋1 次 4xx、僅合成圖）：自動修訂可行（BOSE→SONY）、使用者保護、衝突泛化、9 張選擇修復、失敗/重試；抓到「過期 undo 可覆寫後續編輯」缺陷；`attribute:description` 0/9 出現；產出 2C-D 五條驗收條件；測試基線不變 983（未改程式碼/測試）
 - **2026-10-10**：Phase 2C-D 完成——過期 undo 防護（409 零副作用＋逐欄位批次＋UI 逐項說明）；描述與跨照片身分 prompt 上線；banner 修訂前後值；可重複 Live 驗證入口；Live 回評：C1 描述 ✓、C6 雙身分 ✓、P/S/F ✓、R 型仍可能擇一（限制記錄）；測試基線 983 → 994
 - **2026-10-10**：Security Audit 1 完成（唯讀）——F1 DNS rebinding／Host 未驗證、F2 API key 轉送、F3 CSRF、F4 資源上限、F5 0.0.0.0 綁定、F6 前端 XSS、F7/F8 縱深；正面清單（穿越防護、秘密衛生、參數化 SQL 等）；情境判定與 SR-1 修復建議；測試基線不變 994（未改任何程式碼／設定／測試）
+- **2026-10-10**：SR-1 完成——Host／Origin／`X-Requested-With` 守門（F1/F3）、已存 key 只送 preset＋自訂 URL 需臨時 key（F2）、LAN opt-in＋綁定實測 loopback（F5）、escaping＋CSP／nosniff＋媒體附件化＋移除 inline 處理器（F6）；修復後重演原攻擊全數攔下；測試基線 994 → 1013

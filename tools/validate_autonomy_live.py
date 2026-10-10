@@ -99,7 +99,12 @@ def main(argv: list[str] | None = None) -> int:
     cfg = config_mod.load(args.data_dir)
     db_mod.init(cfg)
     config_mod.ensure_dirs(cfg)
-    client = TestClient(create_app(cfg))
+    # SR-1：Host 白名單＋變更端點自訂標頭。
+    client = TestClient(
+        create_app(cfg),
+        base_url="http://localhost",
+        headers={"X-Requested-With": "ItemTrace"},
+    )
 
     calls = {"ok": 0, "failed": 0}
     mode = {"bad_model": False}

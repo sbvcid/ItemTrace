@@ -6,7 +6,14 @@
 
 async function request(path, options = {}) {
   const url = path.startsWith('/') ? path : `/${path}`;
-  const response = await fetch(url, options);
+  // SR-1（F3）：所有請求統一套上自訂標頭。變更類請求在後端據此擋掉
+  // 跨站「簡單請求」——外部網頁要帶自訂標頭就得先過 CORS preflight，
+  // 而本服務沒有 CORS。
+  const headers = {
+    'X-Requested-With': 'ItemTrace',
+    ...(options.headers || {}),
+  };
+  const response = await fetch(url, { ...options, headers });
 
   if (!response.ok) {
     let errorDetail = `HTTP ${response.status}`;

@@ -275,14 +275,18 @@ def test_test_api_hits_the_google_endpoint(local, config_file, fake_provider):
     )
 
 def test_test_api_hits_custom_base_url(local, config_file, fake_provider):
+    """自訂 base_url 仍可測 —— SR-1（F2）之後必須帶臨時 key，
+    不會把已儲存的 key 送到自訂網址。"""
     config_file.write_text(json.dumps(
         {"api_key": SECRET, "model": "m", "provider": "custom",
          "base_url": "https://my-proxy.internal/v1"}
     ), encoding="utf-8")
     calls = fake_provider()
-    response = local.post("/api/settings/ai/test", json={})
+    temp_key = "sk-or-v1-TEMP-SR1-0000000000"
+    response = local.post("/api/settings/ai/test", json={"api_key": temp_key})
     assert response.status_code == 200
     assert calls[0]["url"] == "https://my-proxy.internal/v1/chat/completions"
+    assert calls[0]["auth"] == "Bearer " + temp_key
 
 def test_test_api_can_test_an_unsaved_provider(local, seeded, fake_provider):
     """剛填的 provider / base_url 也能先測，不必先存。"""

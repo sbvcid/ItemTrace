@@ -45,7 +45,13 @@ def client(config: config_mod.Config):
 
     from shop.api import create_app
 
-    with TestClient(create_app(config)) as test_client:
+    # SR-1：Host 必須在允許清單（用 localhost），變更類請求需要自訂標頭
+    # ——等同 ItemTrace 網頁前端的行為（web/core/api.js 會自動附加）。
+    with TestClient(
+        create_app(config),
+        base_url="http://localhost",
+        headers={"X-Requested-With": "ItemTrace"},
+    ) as test_client:
         yield test_client
 
 
@@ -67,7 +73,12 @@ def client_factory(config: config_mod.Config):
 
     @contextmanager
     def make(address):
-        with TestClient(app, client=tuple(address)) as test_client:
+        with TestClient(
+            app,
+            client=tuple(address),
+            base_url="http://localhost",
+            headers={"X-Requested-With": "ItemTrace"},
+        ) as test_client:
             yield test_client
 
     return make

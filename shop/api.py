@@ -45,6 +45,7 @@ from .ai_config import AiConfigError
 from .config import Config, ConfigError
 from .errors import ConflictError, NotFoundError, ValidationError
 from . import evidence as evidence_mod
+from . import security
 from .models import Item, Photo
 from .repo import Repository
 from .settings import router as settings_router
@@ -118,6 +119,24 @@ def create_app(config: Config | None = None) -> FastAPI:
         ),
     )
     app.state.config = cfg
+
+    # SR-1（SECURITY-AUDIT F1/F3）：Host／Origin 驗證＋變更端點自訂標頭；
+    # 回應統一套上 nosniff／Referrer-Policy，HTML 另加 CSP 與 frame 保護。
+    allowed_hosts = security.build_allowed_hosts(cfg)
+
+    @app.middleware("http")
+    async def _security_guard(request: Request, call_next):
+        rejection = security.check_request(request, allowed_hosts)
+        if rejection is not None:
+            return rejection
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers.setdefault("Content-Security-Policy", security.APP_CSP)
+            response.headers.setdefault("X-Frame-Options", "DENY")
+        return response
+
     _register_error_handlers(app)
     app.include_router(router)
     app.include_router(settings_router)
@@ -1093,6 +1112,31 @@ def stats(repo: Repo, limit: Annotated[int, Query(ge=1, le=200)] = 10) -> StatsO
 # ----------------------------------------------------------------------
 
 
+#: 可以直接 inline 提供的圖片副檔名（SR-1／F6）。其他副檔名一律以
+#: attachment 下載，避免上傳的 HTML／SVG 等主動內容以應用同源執行。
+SAFE_INLINE_IMAGE_EXTENSIONS = frozenset(
+    {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+)
+#: 媒體回應的最嚴 CSP：就算有瀏覽器仍嘗試渲染，也不給任何資源／腳本能力。
+FILE_CSP = "default-src 'none'; sandbox"
+
+
+def _file_response(target: Path) -> FileResponse:
+    """媒體檔的統一回應：nosniff＋嚴格 CSP；非圖片一律附件下載。"""
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": FILE_CSP,
+        "Cache-Control": "public, max-age=86400",
+    }
+    if target.suffix.lower() in SAFE_INLINE_IMAGE_EXTENSIONS:
+        return FileResponse(target, headers=headers)
+    return FileResponse(
+        target,
+        media_type="application/octet-stream",
+        headers={**headers, "Content-Disposition": "attachment"},
+    )
+
+
 def _serve_file(cfg: Config, path: str) -> FileResponse:
     """提供已歸檔照片與 inbox 待處理照片。
 
@@ -1112,7 +1156,7 @@ def _serve_file(cfg: Config, path: str) -> FileResponse:
     for target in candidates:
         try:
             if any(target.is_relative_to(root) for root in roots) and target.is_file():
-                return FileResponse(target, headers={"Cache-Control": "public, max-age=86400"})
+                return _file_response(target)
         except (ValueError, OSError):
             continue
 

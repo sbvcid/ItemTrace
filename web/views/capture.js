@@ -6,6 +6,7 @@
  */
 
 import { api, getPhotoUrl } from '../core/api.js';
+import { escapeHtml } from '../core/dom.js';
 import { showToast } from '../core/router.js';
 import { t } from '../i18n/index.js';
 
@@ -385,7 +386,7 @@ export async function createCaptureView(params, router) {
         </div>
         <div class="ai-field-row" style="margin-top: 12px;">
           <label class="ai-field-label">${t('detail.fieldName')}</label>
-          <input type="text" class="ai-edit-input" id="fallback-name" placeholder="${t('capture.namePlaceholder')}" value="${editName.value || ''}" />
+          <input type="text" class="ai-edit-input" id="fallback-name" placeholder="${t('capture.namePlaceholder')}" value="${escapeHtml(editName.value)}" />
         </div>
       `;
 
@@ -456,10 +457,10 @@ export async function createCaptureView(params, router) {
 
     row.innerHTML = `
       <div class="ai-field-label-group">
-        <span class="ai-field-label">${label}</span>
+        <span class="ai-field-label">${escapeHtml(label)}</span>
         ${badgeHtml}
       </div>
-      <div class="ai-field-value ${isMono ? 'mono' : ''}">${value}</div>
+      <div class="ai-field-value ${isMono ? 'mono' : ''}">${escapeHtml(value)}</div>
     `;
     return row;
   }

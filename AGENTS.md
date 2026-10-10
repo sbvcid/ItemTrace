@@ -48,10 +48,10 @@
 **技術棧**：
 - 後端：Python + FastAPI + SQLite (WAL mode)
 - 前端：零建置 ESM 純 JavaScript SPA
-- 測試：pytest (994 tests)
+- 測試：pytest (1013 tests)
 - 部署：local-first, 無外部依賴
 
-**當前階段**：Security Audit 1 完成（唯讀稽核；F1–F8 見 docs/engineering/SECURITY-AUDIT.md；下一個建議：SR-1 修復，接 Phase 3）
+**當前階段**：SR-1 安全修復完成（F1/F2/F3/F5/F6 已修；F4/F7/F8 列安全後續；下一個建議：Phase 3 垃圾桶與資料生命週期）
 
 ---
 

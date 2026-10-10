@@ -4,6 +4,8 @@
  * Lightweight SPA history router with dynamic parameter parsing.
  */
 
+import { escapeHtml } from './dom.js';
+
 class Router {
   constructor() {
     this.routes = [];
@@ -74,14 +76,20 @@ class Router {
           window.scrollTo(0, 0);
         } catch (err) {
           console.error('Route handler error:', err);
+          // SR-1／F6：錯誤訊息屬不可信內容 → escape；按鈕改用事件監聽
+          // （CSP script-src 'self' 會擋 inline onclick）。
           this.container.innerHTML = `
             <div class="container empty-state">
               <div class="empty-icon">⚠️</div>
               <div class="empty-title">畫面載入失敗</div>
-              <div class="empty-subtitle">${err.message || '未知錯誤'}</div>
-              <button class="btn-primary" onclick="window.history.back()">返回上一頁</button>
+              <div class="empty-subtitle">${escapeHtml(err.message || '未知錯誤')}</div>
+              <button class="btn-primary" id="btn-route-back">返回上一頁</button>
             </div>
           `;
+          const backButton = this.container.querySelector('#btn-route-back');
+          if (backButton) {
+            backButton.addEventListener('click', () => window.history.back());
+          }
         }
         return;
       }

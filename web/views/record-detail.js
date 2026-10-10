@@ -11,6 +11,7 @@
  */
 
 import { api, getPhotoUrl } from '../core/api.js';
+import { escapeHtml } from '../core/dom.js';
 import { showToast } from '../core/router.js';
 import { t } from '../i18n/index.js';
 
@@ -76,9 +77,10 @@ export async function createRecordDetailView(params, router) {
     analysisStatus.hidden = false;
     analysisStatus.className = `detail-analysis-status is-${kind}`;
     const icon = kind === 'failed' ? '⚠️' : '✨';
+    // SR-1／F6：訊息裡可能夾帶紀錄值或錯誤訊息（皆屬不可信）→ 一律 escape。
     analysisStatus.innerHTML = `
-      <span class="analysis-text">${icon} ${message}</span>
-      ${action ? `<button type="button" class="btn-secondary detail-tool-btn" id="btn-status-action">${action.label}</button>` : ''}
+      <span class="analysis-text">${icon} ${escapeHtml(message)}</span>
+      ${action ? `<button type="button" class="btn-secondary detail-tool-btn" id="btn-status-action">${escapeHtml(action.label)}</button>` : ''}
     `;
     const actionBtn = analysisStatus.querySelector('#btn-status-action');
     if (actionBtn && action) {
@@ -98,7 +100,7 @@ export async function createRecordDetailView(params, router) {
         <div class="empty-state">
           <div class="empty-icon">⚠️</div>
           <div class="empty-title">${t('detail.notFoundTitle')}</div>
-          <div class="empty-subtitle">${err.message}</div>
+          <div class="empty-subtitle">${escapeHtml(err.message)}</div>
           <a href="/" class="btn-primary" style="display: inline-flex; width: auto;" data-link>${t('detail.backHome')}</a>
         </div>
       `;
@@ -150,8 +152,8 @@ export async function createRecordDetailView(params, router) {
       return `
         <div class="suggestion-row${isConflict ? ' is-conflict' : ''}" data-id="${s.id}">
           <div class="suggestion-info">
-            <div class="suggestion-field">${fieldLabel(s.field)} ${confidence} ${photoChip}</div>
-            <div class="suggestion-value">${s.value}</div>
+            <div class="suggestion-field">${escapeHtml(fieldLabel(s.field))} ${confidence} ${photoChip}</div>
+            <div class="suggestion-value">${escapeHtml(s.value)}</div>
             ${conflictNote}
           </div>
           <div class="suggestion-actions">
@@ -399,15 +401,15 @@ export async function createRecordDetailView(params, router) {
       const thumbsHtml = photos.map((p, idx) => {
         const photoUrl = getPhotoUrl(p.filename);
         return `
-          <div class="detail-thumb-item ${idx === 0 ? 'active' : ''}" data-url="${photoUrl}">
-            <img src="${photoUrl}" alt="${t('detail.photosTitle', { n: idx + 1 })}" loading="lazy" />
+          <div class="detail-thumb-item ${idx === 0 ? 'active' : ''}" data-url="${escapeHtml(photoUrl)}">
+            <img src="${escapeHtml(photoUrl)}" alt="${escapeHtml(t('detail.photosTitle', { n: idx + 1 }))}" loading="lazy" />
           </div>
         `;
       }).join('');
 
       photosHtml = `
         <div class="detail-photos-carousel">
-          <img src="${primaryPhotoUrl}" alt="${item.name || 'Photo'}" class="detail-main-img" id="main-photo" />
+          <img src="${escapeHtml(primaryPhotoUrl)}" alt="${escapeHtml(item.name || 'Photo')}" class="detail-main-img" id="main-photo" />
         </div>
         ${photos.length > 1 ? `<div class="detail-thumbs-bar" id="thumbs-bar">${thumbsHtml}</div>` : ''}
       `;
@@ -420,7 +422,8 @@ export async function createRecordDetailView(params, router) {
     }
 
     // Specifications & Identifiers
-    const title = item.name || item.model || t('home.cardUntitled');
+    // SR-1／F6：所有紀錄欄位（含 AI 產出）進版型前先 escape。
+    const title = escapeHtml(item.name || item.model || t('home.cardUntitled'));
     const serialItems = identifiers.filter(i => i.kind === 'serial');
 
     // 只負責序號列；型號由下面的 specs grid 顯示（以前這裡的 fallback
@@ -429,8 +432,8 @@ export async function createRecordDetailView(params, router) {
           <div class="spec-item">
             <span class="spec-label">${t('detail.serialBadge')}</span>
             <div class="spec-val mono">
-              <span>${i.value}</span>
-              <button type="button" class="btn-copy" data-copy="${i.value}" title="${t('detail.copySerial')}">📋 ${t('detail.copySerial')}</button>
+              <span>${escapeHtml(i.value)}</span>
+              <button type="button" class="btn-copy" data-copy="${escapeHtml(i.value)}" title="${t('detail.copySerial')}">📋 ${t('detail.copySerial')}</button>
             </div>
           </div>
         `).join('');
@@ -446,8 +449,8 @@ export async function createRecordDetailView(params, router) {
             <div class="attribute-list">
               ${attributeEntries.map(([key, value]) => `
                 <div class="attribute-row">
-                  <span class="attribute-key">${key}</span>
-                  <span class="attribute-value">${value}</span>
+                  <span class="attribute-key">${escapeHtml(key)}</span>
+                  <span class="attribute-value">${escapeHtml(value)}</span>
                 </div>
               `).join('')}
             </div>
@@ -465,39 +468,39 @@ export async function createRecordDetailView(params, router) {
           ${item.brand ? `
             <div class="spec-item">
               <span class="spec-label">${t('detail.fieldBrand')}</span>
-              <div class="spec-val">${item.brand}</div>
+              <div class="spec-val">${escapeHtml(item.brand)}</div>
             </div>
           ` : ''}
           ${item.model ? `
             <div class="spec-item">
               <span class="spec-label">${t('detail.fieldModel')}</span>
-              <div class="spec-val">${item.model}</div>
+              <div class="spec-val">${escapeHtml(item.model)}</div>
             </div>
           ` : ''}
           ${item.category ? `
             <div class="spec-item">
               <span class="spec-label">${t('detail.fieldCategory')}</span>
-              <div class="spec-val">${item.category}</div>
+              <div class="spec-val">${escapeHtml(item.category)}</div>
             </div>
           ` : ''}
           ${serialsHtml}
           ${item.condition ? `
             <div class="spec-item" style="grid-column: 1 / -1;">
               <span class="spec-label">${t('detail.fieldCondition')}</span>
-              <div class="spec-val" style="font-weight: normal; font-size: 0.95rem; line-height: 1.5;">${item.condition}</div>
+              <div class="spec-val" style="font-weight: normal; font-size: 0.95rem; line-height: 1.5;">${escapeHtml(item.condition)}</div>
             </div>
           ` : ''}
           ${item.notes ? `
             <div class="spec-item" style="grid-column: 1 / -1;">
               <span class="spec-label">${t('detail.fieldNotes')}</span>
-              <div class="spec-val" style="font-weight: normal; font-size: 0.95rem; line-height: 1.5;">${item.notes}</div>
+              <div class="spec-val" style="font-weight: normal; font-size: 0.95rem; line-height: 1.5;">${escapeHtml(item.notes)}</div>
             </div>
           ` : ''}
           ${attributesHtml}
         </div>
 
         <div style="font-size: 0.82rem; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center; padding-top: 8px;">
-          <span>${t('detail.fieldCreated')}：${item.created_at ? item.created_at.replace('T', ' ').slice(0, 19) : '剛剛'}</span>
+          <span>${t('detail.fieldCreated')}：${escapeHtml(item.created_at ? item.created_at.replace('T', ' ').slice(0, 19) : '剛剛')}</span>
           <a href="/" class="btn-secondary" style="width: auto; padding: 6px 14px;" data-link>${t('detail.backHome')}</a>
         </div>
       </div>

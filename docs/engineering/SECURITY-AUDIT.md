@@ -10,6 +10,26 @@
 
 ---
 
+## SR-1 修復狀態（2026-10-10；對應 commit 見 `STATUS.md`）
+
+> 本節由 SR-1 施工階段追加；上方 §1–§5 保留**稽核當時**的原始發現（唯讀快照）。
+
+| 發現 | 狀態 | 修復與驗證（隔離實例、合成資料） |
+|---|---|---|
+| **F1** DNS rebinding／Host | ✅ **已修** | 新增 `shop/security.py`：Host 白名單（loopback 全形式＋`server_host`＋config `allowed_hosts`）＋Origin 驗證（host∈白名單、埠需一致、`null` 拒絕），在路由前 403。實測：`Host: evil.example` → **403**；`127.0.0.1:8899` → 200；測試 `tests/test_security.py` |
+| **F2** key 轉送 | ✅ **已修** | `/api/settings/ai/test` 僅在端點屬**已知 preset** 時沿用已存 key；自訂 URL 必須帶臨時 key（否則 400）。實測：canary＋本地接收器——拒絕對照組零外送；帶臨時 key 時接收器只看到臨時 key |
+| **F3** CSRF | ✅ **已修** | 變更類（POST/PATCH/PUT/DELETE）一律要求 `X-Requested-With: ItemTrace`；Origin 驗證同上。實測：無標頭 POST→**403**、`Origin: evil` → 403、同源→201；`web/core/api.js`、`tools/analyze_item.py`、驗證工具同步帶標頭 |
+| **F5** 綁定 | ✅ **已修** | 程式預設 loopback；非 loopback 需 config `"allow_lan": true`。實測：現值 `0.0.0.0` 下 `python serve.py` **拒絕啟動（exit 2）** 並印出明確指示；隔離實例實際監聽 **127.0.0.1**；LAN 模式有警語＋README 信任模型說明 |
+| **F6** 儲存型 XSS／媒體 | ✅ **已修** | 前端 `escapeHtml` 套用於紀錄／建議／錯誤訊息（home／capture／detail／router）；移除所有 inline `onerror`/`onclick`（CSP 相容）；回應加 `nosniff`／`Referrer-Policy`／HTML CSP（`script-src 'self'`、`frame-ancestors 'none'`）；`/files` 非圖片 → `application/octet-stream`＋`attachment`＋`default-src 'none'; sandbox`。實測：payload 名稱／備註／屬性（含惡意鍵）全部純文字、`window.__xss` 未定義、evil.html 下載化；瀏覽器 0 console errors；`tests/test_security.py`＋兩條靜態守門 |
+| **F4** 資源上限 | ⏳ **未修**（SR-1 範圍外） | 依 SR-1 任務切分保留：body／單檔／檔數上限、PIL 像素上限、analyze 節流——建議列下一階段 |
+| **F7** 資訊衛生／**F8** 列印 | ⏳ **未修**（低） | `/docs` 開關、錯誤訊息簡化、模板 script 過濾——候選後續 |
+
+修復後重演的原始攻擊（隔離實例）：H1 evil Host 200→**403**；C1 CSRF void 200→**403**；K1 canary 外送→**400＋零外送**；evil.html `text/html`→**attachment/octet-stream**；有效綁定 0.0.0.0→**127.0.0.1**（且 0.0.0.0 未 opt-in 直接拒啟）。
+
+**殘餘（已知且刻意保留）**：無登入系統的「信任區網」模型不變——LAN 上的直接用戶端（已 opt-in）仍可完整讀寫；非瀏覽器腳本只要帶標頭即可操作（設計如此）。F4/F7/F8 未動。
+
+---
+
 ## 0. 現況基線（實測）
 
 - 服務綁定：`serve.py` 讀 `config.json` 的 `server_host`；**程式碼預設 `127.0.0.1`**（`shop/config.py:20`），但**本 checkout 的 `config.json` 現值為 `0.0.0.0:8731`**（唯一遠處的實際配置）。

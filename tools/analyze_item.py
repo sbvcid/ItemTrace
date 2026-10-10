@@ -163,6 +163,8 @@ class ItemTraceClient:
         request = urllib.request.Request(url, data=data, method=method)
         if data is not None:
             request.add_header("Content-Type", "application/json")
+        # SR-1（F3）：伺服器的變更類端點要求自訂標頭（防跨站簡單請求）。
+        request.add_header("X-Requested-With", "ItemTrace")
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 payload = response.read()

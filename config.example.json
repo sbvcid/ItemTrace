@@ -4,5 +4,7 @@
   "backup_dir": "backups",
   "backup_keep": 30,
   "server_host": "127.0.0.1",
-  "server_port": 8731
+  "server_port": 8731,
+  "allow_lan": false,
+  "allowed_hosts": []
 }

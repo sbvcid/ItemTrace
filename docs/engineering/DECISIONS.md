@@ -276,6 +276,29 @@ AI 會隨新證據自動更新判讀（描述、屬性、身分修訂）。若�
 
 ---
 
+## D9. SR-1 安全基線（Host／Origin／標頭、key 外送、綁定、媒體輸出）（2026-10-10）
+
+### 背景
+Security Audit 1 確認（隔離實測）：F1 DNS rebinding（無 Host/Origin 驗證，loopback 綁定亦可被任意網頁全控）、F2 已存 API key 可被轉送到呼叫者指定的 base_url、F3 無 body 端點可 CSRF、F5 實值綁 0.0.0.0、F6 儲存型 XSS 與媒體主動內容原樣供檔。
+
+### 決定
+1. **路由前守門**：Host ∈ 白名單（loopback 全形式＋`server_host`＋config `allowed_hosts`）；有 Origin 時必須同源（host∈白名單、埠一致、`null` 拒絕）。
+2. **變更類自訂標頭**：POST／PATCH／PUT／DELETE 一律要求 `X-Requested-With: ItemTrace`（瀏覽器跨站帶不了自訂標頭；前端與工具統一附加）。缺少 Origin **不**單獨構成信任。
+3. **key 外送邊界**：`/api/settings/ai/test` 的已存 key 只送往已知 provider preset；自訂 base URL 必須由該次請求帶臨時 key。
+4. **綁定 opt-in**：預設 loopback；非 loopback 需 config `"allow_lan": true`（未設定拒啟）。信任區網模型文件化，且明示**不能取代認證**。
+5. **輸出安全**：前端 `escapeHtml` 全面套用；回應 `nosniff`／`Referrer-Policy`／HTML CSP（`script-src 'self'`、`frame-ancestors 'none'`）；`/files` 非圖片 → `attachment`/`octet-stream`＋`default-src 'none'; sandbox`；禁 inline 事件處理器。
+
+### 取捨
+- 手動 curl／腳本需多帶一個標頭；自訂 provider 測試需當次貼臨時 key——換得「瀏覽器不可被跨站利用」與「長期 key 不外流」。
+- 不引入登入系統（維持 local-first 單人）；F4（資源上限）、F7/F8（縱深）保留後續。
+
+### 驗證
+- `tests/test_security.py`（17＋靜態守門）與 `test_settings_api.py` 更新；修復後以 socket 級隔離實例重演原攻擊全數攔下（canary 零外送、evil Host/Origin→403、非圖片附件化、綁定 loopback）；瀏覽器 E2E：payload 純文字、0 console errors、保存流程正常。
+
+**狀態**：✓ Accepted（SR-1）
+
+---
+
 ## 開放問題
 
 | 編號 | 問題 | 優先級 | 決策期限 |
@@ -292,4 +315,5 @@ AI 會隨新證據自動更新判讀（描述、屬性、身分修訂）。若�
 
 - **2026-10-09**：初始版本建立，記錄 Phase 0–Phase 7 的關鍵決策
 - **2026-10-10**：新增 D8（AI 自動更新邊界與復原安全，Phase 2C-B/C/D 實作與驗證）
+- **2026-10-10**：新增 D9（SR-1 安全基線：Host／Origin／標頭、key 外送、綁定、媒體輸出）
 

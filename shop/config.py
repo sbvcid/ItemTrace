@@ -19,6 +19,11 @@ DEFAULTS = {
     "backup_keep": 30,
     "server_host": "127.0.0.1",
     "server_port": 8731,
+    # SR-1（SECURITY-AUDIT F5）：沒有登入機制，開放區網必須是明示的選擇。
+    "allow_lan": False,
+    # SR-1（F1）：Host 白名單的補充項（例如自訂主機名）；loopback 與
+    # 綁定位址一律自動允許。
+    "allowed_hosts": [],
 }
 
 
@@ -35,6 +40,8 @@ class Config:
     backup_keep: int
     server_host: str
     server_port: int
+    allow_lan: bool = False
+    allowed_hosts: tuple[str, ...] = ()
 
     @property
     def config_path(self) -> Path:
@@ -98,6 +105,12 @@ def load(base_dir: Path | None = None) -> Config:
         backup_keep=int(raw["backup_keep"]),
         server_host=str(raw["server_host"]),
         server_port=int(raw["server_port"]),
+        allow_lan=bool(raw.get("allow_lan", False)),
+        allowed_hosts=tuple(
+            str(item).strip()
+            for item in (raw.get("allowed_hosts") or [])
+            if str(item).strip()
+        ),
     )
 
 

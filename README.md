@@ -34,7 +34,8 @@ Windows 也可以直接雙擊 **`啟動 ItemTrace.bat`**，它會依序做上面
 
 服務預設只綁 `127.0.0.1`，只有本機連得上。要讓手機連：
 
-1. 用文字編輯器打開 `config.json`，把 `server_host` 改成 `"0.0.0.0"`
+1. 用文字編輯器打開 `config.json`，把 `server_host` 改成 `"0.0.0.0"`，
+   並加上 `"allow_lan": true`
 2. 重新啟動 `python serve.py`
 3. 手機連到**同一個 Wi-Fi**，瀏覽器打 `http://<電腦的IP>:8731/`
 
@@ -43,6 +44,11 @@ Windows 也可以直接雙擊 **`啟動 ItemTrace.bat`**，它會依序做上面
 > `0.0.0.0` 代表監聽所有網路介面，**同一個區網內的任何人只要知道網址就能連進來，
 > 而且沒有密碼**。這是設計給自己家裡用的，不要放在公開的網路或路由器轉發出去的環境。
 > 用完記得改回 `127.0.0.1`。
+>
+> 因為沒有登入機制，**開放區網必須是明示的選擇**：`server_host` 不是 loopback
+> 而沒有設 `"allow_lan": true` 時，`serve.py` 會拒絕啟動並印出說明 —— 不會
+> 無聲地把資料開放出去。信任區網的前提是「網路上只有你信任的裝置」，這件事
+> 不能取代登入。
 
 ### 頁面
 
@@ -220,10 +226,27 @@ node --check ui/item.js               # JS 語法（有 node 才需要）
 | `database` | `catalog.db` | SQLite 檔名（WAL 模式） |
 | `backup_dir` | `backups` | 快照放置位置 |
 | `backup_keep` | `30` | 保留最近幾份快照 |
-| `server_host` | `127.0.0.1` | 改成 `0.0.0.0` 才讓手機連得進來 |
+| `server_host` | `127.0.0.1` | 綁定位址；非 loopback 必須同時設 `allow_lan` |
+| `allow_lan` | `false` | 明確開放區網（沒有登入機制，請只在受信任網路開啟） |
+| `allowed_hosts` | `[]` | 額外允許的 Host 名稱（例如自訂主機名） |
 | `server_port` | `8731` | 連接埠 |
 
 `config.example.json` 是樣板，`init` 會由它產生 `config.json`。
+
+### 本機安全防護（SR-1）
+
+沒有登入系統的桌面應用，防的是「瀏覽器替攻擊者送請求」：
+
+* **Host 白名單**：只接受 loopback 位址／名稱與設定中的 `allowed_hosts`；
+  其他 Host（DNS rebinding 的網域）一律 403
+* **Origin 驗證**：請求帶 Origin 時，其主機與埠必須與請求一致
+* **自訂標頭**：變更類請求（POST／PATCH／PUT／DELETE）必須帶
+  `X-Requested-With: ItemTrace`（ItemTrace 網頁會自動附加；用 curl 或
+  腳本時請自己加）——外部網頁帶不了自訂標頭，跨站簡單請求因此被擋下
+* **媒體安全**：`/files/*` 回應帶 `X-Content-Type-Options: nosniff` 與嚴格
+  CSP；非圖片副檔名一律以附件下載（上傳的 HTML 不會以網頁執行）
+* **AI key 不外送**：測試 API 時，已儲存的 key 只會送到已知 provider
+  端點；自訂 base URL 必須在該次請求明確帶上臨時 key
 
 **整個資料夾就是全部資料**：`catalog.db` + `files/`（原始照片）+ `inbox/`。
 關掉程式、整份搬到任何位置、重新啟動即可，不需改任何設定 —— 資料庫裡只存相對於
@@ -270,7 +293,11 @@ node --check ui/item.js               # JS 語法（有 node 才需要）
 > 開放給能連到這台 server 的裝置 —— server 刻意只服務受信任
 > 區網（`server_host` + 防火牆），與「區網裝置本來就能讀寫所有
 > 商品資料」的信任模型一致。若不信任區網，把 `config.json` 的
-> `server_host` 改回 `127.0.0.1`，寫入就只接受本機。
+> `server_host` 改回 `127.0.0.1`。
+>
+> SR-1 之後，**「測試 API」不會把已儲存的 key 轉送到任意網址**：
+> 已存的 key 只會送往 Google／OpenRouter 等已知端點；自訂 base URL
+> 必須在同一張表單上輸入臨時 key 才能測試。
 
 ### 執行
 

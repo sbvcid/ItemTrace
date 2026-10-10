@@ -728,4 +728,5 @@ Phase 7 (Windows Release)
 - **2026-10-10（Phase 2C-B）**：可回復的自動套用完成（選擇策略、決定性政策、使用者保護、衝突升級、undo、banner/來源標示）；零 schema migration；測試基線更新為 983；Phase 2 核心完成；下一階段 = Phase 3 垃圾桶與資料生命週期（收尾選項：description prompt 調校、屬性來源標籤）
 - **2026-10-10（Phase 2C-C）**：自主性 Live 驗證完成（7 次成功＋1 次 4xx、僅合成圖）：修訂/保護/衝突/選擇/失敗重試通過；抓到過期 undo 缺陷與 description 缺口；測試基線不變（未改程式碼）；下一階段 = Phase 2C-D 收斂五條驗收，接 Phase 3
 - **2026-10-10（Phase 2C-D）**：撤銷安全、描述與衝突處理完成（409 防護、banner 前後值、描述/身分 prompt、Live 回評 C1/C6 通過、R 型限制記錄、可重複 Live 入口）；零 schema migration；測試基線更新為 994；下一階段 = Phase 3 垃圾桶與資料生命週期
+- **2026-10-10（Security Audit 1 + SR-1）**：桌面安全稽核（F1–F8）與修復完成——Host／Origin／`X-Requested-With` 守門、已存 key 只送 preset、LAN opt-in（非 loopback 未設定拒啟）、前端 escaping＋CSP/nosniff＋媒體附件化；F4/F7/F8 列安全後續；測試基線更新為 1013；下一階段 = Phase 3（計畫未變）
 
