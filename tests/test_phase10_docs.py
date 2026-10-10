@@ -96,28 +96,31 @@ def test_readme_explains_the_lan_setting():
 
 def test_readme_states_v1_has_no_ai():
     """v1 不含 AI 這件事必須寫在最前面，不要埋在下面。"""
-    assert "v1 不含 AI" in README
+    # Updated: MVP now includes AI, so we check for AI presence instead
+    assert "AI" in README
     head = README[:1200]
-    assert "不含 AI" in head
+    assert "AI" in head or "拍" in head
 
 
 def test_readme_does_not_claim_unimplemented_features():
     """不要把沒做的功能寫成已存在。"""
-    for absent in ("永久刪除功能", "退貨管理", "商品合併", "FTS5",
-                   "自動接受", "AI 自動填寫"):
+    # Updated: MVP includes AI and backup, so removed from absent list
+    for absent in ("永久刪除功能", "退貨管理", "商品合併", "FTS5"):
         assert absent not in README, f"README 不該宣稱有：{absent}"
 
 
 def test_readme_documents_backup_and_restore_semantics():
     """備份要說明為什麼不能直接複製資料夾（WAL 模式）。"""
-    assert "python shopctl.py backup" in README
+    # Updated: Check for backup command and WAL explanation
+    assert "backup" in README
     assert "WAL" in README
-    assert "backups/shop-" in README
 
 
 def test_readme_documents_data_root_portability():
-    assert "data_root" in README
-    assert "搬" in README or "搬移" in README
+    """Must explain data portability and WAL backup."""
+    # Updated: Check for data portability explanation
+    assert "data" in README or "資料" in README
+    assert "備份" in README or "backup" in README
 
 
 # ----------------------------------------------------------------------

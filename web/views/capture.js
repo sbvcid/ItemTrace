@@ -428,7 +428,25 @@ export async function createCaptureView(params, router) {
       inspectBtn.style.color = 'var(--text-secondary)';
       inspectBtn.innerHTML = `🔍 ${t('capture.inspectPhoto')}`;
       inspectBtn.addEventListener('click', () => {
-        const targetPhoto = capturedFiles[0]?.url;
+        // Phase 2C-D: Use actual source_photo_id if available; fallback to first photo
+        const sourcePhotoId = sourcePhotos.serial;
+        let targetPhoto = null;
+        
+        if (sourcePhotoId) {
+          // Find the photo that matches the source ID
+          // source_photo_id format is "observation:{obs_id}:photo:{photo_index}"
+          const match = sourcePhotoId.match(/photo:(\d+)$/);
+          if (match) {
+            const photoIndex = parseInt(match[1], 10);
+            targetPhoto = capturedFiles[photoIndex]?.url;
+          }
+        }
+        
+        // Fallback: if no source ID or index not found, use first photo
+        if (!targetPhoto) {
+          targetPhoto = capturedFiles[0]?.url;
+        }
+        
         if (targetPhoto) {
           inspectorImg.src = targetPhoto;
           inspectorModal.style.display = 'flex';

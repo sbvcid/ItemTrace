@@ -115,6 +115,11 @@ export default {
     revisionChanged: '{field}：{from} → {to}',
     revisionFilled: '{field}：{to}（新增）',
     conflictNote: '這筆與其他證據可能不一致，請確認後再套用',
+    edit: '編輯',
+    editTitle: '編輯紀錄',
+    saveDone: '紀錄已更新',
+    saveError: '保存失敗',
+    noChanges: '沒有變更',
   },
   settings: {
     headerTitle: '設定',

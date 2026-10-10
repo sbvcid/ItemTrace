@@ -115,6 +115,11 @@ export default {
     revisionChanged: '{field}: {from} → {to}',
     revisionFilled: '{field}: {to} (added)',
     conflictNote: 'This may conflict with other evidence; review before applying',
+    edit: 'Edit',
+    editTitle: 'Edit Record',
+    saveDone: 'Record updated',
+    saveError: 'Failed to save',
+    noChanges: 'No changes made',
   },
   settings: {
     headerTitle: 'Settings',

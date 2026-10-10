@@ -36,9 +36,11 @@ export async function createRecordDetailView(params, router) {
       <div class="detail-toolbar">
         <button type="button" class="btn-secondary detail-tool-btn" id="btn-add-photo">📷 <span>${t('detail.addPhoto')}</span></button>
         <button type="button" class="btn-secondary detail-tool-btn" id="btn-reanalyze">✨ <span>${t('detail.reanalyze')}</span></button>
+        <button type="button" class="btn-secondary detail-tool-btn" id="btn-edit-toggle">✎ <span>${t('detail.edit')}</span></button>
       </div>
       <div class="detail-analysis-status" id="analysis-status" hidden></div>
       <div id="suggestion-review"></div>
+      <div class="detail-edit-form" id="detail-edit-form" hidden></div>
     </div>
 
     <main class="container" id="detail-content">
@@ -54,17 +56,22 @@ export async function createRecordDetailView(params, router) {
   const statusBadge = el.querySelector('#status-badge');
   const addPhotoBtn = el.querySelector('#btn-add-photo');
   const reanalyzeBtn = el.querySelector('#btn-reanalyze');
+  const editToggleBtn = el.querySelector('#btn-edit-toggle');
+  const editFormContainer = el.querySelector('#detail-edit-form');
   const photoInput = el.querySelector('#detail-photo-input');
   const analysisStatus = el.querySelector('#analysis-status');
   const suggestionReview = el.querySelector('#suggestion-review');
 
   let busy = false;
   let currentPending = [];
+  let isEditMode = false;
+  let currentItemData = {};
 
   function setBusy(on) {
     busy = on;
     addPhotoBtn.disabled = on;
     reanalyzeBtn.disabled = on;
+    editToggleBtn.disabled = on;
   }
 
   function setStatus(kind, message, action = null) {
@@ -381,7 +388,114 @@ export async function createRecordDetailView(params, router) {
     }
   });
 
+  editToggleBtn.addEventListener('click', () => {
+    isEditMode = !isEditMode;
+    editToggleBtn.innerHTML = isEditMode
+      ? `<span style="color: var(--color-primary); font-weight: 700;">✓ ${t('app.confirm')}</span>`
+      : `✎ <span>${t('detail.edit')}</span>`;
+    editFormContainer.hidden = !isEditMode;
+    if (isEditMode) {
+      renderEditForm(currentItemData);
+    }
+  });
+
+  function renderEditForm(data) {
+    const item = data.item || {};
+    editFormContainer.innerHTML = `
+      <div class="detail-card" style="margin-top: 16px; padding: 16px;">
+        <div style="font-weight: 700; margin-bottom: 12px;">${t('detail.editTitle')}</div>
+        
+        <div style="margin-bottom: 12px;">
+          <label class="ai-field-label">${t('detail.fieldName')}</label>
+          <input type="text" class="ai-edit-input" id="edit-name" value="${escapeHtml(item.name || '')}" />
+        </div>
+        
+        <div style="margin-bottom: 12px;">
+          <label class="ai-field-label">${t('detail.fieldBrand')}</label>
+          <input type="text" class="ai-edit-input" id="edit-brand" value="${escapeHtml(item.brand || '')}" />
+        </div>
+        
+        <div style="margin-bottom: 12px;">
+          <label class="ai-field-label">${t('detail.fieldModel')}</label>
+          <input type="text" class="ai-edit-input" id="edit-model" value="${escapeHtml(item.model || '')}" />
+        </div>
+        
+        <div style="margin-bottom: 12px;">
+          <label class="ai-field-label">${t('detail.fieldCategory')}</label>
+          <input type="text" class="ai-edit-input" id="edit-category" value="${escapeHtml(item.category || '')}" />
+        </div>
+        
+        <div style="margin-bottom: 12px;">
+          <label class="ai-field-label">${t('detail.fieldCondition')}</label>
+          <input type="text" class="ai-edit-input" id="edit-condition" value="${escapeHtml(item.condition || '')}" />
+        </div>
+        
+        <div style="margin-bottom: 12px;">
+          <label class="ai-field-label">${t('detail.fieldNotes')}</label>
+          <textarea class="ai-edit-input" id="edit-notes" style="min-height: 80px; resize: vertical;">${escapeHtml(item.notes || '')}</textarea>
+        </div>
+        
+        <button type="button" class="btn-primary" id="btn-save-edits" style="width: 100%;">✓ ${t('app.save')}</button>
+      </div>
+    `;
+
+    const saveBtn = editFormContainer.querySelector('#btn-save-edits');
+    saveBtn.addEventListener('click', saveEdits);
+  }
+
+  async function saveEdits() {
+    const editName = editFormContainer.querySelector('#edit-name');
+    const editBrand = editFormContainer.querySelector('#edit-brand');
+    const editModel = editFormContainer.querySelector('#edit-model');
+    const editCategory = editFormContainer.querySelector('#edit-category');
+    const editCondition = editFormContainer.querySelector('#edit-condition');
+    const editNotes = editFormContainer.querySelector('#edit-notes');
+
+    if (busy) return;
+    setBusy(true);
+
+    try {
+      const patchData = {};
+      const newName = (editName.value || '').trim();
+      const newBrand = (editBrand.value || '').trim();
+      const newModel = (editModel.value || '').trim();
+      const newCategory = (editCategory.value || '').trim();
+      const newCondition = (editCondition.value || '').trim();
+      const newNotes = (editNotes.value || '').trim();
+
+      if (newName !== (currentItemData.item.name || '')) patchData.name = newName;
+      if (newBrand !== (currentItemData.item.brand || '')) patchData.brand = newBrand;
+      if (newModel !== (currentItemData.item.model || '')) patchData.model = newModel;
+      if (newCategory !== (currentItemData.item.category || '')) patchData.category = newCategory;
+      if (newCondition !== (currentItemData.item.condition || '')) patchData.condition = newCondition;
+      if (newNotes !== (currentItemData.item.notes || '')) patchData.notes = newNotes;
+
+      if (Object.keys(patchData).length === 0) {
+        showToast(t('detail.noChanges'));
+        setBusy(false);
+        return;
+      }
+
+      await api.patchItem(itemId, patchData);
+      showToast(t('detail.saveDone'));
+
+      isEditMode = false;
+      editToggleBtn.innerHTML = `✎ <span>${t('detail.edit')}</span>`;
+      editFormContainer.hidden = true;
+
+      await loadDetail();
+    } catch (err) {
+      console.error('Failed to save edits:', err);
+      showToast(`${t('detail.saveError')}: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function renderDetail(data) {
+    // Save current data for edit form
+    currentItemData = data;
+    
     const item = data.item;
     const photos = data.photos || [];
     const identifiers = data.identifiers || [];

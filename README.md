@@ -62,7 +62,7 @@ Windows 用戶可以直接雙擊 **`啟動 ItemTrace.bat`**。
 重啟服務，在手機上連到同一個 Wi-Fi，打開 `http://<電腦IP>:8731/`
 
 > **安全提示**：`0.0.0.0` 代表開放整個區網。這是為家庭使用設計的，
-> **不要放在公開網路**。用完記得改回 `127.0.0.1`。因為沒有登入機制，
+> **不要放在公開網路**。用完記得改回 `127.0.0.1`。因為沒有登入機制，沒有密碼驗證，
 > 非 loopback 卻沒設 `allow_lan: true` 時，服務會拒絕啟動。
 
 ## 使用流程
@@ -130,9 +130,15 @@ ItemTrace 伺服器 (FastAPI)
 
 | 欄位 | 預設 | 說明 |
 |---|---|---|
+| `data_root` | `.` | 資料根目錄 |
+| `database` | `catalog.db` | 資料庫檔案名稱 |
+| `backup_dir` | `backups` | 備份資料夾 |
+| `backup_keep` | `30` | 保留備份數量 |
 | `server_host` | `127.0.0.1` | 綁定位址 |
 | `allow_lan` | `false` | 是否允許區網存取 |
+| `allowed_hosts` | `[]` | 允許的主機清單（空表示由 allow_lan 決定） |
 | `server_port` | `8731` | 連接埠 |
+| `max_request_bytes` | `33554432` | 單一請求大小上限（32 MB） |
 | `max_upload_bytes` | `25165824` | 單一上傳檔案上限（24 MB） |
 | `max_upload_files` | `20` | 一次上傳最多檔數 |
 | `max_image_pixels` | `50000000` | 單張圖片像素上限（50 MP） |
