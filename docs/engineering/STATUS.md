@@ -1,9 +1,9 @@
 # ItemTrace Engineering Status
 
-最後更新：2026-10-11 00:00  
-**當前狀態：手機優先 MVP 完成就緒**  
-遠端狀態：本地 at `547a522`（SR-2 已 push），待提交：README 更新  
-測試驗證：`pytest -q` 完全通過，全 **1049 測試**無失敗、無跳過
+最後更新：2026-10-11  
+**當前狀態：Phase 3 垃圾桶與刪除完成（本機應用）**  
+遠端狀態：`main` 與 `origin/main` 同步（含本階段 commit）  
+測試驗證：`pytest` 完全通過，全 **1073 測試**無失敗、無跳過
 
 ## 📱 MVP 交付檢查清單
 
@@ -34,7 +34,25 @@
 
 ## 當前階段
 
-**SR-2：資源上限、資訊衛生與列印安全（本機應用）** ← **COMPLETED**
+**Phase 3：垃圾桶與刪除（本機應用）** ← **COMPLETED**
+
+完成時間：2026-10-11  
+Commit：本階段 commit（`feat: phase-3 trash lifecycle with restore and strict permanent delete`，已 push）  
+基準：`5896562`（serial inspect / edit semantics 修正後）
+
+完成內容：
+- ✓ **移至垃圾桶（軟刪除）**：沿用既有 `void` 機制（零 schema migration、無 `deleted_at` 欄位）；詳情頁「移至垃圾桶」附說明性確認（會隱藏但資料保留）；記錄 `field.changed`（狀態 → void）
+- ✓ **預設列表排除**：`repo.list_items` 未指定 `status` 時一律排除 void（首頁與一般搜尋不再顯示）；`archived` 仍留在預設檢視；垃圾桶以 `status='void'` 查詢（`GET /api/items?status=void`，帶縮圖）
+- ✓ **還原**：`POST /api/items/{id}/restore`；移入前狀態由事件歷史推導（最近一次「status → void」的 prev_value），active／archived 皆能正確還原；歷史不可靠時安全預設 `active`（有測試）；反覆移入→還原以最近一次為準
+- ✓ **永久刪除**：`DELETE /api/items/{id}`（僅限垃圾桶，active/archived 回 400）；單一交易清除 items／observations／photos／identifiers／suggestions 與全部相關 events（含已刪子項的 json payload 補掃）；外鍵 RESTRICT 為最後防線
+- ✓ **檔案清理安全**：照片目錄交易提交前先可逆改名至 `.purge/`（被鎖住→中止且資料庫零變更）；提交後才真正移除暫存目錄與 `evidence/<id>/`；刪不掉的檔案回 500（`PurgeError`）並列出完整路徑 —— 不假裝完整刪除；照片路徑不在 `files/<id>/` 底下時拒絕刪除
+- ✓ **編號不回收**：`schema_meta.items_seq` 於配發與 purge 時記錄（零 DDL；舊庫自動由 items 最大值補齊），永久刪除後新紀錄不會重用舊編號
+- ✓ **無自動清理**：不新增定期排程清除；備份保留／prune 機制未動；備份快照不會被永久刪除觸及（UI 訊息明示）
+- ✓ **前端**：`/trash` 垃圾桶頁（還原／永久刪除＋二次確認、空狀態）；首頁 🗑 入口；詳情頁移至垃圾桶（void 時隱藏）；`web/core/api.js` 4 個方法；繁中＋英文 i18n；`.trash-view`／`.trash-item`／`.btn-mini-danger` 樣式
+- ✓ **測試 +21**：repo×13（預設排除、還原原狀態／預設值／事件、purge 全清、路徑守衛、鎖檔零副作用、刪檔失敗回報、編號不回收）＋API×6（端點、400/404、500 診斷、children/files 全清）＋V3×2（端到端驗收＋前端接線靜態檢查）；更新 1 個既有契約測試（void 搜尋行為反轉，依產品要求）
+- ✓ 全 1073 測試通過；`node --check` 全 web JS 通過；pyflakes 無新增警告（2 個既有警告與本階段無關）
+
+### SR-2 資源上限、資訊衛生與列印安全（前序；已完成）
 
 完成時間：2026-10-10  
 Commit：`feat: sr-2 resource limits, caching hygiene, and print pipeline hardening`（本地，未 push）
@@ -138,9 +156,9 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 
 | 項目 | 數值 | 備註 |
 |---|---|---|
-| 測試檔案數 | 40 | conftest + 39 test_*.py（SR-2 新增 test_security_sr2.py） |
-| 總測試數 | 1049 | 全 pytest 計數（SR-2 +36：安全 30＋config 文件參數化 6） |
-| 通過 | 1049 ✓ | 100% pass rate |
+| 測試檔案數 | 40 | conftest＋38 個 test_*.py＋__init__（本階段未新增檔案） |
+| 總測試數 | 1073 | 5896562 基線 1052；Phase 3 +21 |
+| 通過 | 1073 ✓ | 100% pass rate |
 | 失敗 | 0 | 零失敗 |
 | 跳過 | 0 | 無跳過（本機有 Chromium／PyMuPDF，列印與 canary 測試皆實跑） |
 | 覆蓋率 | 未測 | 建議後續補充 |
@@ -190,6 +208,7 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 - ✓ 撤銷安全、描述性理解與衝突處理（Phase 2C-D） — **Implemented, Tested, Committed（79eaecc）, Not Pushed**
 - ✓ 桌面應用安全稽核（Security Audit 1；唯讀） — **Audited, Committed（3e002d2）, Not Pushed**（F1–F8 見 SECURITY-AUDIT.md）
 - ✓ SR-1 安全修復（Host/Origin＋標頭、key 不轉送、LAN opt-in、媒體硬化、前端 escaping） — **Implemented, Tested, Committed（本階段）, Not Pushed**
+- ✓ 垃圾桶與刪除（Phase 3：移至垃圾桶／還原／永久刪除、預設列表排除、檔案與事件全清、無自動清理） — **Implemented, Tested, Committed, Pushed**
 
 ### 後端基礎
 - ✓ SQLite + WAL + STRICT 約束 — **Implemented, Tested, Committed, Pushed**
@@ -218,8 +237,8 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 
 ## 未完成工作
 
-### 立即待做（Phase 3：垃圾桶與資料生命週期）
-- 依 `ROADMAP.md` Phase 3：垃圾桶 UI／30 天保留／永久刪除（明確使用者意圖、可稽核）
+### 立即待做
+- Phase 3 垃圾桶與刪除已完成。**本輪刻意不含 30 天自動清理**——避免在垃圾桶與還原行為尚未經實際使用確認前，讓不可逆的排程自動刪除資料；未來要做需先定案
 - 收尾選項（可穿插）：R 型跨照片身分的下一輪評測；屬性逐鍵來源標籤；Phase 1B-B
 
 ### 安全後續（F4／F7／F8）— SR-2 已完成
@@ -230,7 +249,7 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 
 ### 短期（Phase 2–3）
 - Phase 2：AI Contract 2.0 —— **完成（2A/2B/2C-A/2C-B/2C-C/2C-D）**
-- Phase 3：垃圾桶 & 30 天保留 + 永久刪除
+- Phase 3：垃圾桶與刪除 —— **完成（移至垃圾桶／還原／永久刪除；30 天自動清理未做，見「立即待做」）**
 
 ### 中期（Phase 4–6）
 - 分類系統與 AI 自動分類（Phase 4）
@@ -463,20 +482,21 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 | 項 | 狀態 |
 |---|---|
 | Branch | main |
-| Ahead/Behind | 14 ahead, 0 behind（未 push；本階段 commit 後） |
+| Ahead/Behind | 0 ahead, 0 behind（本階段 commit 已 push） |
 | Uncommitted Changes | 0（本階段變更全數進入獨立 commit） |
 | 衝突 | 無 |
-| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61`、`7927faf`、`5a4c792`、`79eaecc`、`3e002d2`、`24d1909` —— 未修改、未 amend、未 rebase |
+| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61`、`7927faf`、`5a4c792`、`79eaecc`、`3e002d2`、`24d1909`、`547a522`、`e57f9ef`、`5896562` —— 未修改、未 amend、未 rebase |
 
 ---
 
 ## 下一個明確任務
 
-### Phase 3：垃圾桶與資料生命週期（依 ROADMAP）
+### Phase 3：垃圾桶與刪除 ← 已完成（本階段）
 檢查清單：
-- [ ] 垃圾桶頁面（void 紀錄）＋還原
-- [ ] 30 天保留與永久刪除（明確使用者意圖、可稽核；原照片保護規則先定案）
-- [ ] 補充測試、全測試通過
+- [x] 垃圾桶頁面（void 紀錄）＋還原
+- [x] 永久刪除（明確使用者意圖、檔案與事件全清、失敗可診斷）
+- [x] 無自動清理（30 天排程未做 —— 產品決定，見「立即待做」）
+- [x] 補充測試、全測試通過
 
 （收尾選項可穿插：R 型跨照片身分的下一輪 prompt 評測；屬性逐鍵來源標籤；Phase 1B-B。）
 
@@ -514,3 +534,4 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 - **2026-10-10**：Security Audit 1 完成（唯讀）——F1 DNS rebinding／Host 未驗證、F2 API key 轉送、F3 CSRF、F4 資源上限、F5 0.0.0.0 綁定、F6 前端 XSS、F7/F8 縱深；正面清單（穿越防護、秘密衛生、參數化 SQL 等）；情境判定與 SR-1 修復建議；測試基線不變 994（未改任何程式碼／設定／測試）
 - **2026-10-10**：SR-1 完成——Host／Origin／`X-Requested-With` 守門（F1/F3）、已存 key 只送 preset＋自訂 URL 需臨時 key（F2）、LAN opt-in＋綁定實測 loopback（F5）、escaping＋CSP／nosniff＋媒體附件化＋移除 inline 處理器（F6）；修復後重演原攻擊全數攔下；測試基線 994 → 1013
 - **2026-10-10**：SR-2 完成——資源上限（body／單檔／檔數／像素／列印光柵；413/400；先前成功檔案保留）＋AI 節流（429＋Retry-After）；`/docs` 預設關閉、API `no-store`／照片 `private`、錯誤訊息去路徑化；列印管線重新序列化並實測修復兩個 mXSS（`<!-->` 註解、實體編碼標記）＋sandbox 預設保留；測試基線 1013 → 1049（+36）
+- **2026-10-11**：Phase 3 垃圾桶與刪除完成——移至垃圾桶（沿用 void、零 migration）＋首頁／搜尋預設排除＋垃圾桶頁（還原至移入前 active／archived，歷史不可靠時安全預設 active）；永久刪除（僅限垃圾桶、單一交易清 DB 與事件、可逆改名後清檔案、刪檔失敗 500 列出路徑不假裝成功、路徑守衛、編號不回收）；無自動清理、備份機制未動；`/trash` UI＋繁英 i18n；測試基線 1052 → 1073（+21；另更新 1 個既有契約測試）

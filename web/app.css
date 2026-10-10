@@ -1349,3 +1349,119 @@ body {
   line-height: 1.45;
   color: hsl(28, 80%, 32%);
 }
+
+/* ------------------------------------------------------------------ */
+/* Phase 3: 垃圾桶（/trash）與永久刪除                                  */
+/* ------------------------------------------------------------------ */
+
+.trash-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.trash-note {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  line-height: 1.55;
+  padding: 0 2px;
+}
+
+.trash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.trash-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.trash-item-thumb {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-subtle);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.trash-item-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.trash-thumb-placeholder {
+  font-size: 1.5rem;
+  opacity: 0.6;
+}
+
+.trash-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.trash-item-name {
+  display: block;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trash-item-name:hover {
+  text-decoration: underline;
+}
+
+.trash-item-meta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trash-item-id {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.trash-item-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-mini-danger {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.btn-mini-danger:hover {
+  background: var(--bg-subtle);
+}
+
+/* 詳情頁「移至垃圾桶」：次要動作、破壞性語義用文字色表達 */
+.detail-tool-btn.is-danger {
+  color: var(--color-danger);
+}
+
+.detail-tool-btn.is-danger:hover {
+  border-color: var(--color-danger);
+}

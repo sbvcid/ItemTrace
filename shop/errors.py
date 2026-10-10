@@ -29,3 +29,11 @@ class ValidationError(ShopError):
 
 class ConflictError(ShopError):
     """與既有資料衝突，例如同一商品重複的識別碼。"""
+
+
+class PurgeError(ShopError):
+    """永久刪除的前置檢查或檔案清理失敗。
+
+    訊息一定說明目前的真實狀態：資料庫是否已刪除、哪些路徑還在，
+    讓使用者能自行清理；不把「刪不掉」假裝成成功。API 層回 500。
+    """

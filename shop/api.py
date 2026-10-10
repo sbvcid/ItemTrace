@@ -49,6 +49,7 @@ from .errors import (
     ConflictError,
     NotFoundError,
     PayloadTooLargeError,
+    PurgeError,
     ValidationError,
 )
 from . import evidence as evidence_mod
@@ -73,6 +74,7 @@ from .schemas import (
     ItemListOut,
     ItemOut,
     ItemPatch,
+    ItemPurgeOut,
     ObservationCreate,
     ObservationOut,
     ObservationPatch,
@@ -358,6 +360,7 @@ def _register_error_handlers(app: FastAPI) -> None:
         (ConflictError, 409),
         (ConfigError, 400),
         (PayloadTooLargeError, 413),
+        (PurgeError, 500),
     ):
         app.add_exception_handler(
             exc_type,
@@ -452,6 +455,31 @@ def patch_item(item_id: str, body: ItemPatch, repo: Repo) -> ItemOut:
 def void_item(item_id: str, repo: Repo) -> ItemOut:
     """軟刪除。資料與檔案都保留（SPEC-v1 §1）。"""
     return to_out(repo.void_item(item_id))
+
+
+@router.post("/api/items/{item_id}/restore", response_model=ItemOut, tags=["items"])
+def restore_item(item_id: str, repo: Repo) -> ItemOut:
+    """從垃圾桶還原：回到移入前的狀態（active／archived）。
+
+    狀態由事件歷史推導（最近的「status → void」之前的值）；無法可靠
+    判斷時回 active。不在垃圾桶中的紀錄回 400。
+    """
+    return to_out(repo.restore_item(item_id))
+
+
+@router.delete("/api/items/{item_id}", response_model=ItemPurgeOut, tags=["items"])
+def purge_item(item_id: str, repo: Repo) -> ItemPurgeOut:
+    """永久刪除一筆垃圾桶中的紀錄（不可逆）。
+
+    清除 items、observations、photos、identifiers、suggestions 與其
+    全部事件歷史，並刪除 files/<item-id>/ 與 evidence/<item-id>/。
+    資料庫在單一交易內完成；照片目錄先可逆改名、提交後才真正移除，
+    檔案刪不掉時回 500 並列出剩餘路徑（不假裝完整刪除）。
+
+    不在垃圾桶中的紀錄回 400 —— 必須先「移至垃圾桶」。
+    先前建立的 backups/ 快照不會被動到，其中的副本仍在。
+    """
+    return ItemPurgeOut(**repo.purge_item(item_id))
 
 
 # ----------------------------------------------------------------------

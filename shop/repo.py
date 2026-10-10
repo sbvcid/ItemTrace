@@ -21,10 +21,14 @@
   observations → 不刪，只改狀態
   suggestions  → 不刪，接受與拒絕都保留（推論與事實分離）
 
-永久淘汰
-  使用者明確決定要永久刪除某件商品時，未來會允許一次性刪除該 item、
-  四張子表與 files/<item-id>/ 整棵目錄樹。**不做任何自動過期清理。**
-  那條路徑尚未實作，API 與 UI 都還沒有提供；日常一律走 void。
+垃圾桶（Phase 3）
+  restore_item → void 的紀錄還原回移入前的狀態（事件歷史推導；預設 active）
+  purge_item   → 永久刪除「垃圾桶中」的紀錄：items 與四張子表、events
+                 歷史、files/<item-id>/ 與 evidence/<item-id>/ 全部清除。
+                 資料庫在單一交易內完成（前後一致，無半刪狀態）；檔案
+                 先改名進暫存區（可逆、被鎖住就中止且資料庫不動），
+                 提交後才真正移除，刪不掉的檔案以 PurgeError 列出完整
+                 路徑。**沒有自動過期清理，永久刪除永遠出自使用者明示。**
 """
 
 from __future__ import annotations
@@ -32,12 +36,13 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict, replace
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Mapping, Union
 
 from . import db, events, ids
 from .config import Config
-from .errors import ConflictError, NotFoundError, ValidationError
+from .errors import ConflictError, NotFoundError, PurgeError, ValidationError
 from .models import (
     ATTRIBUTE_FIELD_PREFIX,
     IDENTIFIER_FIELD_PREFIX,
@@ -224,7 +229,19 @@ class Repository:
         limit: int = 50,
         offset: int = 0,
     ) -> list[Item]:
-        where, params = _where({"status": status, "category": category})
+        """列表與搜尋。
+
+        預設（status=None）一律排除垃圾桶：void 是「不要了」的紀錄，
+        只該從垃圾桶（status='void'）看到 —— 首頁、一般搜尋結果都不該
+        再冒出它。void 本身是軟刪除，資料與檔案都還留著。
+        archived 仍留在預設檢視裡（已離手，不是丟掉）。
+        """
+        filters: dict[str, Any] = {"category": category}
+        if status is not None:
+            filters["status"] = status
+        where, params = _where(filters)
+        if status is None:
+            where += (" AND " if where else " WHERE ") + "status <> 'void'"
         limit, offset = _paging(limit, offset)
         if q and q.strip():
             # SPEC-v1 §7.2：v1 用 LIKE，不用 FTS5（實測 FTS5 查不到兩字中文，
@@ -371,6 +388,166 @@ class Repository:
     def void_item(self, item_id: str, *, actor: str = "user") -> Item:
         """軟刪除。SPEC-v1 §2.3：沒有 deleted_at，刪除就是 status='void'。"""
         return self.update_item(item_id, {"status": "void"}, actor=actor)
+
+    # ------------------------------------------------------------------
+    # 垃圾桶：還原與永久刪除
+    # ------------------------------------------------------------------
+
+    #: purge 的暫存目錄名（在 data_root 底下、與 files/ 同層，
+    #: 不會被 /files 路徑服務到）。改名暫存是可逆步驟，見 purge_item。
+    PURGE_STAGING_DIR = ".purge"
+
+    def restore_item(self, item_id: str, *, actor: str = "user") -> Item:
+        """從垃圾桶還原：優先回到移入前的狀態（active／archived）。
+
+        SPEC-v1 §2.3 沒有 deleted_at，移入前的狀態只能從事件歷史推導：
+        最近一次「status → void」的 prev_value。歷史無法可靠判斷時
+        （例如資料被外部直接改過）回退到 active —— 明確的安全預設，
+        有測試鎖住；不為了還原另外新增資料庫欄位。
+        還原本身照常記一筆 field.changed（void → 原狀態），可回溯。
+        """
+        with db.transaction(self.conn):
+            item = self.get_item(item_id)
+            if item.status != "void":
+                raise ValidationError(
+                    f"{item_id} 不在垃圾桶中（status={item.status}），沒有東西可還原"
+                )
+            return self.update_item(
+                item_id,
+                {"status": self._status_before_void(item_id)},
+                actor=actor,
+            )
+
+    def _status_before_void(self, item_id: str) -> str:
+        for event in events.history(self.conn, "item", item_id):
+            if (
+                event["type"] == "field.changed"
+                and event["field"] == "status"
+                and event["next_value"] == "void"
+            ):
+                previous = event["prev_value"]
+                if previous in ("active", "archived"):
+                    return previous
+                break  # 最近一次的移入紀錄不可靠 → 安全預設，不追溯更舊的
+        return "active"
+
+    def purge_item(self, item_id: str, *, actor: str = "user") -> dict[str, Any]:
+        """永久刪除（僅限垃圾桶中的紀錄；不可逆）。
+
+        只允許 status='void' —— 一般紀錄必須先明確「移至垃圾桶」，
+        這個 API 不是繞過軟刪除的後門。
+
+        安全保證：
+        1. 資料庫在單一交易內清理：events、suggestions、identifiers、
+           photos、observations、items 全部一起刪（外鍵 RESTRICT 讓
+           「漏刪子表」直接失敗，不會留下孤兒列）。
+        2. 照片目錄 files/<item-id>/ 在交易「提交前」先改名到暫存區
+           （同磁碟、可逆）。改名失敗（被鎖住）→ 直接中止，資料庫
+           完全未動、紀錄留在垃圾桶、檔案原地不動。交易失敗 →
+           改名還原，一切回到原狀。
+        3. 交易提交後才真正移除暫存目錄與 evidence/<item-id>/ 匯出；
+           任何刪不掉的檔案都拋 PurgeError 並列出完整路徑，訊息明確
+           區分「資料庫已刪除」與「這些檔案還在」—— 不假裝已完整刪除。
+        4. 刪除前先把編號燒進 schema_meta（ids.burn_item_sequence），
+           永久刪除之後編號不回收再利用。
+
+        回傳各表與檔案的實際清理數量（API 回應用）。
+        """
+        staged: Path | None = None
+        files_root = self.config.files_dir / item_id
+        staging_root = self.config.data_root / self.PURGE_STAGING_DIR
+        counts: dict[str, Any] = {"item_id": item_id}
+
+        with db.transaction(self.conn):
+            item = self.get_item(item_id)
+            if item.status != "void":
+                raise ValidationError(
+                    f"{item_id} 不在垃圾桶中（status={item.status}）；"
+                    "永久刪除只允許垃圾桶中的紀錄，請先「移至垃圾桶」"
+                )
+            # 安全檢查：照片路徑必須全部位於 files/<item-id>/ 底下。
+            # 有例外形狀就中止 —— 寧可拒絕，也不刪到別人的檔案。
+            photo_files = [
+                row["filename"]
+                for row in self.conn.execute(
+                    "SELECT filename FROM photos WHERE item_id = ?", (item_id,)
+                ).fetchall()
+            ]
+            for filename in photo_files:
+                if PurePosixPath(filename).parts[:2] != ("files", item_id):
+                    raise ValidationError(
+                        f"{item_id} 的照片檔案不在預期位置（{filename!r}）；"
+                        f"為避免刪到 {item_id} 以外的檔案，永久刪除已中止"
+                    )
+
+            ids.burn_item_sequence(self.conn, item_id)
+
+            # 可逆的前置步驟：照片目錄改名進暫存區（同磁碟 rename）。
+            if files_root.exists():
+                staging_root.mkdir(parents=True, exist_ok=True)
+                staged = _unique_dir(
+                    staging_root
+                    / f"{item_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                )
+                try:
+                    files_root.rename(staged)
+                except OSError as exc:
+                    raise PurgeError(
+                        "照片目錄目前無法移動（可能被其他程式占用）："
+                        f"{files_root}；紀錄尚未刪除、資料庫未變更，"
+                        "請關閉占用檔案的程式後重試"
+                        f"（{exc}）"
+                    ) from exc
+
+            counts["events_deleted"] = _purge_events(self.conn, item_id)
+            try:
+                counts["suggestions_deleted"] = self.conn.execute(
+                    "DELETE FROM suggestions WHERE item_id = ?", (item_id,)
+                ).rowcount
+                counts["identifiers_deleted"] = self.conn.execute(
+                    "DELETE FROM identifiers WHERE item_id = ?", (item_id,)
+                ).rowcount
+                counts["photos_deleted"] = self.conn.execute(
+                    "DELETE FROM photos WHERE item_id = ?", (item_id,)
+                ).rowcount
+                counts["observations_deleted"] = self.conn.execute(
+                    "DELETE FROM observations WHERE item_id = ?", (item_id,)
+                ).rowcount
+                self.conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+            except BaseException as exc:
+                if staged is not None:
+                    try:
+                        staged.rename(files_root)
+                    except OSError as back_exc:
+                        raise PurgeError(
+                            "資料庫交易失敗，且照片目錄無法移回原位："
+                            f"{staged} → {files_root}（{back_exc}）"
+                        ) from exc
+                raise
+
+        # 交易已提交；現在才真正移除檔案。刪不掉的完整列出，不假裝成功。
+        removed = 0
+        failures: list[str] = []
+        if staged is not None:
+            file_count, failed = _remove_tree(staged)
+            removed += file_count
+            failures += failed
+            try:
+                staging_root.rmdir()  # 暫存區空了就順手收掉；還有殘留就留著
+            except OSError:
+                pass
+        evidence_dir = self.config.data_root / "evidence" / item_id
+        file_count, failed = _remove_tree(evidence_dir)
+        removed += file_count
+        failures += failed
+        if failures:
+            raise PurgeError(
+                "紀錄與關聯資料已從資料庫永久刪除；但下列檔案／目錄無法移除"
+                "（可能被其他程式占用），請關閉占用程式後自行刪除："
+                + "\n".join(failures)
+            )
+        counts["files_deleted"] = removed
+        return counts
 
     # ------------------------------------------------------------------
     # observations
@@ -1545,6 +1722,82 @@ def _record(
 
 def _snapshot(row: Any) -> dict[str, Any]:
     return asdict(row)
+
+
+def _purge_events(conn: sqlite3.Connection, item_id: str) -> int:
+    """刪掉 item 自己與四張子表的所有事件，回傳刪除筆數。
+
+    field.changed 事件的 payload 是空的，所以子表事件必須用收集到的
+    entity_id 逐筆命中；再用 payload.item_id 補掃「子項早已被刪掉」
+    留下的事件（例如 identifier.deleted 的 payload 快照），否則永久
+    刪除後歷史裡還會指著不存在的資料。
+    """
+    child_types = ("observation", "photo", "identifier", "suggestion")
+    child_ids: list[str] = []
+    for table in ("observations", "photos", "identifiers", "suggestions"):
+        child_ids += [
+            row["id"]
+            for row in conn.execute(
+                f"SELECT id FROM {table} WHERE item_id = ?",  # noqa: S608 — 固定表名
+                (item_id,),
+            ).fetchall()
+        ]
+    deleted = 0
+    if child_ids:
+        type_marks = ", ".join("?" for _ in child_types)
+        id_marks = ", ".join("?" for _ in child_ids)
+        deleted += conn.execute(
+            f"DELETE FROM events WHERE entity_type IN ({type_marks})"
+            f" AND entity_id IN ({id_marks})",
+            (*child_types, *child_ids),
+        ).rowcount
+    deleted += conn.execute(
+        "DELETE FROM events WHERE entity_type = 'item' AND entity_id = ?",
+        (item_id,),
+    ).rowcount
+    deleted += conn.execute(
+        "DELETE FROM events WHERE json_extract(payload, '$.item_id') = ?",
+        (item_id,),
+    ).rowcount
+    return deleted
+
+
+def _remove_tree(root: Path) -> tuple[int, list[str]]:
+    """刪除一棵目錄樹，回傳（成功刪除的檔案數, 失敗項路徑清單）。
+
+    逐項嘗試、不因單一失敗而中斷：能刪的先刪，刪不掉的完整列出，
+    呼叫端才能誠實回報「還剩什麼」。目錄不存在＝沒有東西可刪。
+    """
+    if not root.exists():
+        return 0, []
+    removed = 0
+    failures: list[str] = []
+    entries = sorted(root.rglob("*"), key=lambda path: len(path.parts), reverse=True)
+    for entry in entries:
+        try:
+            if entry.is_dir():
+                entry.rmdir()
+            else:
+                entry.unlink()
+                removed += 1
+        except OSError:
+            failures.append(str(entry))
+    try:
+        root.rmdir()
+    except OSError:
+        failures.append(str(root))
+    return removed, failures
+
+
+def _unique_dir(path: Path) -> Path:
+    """暫存目錄目標：同名時加流水號，不覆蓋任何既有資料。"""
+    if not path.exists():
+        return path
+    for index in range(2, 1000):
+        candidate = path.with_name(f"{path.name}-{index}")
+        if not candidate.exists():
+            return candidate
+    raise PurgeError(f"暫存目錄名稱衝突，無法為 {path} 找到可用的名稱")
 
 
 def _require_pending(suggestion: Suggestion) -> None:

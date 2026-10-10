@@ -61,6 +61,41 @@ def new_id() -> str:
     return now_ulid()
 
 
+#: schema_meta 的鍵：ITM 編號已配發的上限（永久刪除後仍不回收）。
+_ITEM_SEQ_KEY = "items_seq"
+
+
+def _meta_int(conn, key: str) -> int:
+    row = conn.execute(
+        "SELECT value FROM schema_meta WHERE key = ?", (key,)
+    ).fetchone()
+    if row is None:
+        return 0
+    try:
+        return int(row["value"])
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_meta_int(conn, key: str, value: int) -> None:
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES (?, ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, str(value)),
+    )
+
+
+def _numeric_suffix(item_id: str) -> int | None:
+    """'ITM-<純數字>' 的數字部分；其他形狀回 None。"""
+    prefix = f"{ITEM_PREFIX}-"
+    if not item_id.startswith(prefix):
+        return None
+    tail = item_id[len(prefix):]
+    if not tail or not tail.isascii() or not tail.isdigit():
+        return None
+    return int(tail)
+
+
 def _max_numeric_suffix(conn, table: str, prefix: str) -> int:
     """找出 prefix 之下最大的數字後綴。
 
@@ -85,9 +120,26 @@ def _max_numeric_suffix(conn, table: str, prefix: str) -> int:
 
 def next_item_id(conn, config: Config) -> str:
     prefix = f"{ITEM_PREFIX}-"
-    n = _max_numeric_suffix(conn, "items", prefix) + 1
+    n = max(
+        _max_numeric_suffix(conn, "items", prefix),
+        _meta_int(conn, _ITEM_SEQ_KEY),
+    ) + 1
+    # 配發過就記進 schema_meta：永久刪除把列整個移除後，items 表的最大值
+    # 會倒退，這個記號保證編號永不回收（與 void 的既有原則一致）。
+    _set_meta_int(conn, _ITEM_SEQ_KEY, n)
     del config  # 保留參數以便未來加入前綴設定
     return f"{prefix}{n:0{ITEM_WIDTH}d}"
+
+
+def burn_item_sequence(conn, item_id: str) -> None:
+    """永久刪除前記下編號，確保之後的發號不回收再利用。
+
+    只做「往上記」：比現有記號小或不像 ITM-<數字> 的 id（手動輸入的）
+    不需要也不能影響發號。
+    """
+    suffix = _numeric_suffix(item_id)
+    if suffix is not None and suffix > _meta_int(conn, _ITEM_SEQ_KEY):
+        _set_meta_int(conn, _ITEM_SEQ_KEY, suffix)
 
 
 def next_observation_id(conn, date: str | None = None) -> str:

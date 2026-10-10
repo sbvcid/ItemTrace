@@ -192,6 +192,106 @@ def test_void_missing_item_is_404(client):
     assert client.post("/api/items/ITM-9999/void").status_code == 404
 
 
+# ----------------------------------------------------------------------
+# Phase 3：垃圾桶（還原與永久刪除）
+# ----------------------------------------------------------------------
+
+
+def test_voided_item_hidden_from_list_and_search(client):
+    """移入垃圾桶後：首頁與一般搜尋看不到；垃圾桶（status=void）看得到。"""
+    item = create_item(client, name="報廢零件")
+    assert client.post(f"/api/items/{item['id']}/void").status_code == 200
+    assert client.get("/api/items").json() == []
+    assert client.get("/api/items?q=報廢").json() == []
+    trash = client.get("/api/items?status=void").json()
+    assert [row["id"] for row in trash] == [item["id"]]
+
+
+def test_restore_endpoint_returns_item_to_default_list(client):
+    item = create_item(client, name="工具")
+    client.post(f"/api/items/{item['id']}/void")
+    response = client.post(f"/api/items/{item['id']}/restore")
+    assert response.status_code == 200
+    assert response.json()["status"] == "active"
+    assert [row["id"] for row in client.get("/api/items").json()] == [item["id"]]
+    assert client.get("/api/items?q=工具").json()[0]["id"] == item["id"]
+
+
+def test_restore_and_purge_reject_active_items(client):
+    item = create_item(client)
+    assert client.post(f"/api/items/{item['id']}/restore").status_code == 400
+    assert client.delete(f"/api/items/{item['id']}").status_code == 400
+
+
+def test_purge_missing_item_is_404(client):
+    assert client.delete("/api/items/ITM-9999").status_code == 404
+
+
+def test_purge_endpoint_deletes_record_children_and_files(client, config):
+    """永久刪除：資料庫紀錄、關聯資料、事件歷史與照片檔案全部清除。"""
+    upload = client.post("/api/inbox/photos", files=[jpeg()]).json()
+    intake = client.post("/api/inbox/intake", json={
+        "files": [upload["entries"][0]["relative"]], "kind": "intake",
+    }).json()
+    item_id = intake["item_id"]
+    photo_path = config.resolve(intake["archived"][0]["filename"])
+    assert photo_path.exists()
+
+    create_observation(client, item_id, kind="recheck", note="n")
+    client.post(f"/api/items/{item_id}/identifiers", json={"value": "SN-1234"})
+    client.post(
+        f"/api/items/{item_id}/suggestions", json={"field": "brand", "value": "ACME"}
+    )
+    assert client.post(f"/api/items/{item_id}/void").status_code == 200
+
+    response = client.delete(f"/api/items/{item_id}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["item_id"] == item_id
+    assert body["observations_deleted"] == 2  # intake 一次 + recheck 一次
+    assert body["photos_deleted"] == 1
+    assert body["identifiers_deleted"] == 1
+    assert body["suggestions_deleted"] == 1
+    assert body["files_deleted"] == 1
+
+    assert not photo_path.exists()
+    assert not (config.files_dir / item_id).exists()
+    assert client.get(f"/api/items/{item_id}").status_code == 404
+    assert client.get("/api/items?status=void").json() == []
+    assert client.get(f"/api/items/{item_id}/events").status_code == 404
+
+    stats = client.get("/api/stats").json()
+    assert stats["counts"]["items"] == 0
+    assert stats["counts"]["photos"] == 0
+    assert stats["counts"]["events"] == 0
+    assert stats["recent"] == []
+
+
+def test_purge_file_failure_maps_to_diagnosable_500(client, config, monkeypatch):
+    """檔案被鎖住（改名失敗）：回 500、訊息說明未刪除；紀錄與檔案原封不動。"""
+    from pathlib import Path as PathType
+
+    upload = client.post("/api/inbox/photos", files=[jpeg()]).json()
+    intake = client.post("/api/inbox/intake", json={
+        "files": [upload["entries"][0]["relative"]], "kind": "intake",
+    }).json()
+    item_id = intake["item_id"]
+    photo_path = config.resolve(intake["archived"][0]["filename"])
+    client.post(f"/api/items/{item_id}/void")
+
+    def boom(self, target):
+        raise OSError("locked for test")
+
+    monkeypatch.setattr(PathType, "rename", boom)
+    response = client.delete(f"/api/items/{item_id}")
+    assert response.status_code == 500
+    assert "紀錄尚未刪除" in response.json()["detail"]
+
+    assert client.get(f"/api/items/{item_id}").json()["item"]["status"] == "void"
+    assert photo_path.exists()
+    assert client.get("/api/items?status=void").json()[0]["id"] == item_id
+
+
 def test_list_items_filters_and_paginates(client):
     for index in range(5):
         create_item(client, name=f"item{index}", category="主機板" if index < 2 else "顯卡")

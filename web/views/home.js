@@ -28,6 +28,7 @@ export async function createHomeView(params, router) {
         <span>ItemTrace</span>
       </a>
       <div class="header-actions">
+        <a href="/trash" class="icon-btn" title="${t('trash.title')}" data-link>🗑</a>
         <a href="/settings" class="icon-btn" title="${t('app.settings')}" data-link>⚙</a>
       </div>
     </header>

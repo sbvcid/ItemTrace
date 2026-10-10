@@ -791,6 +791,96 @@ def test_record_detail_edit_save_cancel_semantics(client):
         assert key in en
 
 
+# ----------------------------------------------------------------------
+# Phase 3：垃圾桶與永久刪除（驗收情境 + 前端接線靜態檢查）
+# ----------------------------------------------------------------------
+
+
+def test_phase3_trash_flow_end_to_end(client, config):
+    """完整走一遍：移至垃圾桶 → 首頁/搜尋消失 → 垃圾桶可見（帶縮圖）→
+    還原回原狀態 → 再移入 → 永久刪除（紀錄與照片檔案都真的消失）。"""
+    upload = client.post("/api/inbox/photos", files=[
+        ("files", ("trash.jpg", make_jpeg(exif="2026:10:11 09:00:00"), "image/jpeg")),
+    ]).json()
+    intake = client.post("/api/inbox/intake", json={
+        "files": [upload["entries"][0]["relative"]], "kind": "intake",
+    }).json()
+    item_id = intake["item_id"]
+    photo_path = config.resolve(intake["archived"][0]["filename"])
+    client.patch(f"/api/items/{item_id}", json={"name": "不要了的東西"})
+
+    # 1. 移至垃圾桶：首頁與一般搜尋看不到，垃圾桶看得到（含縮圖）
+    assert client.post(f"/api/items/{item_id}/void").status_code == 200
+    assert client.get("/api/items").json() == []
+    assert client.get("/api/items?q=不要了").json() == []
+    trash = client.get("/api/items?status=void").json()
+    assert trash[0]["id"] == item_id
+    assert trash[0]["thumbnail"] is not None
+
+    # 2. 還原：重新出現在一般列表與搜尋結果
+    restored = client.post(f"/api/items/{item_id}/restore")
+    assert restored.json()["status"] == "active"
+    assert client.get("/api/items?q=不要了").json()[0]["id"] == item_id
+
+    # 3. 再次移入垃圾桶後永久刪除：不可逆的完整清除
+    client.post(f"/api/items/{item_id}/void")
+    response = client.delete(f"/api/items/{item_id}")
+    assert response.status_code == 200
+    assert not photo_path.exists()
+    assert not (config.files_dir / item_id).exists()
+    assert client.get("/api/items").json() == []
+    assert client.get("/api/items?status=void").json() == []
+    assert client.get(f"/api/items/{item_id}").status_code == 404
+
+
+def test_phase3_trash_frontend_wiring_static_checks(client):
+    """Phase 3 前端接線靜態檢查（非瀏覽器端對端測試）：
+
+    垃圾桶頁面、詳情頁「移至垃圾桶」、首頁垃圾桶入口、路由、api.js
+    與雙語 i18n 鍵都存在；永久刪除有二次確認與備份快照說明。
+    """
+    # 垃圾桶頁面本身可被 SPA 路由回退服務
+    res_trash = client.get("/trash")
+    assert res_trash.status_code == 200
+    assert '<div id="app">' in res_trash.text
+
+    trash_js = client.get("/views/trash.js").text
+    assert "listTrashItems" in trash_js
+    assert "restoreItem" in trash_js
+    assert "purgeItem" in trash_js
+    assert "window.confirm" in trash_js           # 永久刪除的二次確認
+
+    detail_js = client.get("/views/record-detail.js").text
+    assert "btn-move-trash" in detail_js
+    assert "api.voidItem" in detail_js
+    assert "trashConfirm" in detail_js            # 移入前的說明性確認
+
+    home_js = client.get("/views/home.js").text
+    assert 'href="/trash"' in home_js             # 首頁容易找到的入口
+
+    app_js = client.get("/app.js").text
+    assert "createTrashView" in app_js
+    assert ".add('/trash', createTrashView)" in app_js
+
+    api_js = client.get("/core/api.js").text
+    for call in ("voidItem", "restoreItem", "purgeItem", "listTrashItems"):
+        assert call in api_js
+
+    css = client.get("/app.css").text
+    assert ".trash-item" in css
+    assert ".btn-mini-danger" in css
+
+    zh = client.get("/i18n/zh-TW.js").text
+    en = client.get("/i18n/en.js").text
+    for key in ("trashConfirm", "moveToTrash", "purgeConfirm", "restore",
+                "emptyTitle", "purgeDone"):
+        assert key in zh
+        assert key in en
+    # 永久刪除的訊息必須說明「備份快照不會被自動清除」
+    assert "備份快照" in zh
+    assert "backup snapshot" in en
+
+
 def _js_function_body(source: str, signature: str) -> str:
     """抓兩格縮排 top-level 函式的原始碼片段（到同層收尾大括號）。"""
     start = source.index(signature)

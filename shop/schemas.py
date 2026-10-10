@@ -45,6 +45,22 @@ class ItemListOut(ItemOut):
     thumbnail: str | None = None
 
 
+class ItemPurgeOut(BaseModel):
+    """永久刪除的結果：各表清理筆數與實際移除的檔案數。
+
+    files_deleted 只算檔案（不含目錄）。檔案刪不掉時不是這個模型 ——
+    會回 500（PurgeError）並列出剩餘路徑，訊息明確說明資料庫已刪除。
+    """
+
+    item_id: str
+    observations_deleted: int
+    photos_deleted: int
+    identifiers_deleted: int
+    suggestions_deleted: int
+    events_deleted: int
+    files_deleted: int
+
+
 class ItemCreate(BaseModel):
     name: str = ""
     brand: str = ""

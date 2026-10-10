@@ -10,6 +10,7 @@ import { createHomeView } from './views/home.js';
 import { createCaptureView } from './views/capture.js';
 import { createRecordDetailView } from './views/record-detail.js';
 import { createSettingsView } from './views/settings.js';
+import { createTrashView } from './views/trash.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   // Initialize locale from storage or browser
@@ -22,6 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
     .add('/capture', createCaptureView)
     .add('/i/:id', createRecordDetailView)
     .add('/items/:id', createRecordDetailView) // Backward compatibility link
+    .add('/trash', createTrashView)
     .add('/settings', createSettingsView)
     .init(container);
 

@@ -57,6 +57,26 @@ export const api = {
     });
   },
 
+  // 移至垃圾桶（軟刪除；資料與照片都保留，可從垃圾桶還原）
+  async voidItem(id) {
+    return request(`/api/items/${id}/void`, { method: 'POST' });
+  },
+
+  // 從垃圾桶還原（回到移入前的狀態）
+  async restoreItem(id) {
+    return request(`/api/items/${id}/restore`, { method: 'POST' });
+  },
+
+  // 永久刪除（僅限垃圾桶中的紀錄；不可逆）
+  async purgeItem(id) {
+    return request(`/api/items/${id}`, { method: 'DELETE' });
+  },
+
+  // 垃圾桶列表（只有 status=void 的紀錄）
+  async listTrashItems() {
+    return request('/api/items?status=void&limit=500');
+  },
+
   // Photo Upload & Intake Pipeline
   async uploadInboxPhotos(files) {
     const formData = new FormData();

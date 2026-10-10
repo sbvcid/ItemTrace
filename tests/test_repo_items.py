@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from shop.errors import NotFoundError, ValidationError
+from shop.errors import NotFoundError, PurgeError, ValidationError
 from shop.models import Item
+from tests.conftest import make_jpeg
 
 
 def test_create_item_assigns_readable_id_and_defaults(repo):
@@ -200,3 +203,210 @@ def test_voided_item_id_is_never_reused(repo):
     voided = repo.create_item()
     repo.void_item(voided.id)
     assert repo.create_item().id == "ITM-0002"
+
+
+# ----------------------------------------------------------------------
+# Phase 3：垃圾桶（void 預設排除、還原、永久刪除）
+# ----------------------------------------------------------------------
+
+
+def _archive_photo(repo, config, item_id, observation_id, name="a.jpg"):
+    """在 files/<item-id>/original/ 放一張真實檔案並登記為 photos 列。"""
+    directory = config.files_dir / item_id / "original"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_bytes(make_jpeg())
+    return repo.add_photo(
+        item_id, config.relative(path), observation_id=observation_id
+    )
+
+
+def _stocked_for_purge(repo, config):
+    """一件事實齊全的紀錄：觀測、真實照片、識別碼、建議、事件。"""
+    item = repo.create_item(name="待永久刪除", brand="ACME")
+    observation = repo.add_observation(item.id, note="第一次看到")
+    photo = _archive_photo(repo, config, item.id, observation.id)
+    repo.add_identifier(item.id, "SN-777", source_photo_id=photo.id)
+    repo.add_suggestion(item.id, "model", "X-100")
+    return item, observation, photo
+
+
+def test_list_items_excludes_void_by_default(repo):
+    """首頁與一般搜尋不顯示垃圾桶紀錄；archived 仍留在預設檢視。"""
+    first = repo.create_item(name="還在使用")
+    second = repo.create_item(name="不要了")
+    third = repo.create_item(name="已離手")
+    repo.void_item(second.id)
+    repo.update_item(third.id, {"status": "archived"})
+
+    assert [item.id for item in repo.list_items()] == [third.id, first.id]
+    assert [item.id for item in repo.list_items(status="void")] == [second.id]
+    assert repo.list_items(q="不要了") == []
+    assert [
+        item.id for item in repo.list_items(q="不要了", status="void")
+    ] == [second.id]
+
+
+def test_restore_item_returns_previous_active_status(repo):
+    item = repo.create_item(name="主機板")
+    repo.void_item(item.id)
+    restored = repo.restore_item(item.id)
+    assert restored.status == "active"
+    assert [row.id for row in repo.list_items()] == [item.id]
+
+
+def test_restore_item_returns_previous_archived_status(repo):
+    """原本是 archived 的紀錄，還原後回到 archived 而不是 active。"""
+    item = repo.create_item(name="已離手的老相機")
+    repo.update_item(item.id, {"status": "archived"})
+    repo.void_item(item.id)
+    assert repo.restore_item(item.id).status == "archived"
+
+
+def test_restore_item_after_repeated_trash_cycles(repo):
+    """反覆「移入 → 還原」後，看的永遠是最近一次的移入前狀態。"""
+    item = repo.create_item(name="循環")
+    repo.update_item(item.id, {"status": "archived"})
+    repo.void_item(item.id)
+    repo.restore_item(item.id)  # → archived
+    repo.update_item(item.id, {"status": "active"})
+    repo.void_item(item.id)
+    assert repo.restore_item(item.id).status == "active"
+
+
+def test_restore_item_rejects_item_not_in_trash(repo):
+    item = repo.create_item()
+    with pytest.raises(ValidationError):
+        repo.restore_item(item.id)
+
+
+def test_restore_item_defaults_to_active_without_reliable_history(repo):
+    """歷史不可靠（例如資料被外部直接改成 void）→ 明確的安全預設 active。"""
+    item = repo.create_item()
+    repo.conn.execute("UPDATE items SET status = 'void' WHERE id = ?", (item.id,))
+    assert repo.restore_item(item.id).status == "active"
+
+
+def test_restore_item_records_event(repo):
+    item = repo.create_item()
+    repo.void_item(item.id)
+    repo.restore_item(item.id)
+    changes = [
+        event
+        for event in repo.list_events("item", item.id)
+        if event.type == "field.changed" and event.field == "status"
+    ]
+    assert [(e.prev_value, e.next_value) for e in changes] == [
+        ("void", "active"),
+        ("active", "void"),
+    ]
+
+
+def test_purge_item_removes_everything_and_files(repo, config):
+    """永久刪除：四張子表、事件歷史、照片檔案與目錄一次清空。"""
+    item, _, _ = _stocked_for_purge(repo, config)
+    directory = config.files_dir / item.id
+    assert directory.exists()
+    repo.void_item(item.id)
+
+    report = repo.purge_item(item.id)
+
+    assert report["item_id"] == item.id
+    assert report["observations_deleted"] == 1
+    assert report["photos_deleted"] == 1
+    assert report["identifiers_deleted"] == 1
+    assert report["suggestions_deleted"] == 1
+    assert report["events_deleted"] >= 6  # item/obs/photo/identifier/suggestion 建立與狀態事件
+    assert report["files_deleted"] == 1
+    assert not directory.exists()
+
+    with pytest.raises(NotFoundError):
+        repo.get_item(item.id)
+    counts = repo.counts()
+    assert counts == {
+        "items": 0,
+        "observations": 0,
+        "photos": 0,
+        "identifiers": 0,
+        "suggestions": 0,
+        "events": 0,
+    }
+    # 暫存區不留檔案（成功清理的目錄會被移除，只剩 .purge 空殼）
+    staging = config.data_root / ".purge"
+    leftovers = list(staging.rglob("*")) if staging.exists() else []
+    assert leftovers == []
+
+
+def test_purge_item_requires_trash(repo):
+    item = repo.create_item()
+    with pytest.raises(ValidationError):
+        repo.purge_item(item.id)
+    assert repo.get_item(item.id).status == "active"
+
+
+def test_purge_missing_item_raises_not_found(repo):
+    with pytest.raises(NotFoundError):
+        repo.purge_item("ITM-9999")
+
+
+def test_purge_refuses_photo_outside_item_directory(repo, config):
+    """照片路徑不在 files/<item-id>/ 底下時拒絕刪除，保護範圍外的檔案。"""
+    item = repo.create_item()
+    other_dir = config.files_dir / "OTHER" / "original"
+    other_dir.mkdir(parents=True)
+    stray = other_dir / "x.jpg"
+    stray.write_bytes(make_jpeg())
+    repo.add_photo(item.id, config.relative(stray))
+    repo.void_item(item.id)
+    with pytest.raises(ValidationError):
+        repo.purge_item(item.id)
+    assert stray.exists()
+
+
+def test_purge_locked_files_abort_without_touching_database(
+    repo, config, monkeypatch
+):
+    """檔案目錄被鎖住：明確失敗、資料庫完全未動、紀錄留在垃圾桶。"""
+    item, _, photo = _stocked_for_purge(repo, config)
+    repo.void_item(item.id)
+    before_events = repo.counts()["events"]
+
+    def boom(self, target):
+        raise OSError("locked for test")
+
+    monkeypatch.setattr(Path, "rename", boom)
+    with pytest.raises(PurgeError) as excinfo:
+        repo.purge_item(item.id)
+    assert "紀錄尚未刪除" in str(excinfo.value)
+
+    assert repo.get_item(item.id).status == "void"  # 還在垃圾桶
+    assert config.resolve(photo.filename).exists()  # 檔案原地不動
+    assert repo.counts()["photos"] == 1
+    assert repo.counts()["events"] == before_events  # 零副作用
+
+
+def test_purge_file_removal_failure_is_reported_not_hidden(
+    repo, config, monkeypatch
+):
+    """交易提交後檔案仍刪不掉：PurgeError 要列出殘留路徑、不假裝完整刪除。"""
+    from shop import repo as repo_mod
+
+    item, _, _ = _stocked_for_purge(repo, config)
+    repo.void_item(item.id)
+
+    def failing_remove(root):
+        return 0, [f"{root}/original/a.jpg"]
+
+    monkeypatch.setattr(repo_mod, "_remove_tree", failing_remove)
+    with pytest.raises(PurgeError) as excinfo:
+        repo.purge_item(item.id)
+    message = str(excinfo.value)
+    assert "已從資料庫永久刪除" in message
+    assert "a.jpg" in message
+
+    # 資料庫已刪（訊息也如實說明）；磁碟殘留是「已知、被回報」的。
+    with pytest.raises(NotFoundError):
+        repo.get_item(item.id)
+    staging = config.data_root / ".purge"
+    assert [p for p in staging.iterdir() if p.is_dir()]
+

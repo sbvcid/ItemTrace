@@ -37,6 +37,7 @@ export async function createRecordDetailView(params, router) {
         <button type="button" class="btn-secondary detail-tool-btn" id="btn-add-photo">📷 <span>${t('detail.addPhoto')}</span></button>
         <button type="button" class="btn-secondary detail-tool-btn" id="btn-reanalyze">✨ <span>${t('detail.reanalyze')}</span></button>
         <button type="button" class="btn-secondary detail-tool-btn" id="btn-edit-toggle">✎ <span>${t('detail.edit')}</span></button>
+        <button type="button" class="btn-secondary detail-tool-btn is-danger" id="btn-move-trash">🗑 <span>${t('detail.moveToTrash')}</span></button>
       </div>
       <div class="detail-analysis-status" id="analysis-status" hidden></div>
       <div id="suggestion-review"></div>
@@ -57,6 +58,7 @@ export async function createRecordDetailView(params, router) {
   const addPhotoBtn = el.querySelector('#btn-add-photo');
   const reanalyzeBtn = el.querySelector('#btn-reanalyze');
   const editToggleBtn = el.querySelector('#btn-edit-toggle');
+  const moveTrashBtn = el.querySelector('#btn-move-trash');
   const editFormContainer = el.querySelector('#detail-edit-form');
   const photoInput = el.querySelector('#detail-photo-input');
   const analysisStatus = el.querySelector('#analysis-status');
@@ -72,6 +74,7 @@ export async function createRecordDetailView(params, router) {
     addPhotoBtn.disabled = on;
     reanalyzeBtn.disabled = on;
     editToggleBtn.disabled = on;
+    moveTrashBtn.disabled = on;
   }
 
   function setStatus(kind, message, action = null) {
@@ -360,6 +363,25 @@ export async function createRecordDetailView(params, router) {
 
   reanalyzeBtn.addEventListener('click', () => runAnalysis());
 
+  moveTrashBtn.addEventListener('click', async () => {
+    if (busy) return;
+    // 明確確認：說明會從一般列表隱藏，但照片與資料暫時保留、可還原。
+    const confirmed = window.confirm(
+      t('detail.trashConfirm', { name: currentItemData.item?.name || itemId })
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await api.voidItem(itemId);
+      showToast(t('detail.trashDone'));
+      router.navigate('/');
+    } catch (err) {
+      console.error('Move to trash failed:', err);
+      showToast(`${t('detail.trashError')}: ${err.message}`);
+      setBusy(false);
+    }
+  });
+
   photoInput.addEventListener('change', async () => {
     const files = Array.from(photoInput.files || []);
     photoInput.value = '';
@@ -523,6 +545,9 @@ export async function createRecordDetailView(params, router) {
       : item.status === 'archived'
         ? t('detail.statusArchived')
         : t('detail.statusDeleted');
+
+    // 已在垃圾桶的紀錄：不再提供「移至垃圾桶」；還原／永久刪除在垃圾桶頁。
+    moveTrashBtn.style.display = item.status === 'void' ? 'none' : '';
 
     // Photos carousel
     let photosHtml = '';

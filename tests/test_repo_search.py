@@ -211,14 +211,19 @@ def test_status_filter_without_search_still_works(repo, stocked):
     assert ids_found(repo.list_items(status="active")) == [stocked["board"].id]
 
 
-def test_voided_item_is_findable_without_a_status_filter(repo, stocked):
-    """目前的行為：沒有指定 status 時，void 的商品一樣會被搜尋到。
+def test_voided_item_is_excluded_without_a_status_filter(repo, stocked):
+    """Phase 3 政策：沒有指定 status 時（首頁、一般搜尋）一律排除垃圾桶。
 
-    這是刻意的 —— 搜尋是「你還在嗎」的工具，不是日常清單。日常清單才會
-    預設排除 void。
+    這反轉了舊契約（那時搜尋沒帶 status 也看得到 void）——「移入垃圾桶後
+    首頁與一般搜尋結果不應再顯示」是明確的產品要求。要看垃圾桶紀錄請帶
+    status='void'（垃圾桶頁就是這樣查的）；void 仍是軟刪除，資料都在。
     """
     repo.void_item(stocked["board"].id)
-    assert ids_found(repo.list_items(q="華碩")) == [stocked["board"].id]
+    assert ids_found(repo.list_items(q="華碩")) == []
+    assert ids_found(repo.list_items()) == [stocked["gpu"].id]
+    assert ids_found(repo.list_items(q="華碩", status="void")) == [
+        stocked["board"].id
+    ]
 
 
 # ----------------------------------------------------------------------
