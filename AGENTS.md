@@ -51,7 +51,7 @@
 - 測試：pytest (994 tests)
 - 部署：local-first, 無外部依賴
 
-**當前階段**：Phase 2C-D 完成 - 撤銷安全、描述與衝突處理（下一個建議：Phase 3 垃圾桶與資料生命週期）
+**當前階段**：Security Audit 1 完成（唯讀稽核；F1–F8 見 docs/engineering/SECURITY-AUDIT.md；下一個建議：SR-1 修復，接 Phase 3）
 
 ---
 

@@ -1,29 +1,32 @@
 # ItemTrace Engineering Status
 
-最後更新：2026-10-10 15:10  
-當前階段：Phase 2C-D 完成（undo 防護、描述與身分衝突改善；本地 commit，未 push）  
-遠端狀態：本地領先 origin/main（本階段 commit 後 11 ahead；未 push）  
-測試驗證：`pytest -q` 完全通過，全 994 測試無失敗、無跳過
+最後更新：2026-10-10 16:30  
+當前階段：Security Audit 1 完成（唯讀稽核；本地 commit，未 push）  
+遠端狀態：本地領先 origin/main（本階段 commit 後 12 ahead；未 push）  
+測試驗證：`pytest -q` 完全通過，全 994 測試無失敗、無跳過（稽核未改任何程式碼／設定／測試）
 
 ---
 
 ## 當前階段
 
-**Phase 2C-D：撤銷安全、描述性理解與衝突處理** ← **COMPLETED**
+**Security Audit 1：桌面應用唯讀安全稽核** ← **COMPLETED**（唯讀；未改程式碼／設定／依賴／schema／測試）
 
 完成時間：2026-10-10  
-Commit：`feat: phase-2c-d undo safety, descriptions, and conflict handling`（本地，未 push）
-報告：`docs/engineering/AI-AUTONOMY-VALIDATION.md`（含 Phase 2C-D 補充驗證）
+Commit：`docs: security audit 1 - desktop application`（本地，未 push）
+報告：`docs/engineering/SECURITY-AUDIT.md`
 
 完成內容：
-- ✓ **過期 undo 防護**：復原前驗證「現值＝該次套用值」且「之後沒有任何改到同欄位的事件（值改回亦算）」；不符回 **409、零副作用**；批次 undo 逐欄位獨立
-- ✓ **UI**：banner 顯示修訂前後值（`品牌：BOSE → SONY`／`（新增）`）；過期復原逐項說明（實測 toast：「未復原：品牌（值已被後續修改，維持現值）」）
-- ✓ **描述 prompt**：看得見但認不出身分 → 描述性 `name`＋`attribute:description`（看見 vs「看起來像」），不得編造品牌/型號
-- ✓ **跨照片身分 prompt**：不同照片不同值 → 分別輸出（多值），由既有重複值偵測升級衝突
-- ✓ **Live 回評（新 prompt）**：C1 ✅ `name=紅色馬克杯`＋真描述；C6 ✅ 兩組身分都輸出→衝突；P/S/F 流程 ✅；**R 型（有上下文）仍可能擇一 → 限制誠實記錄**
-- ✓ **可重複入口**：`tools/validate_autonomy_live.py`（--allow-live 守門、合成圖限定、呼叫上限、資料目錄防誤刪）＋守門測試
-- ✓ 證據：Live 7 成功＋1 次 4xx（僅合成圖）；recorded replay 10 情境 0 問題；+11 測試（undo×6、衝突×2、靜態×1、driver 守門×2）；全 994 通過
-- ✓ 零 schema migration；未加欄位、未引入欄位鎖定子系統
+- ✓ 全表面審查＋**隔離實測**（暫存資料根、合成資料、僅 127.0.0.1；canary key；不碰真實資料）
+- ✓ **F1（High, Confirmed）**：無 Host/Origin 驗證 → **DNS rebinding 下任何網頁可完整操作應用**（`Host: evil.example` 實測 200；即使 loopback 綁定亦然）
+- ✓ **F2（High, Confirmed）**：`POST /api/settings/ai/test` 可把**已存 API key 轉送到呼叫者指定的 base_url**（canary 實測被本地監聽器收到）
+- ✓ **F5（High as-configured, Confirmed）**：本 checkout 的 `config.json` 綁 **0.0.0.0**（實測 Listen 0.0.0.0）→ 不受信任網路上全暴露；程式碼預設為 127.0.0.1
+- ✓ **F3（Medium）**：無 body 的變更端點可 CSRF（void＋外站 Origin＋text/plain 實測 200）；analyze 可被觸發付費呼叫
+- ✓ **F4（Medium）**：上傳無大小/檔數上限（20MB 實測 201）、PIL 無像素上限、analyze 無限流
+- ✓ **F6（Medium）**：前端 28 處 innerHTML、0 escaping（AI/紀錄值可存成 XSS）；上傳 HTML 以 text/html 供檔且無 nosniff（實測）
+- ✓ F7（Low）資訊衛生、F8（Low）列印 --no-sandbox 執行可控 HTML（plausible）
+- ✓ **正面清單**：路徑穿越（raw-socket 5 變體全 404）、秘密不進前端/Git（0600、gitignore、無歷史）、來源判定不看標頭、SQL 參數化、shell=False、無永久刪除、部分資源界限、依賴版本高於所列 CVE 修正版
+- ✓ **情境判定**：單機＝基本可接受但 F1/F2 建議必修；私有區網＝有條件可接受（僅受控網路）；公開網路＝**不可接受**
+- ✓ 修復建議：**SR-1**（Host/Origin＋自訂標頭、test 端點禁止已存 key＋自訂 URL、上傳/像素/節流上限、前端 escaping＋nosniff、預設綁回 loopback）；詳細驗收見報告 §4
 
 ### Phase 2C-D 撤銷語義（實作即規格）
 
@@ -90,6 +93,7 @@ Commit：`feat: phase-2c-d undo safety, descriptions, and conflict handling`（�
 - Phase 2C-A：AI 評測與自主性政策（`dda8b61`）
 - Phase 2C-B：可回復的 AI 自動更新與證據感知自主性（`7927faf`）
 - Phase 2C-C：自主性 Live 驗證（`5a4c792`；報告 AI-AUTONOMY-VALIDATION.md）
+- Phase 2C-D：撤銷安全、描述與衝突處理（`79eaecc`）
 
 ---
 
@@ -144,7 +148,8 @@ Commit：`feat: phase-2c-d undo safety, descriptions, and conflict handling`（�
 - ✓ AI 評測 harness 與自主性政策（Phase 2C-A；工具＋文件，未改產品行為） — **Implemented, Tested, Committed（dda8b61）, Not Pushed**
 - ✓ 可回復的 AI 自動更新（Phase 2C-B：選擇策略、自動套用、undo、衝突升級） — **Implemented, Tested, Committed（7927faf）, Not Pushed**
 - ✓ 自主性驗證與殘餘缺口（Phase 2C-C：Live 實測、報告、fixture／錄製） — **Evaluated, Committed（5a4c792）, Not Pushed**
-- ✓ 撤銷安全、描述性理解與衝突處理（Phase 2C-D） — **Implemented, Tested, Committed（本階段）, Not Pushed**
+- ✓ 撤銷安全、描述性理解與衝突處理（Phase 2C-D） — **Implemented, Tested, Committed（79eaecc）, Not Pushed**
+- ✓ 桌面應用安全稽核（Security Audit 1；唯讀） — **Audited, Committed（本階段）, Not Pushed**（F1–F8 見 SECURITY-AUDIT.md）
 
 ### 後端基礎
 - ✓ SQLite + WAL + STRICT 約束 — **Implemented, Tested, Committed, Pushed**
@@ -173,9 +178,19 @@ Commit：`feat: phase-2c-d undo safety, descriptions, and conflict handling`（�
 
 ## 未完成工作
 
-### 立即待做（Phase 3：垃圾桶與資料生命週期）
+### 立即待做（Security Remediation 1（SR-1），優先；依 SECURITY-AUDIT.md §4）
+1. **F1/F3**：Host 白名單＋變更端點自訂標頭（阻斷 DNS rebinding／CSRF）＋測試
+2. **F2**：`/api/settings/ai/test` 禁止「已存 key＋自訂 base_url」組合＋canary 測試
+3. **F4**：body/單檔/檔數上限、`Image.MAX_IMAGE_PIXELS`、analyze 節流＋測試
+4. **F6**：前端 escaping util＋`nosniff`／上傳型別檢查＋Playwright XSS 斷言
+5. **F5**：預設綁回 `127.0.0.1`；開放區網改顯式選項＋啟動警告（文件／設定政策）
+6. F7/F8：安全標頭、docs 開關、模板 script 過濾（可拆）
+
+驗收：以上安全回歸測試＋既有 994 不弱化；以 SECURITY-AUDIT 附錄 A 的腳本重演（Host/Origin、key-forwarding、超限上傳、XSS）。
+
+### 接著（Phase 3：垃圾桶與資料生命週期）
 - 依 `ROADMAP.md` Phase 3：垃圾桶 UI／30 天保留／永久刪除（明確使用者意圖、可稽核）
-- 收尾選項（可穿插）：R 型跨照片身分（有上下文時模型仍可能擇一）的下一輪評測；屬性逐鍵來源標籤；Phase 1B-B
+- 收尾選項（可穿插）：R 型跨照片身分的下一輪評測；屬性逐鍵來源標籤；Phase 1B-B
 
 ### 短期（Phase 2–3）
 - Phase 2：AI Contract 2.0 —— **完成（2A/2B/2C-A/2C-B/2C-C/2C-D）**
@@ -208,6 +223,10 @@ Commit：`feat: phase-2c-d undo safety, descriptions, and conflict handling`（�
 | `attribute:description` 未被模型自發產生 | — | 已解決 | Phase 2C-D：prompt 上線；C1 Live 回評已產生真描述（無品牌幻覺） |
 | 過期 undo 可覆寫後續編輯 | — | 已解決 | Phase 2C-D：值不符或有中間變更 → 409 零副作用；批次逐欄位＋UI 逐項說明 |
 | 跨照片身分「沉默擇一」 | 中 | 部分解決（2C-D） | C6（無上下文）：兩身分都輸出→衝突 ✓；R 型（有上下文）模型仍可能擇一 → 限制已記錄（AI-AUTONOMY-VALIDATION §2C-D） |
+| 【安全】F1 DNS rebinding／Host 未驗證 | **High** | 開放（已確認） | SECURITY-AUDIT §1；SR-1 修（Host＋Origin/自訂標頭） |
+| 【安全】F2 API key 可被轉送攻擊者 URL | **High** | 開放（已確認） | 同上；SR-1 修（test 端點限制） |
+| 【安全】F5 現值綁 0.0.0.0 | **High（as-configured）** | 開放（部分為設計） | 信任區網模型；SR-1 改預設 loopback＋顯式開放 |
+| 【安全】F3 CSRF／F4 資源上限／F6 前端 XSS | Medium | 開放 | SECURITY-AUDIT §1；SR-1 修 |
 | 屬性逐鍵來源標籤（✨AI／✍手動） | 低 | 開放 | 目前以 banner＋事件/建議可追溯；逐鍵 UI 標籤後續 |
 | 生活備忘欄位設計 | 中 | 開放 | Phase 1B-B；參考 FEATURE-PLAN.md, JOB-TO-BE-DONE.md |
 | 搜尋效能基線 | 低 | 未測 | Phase 5 時詳細評估 |
@@ -318,7 +337,7 @@ Commit：`feat: phase-2c-d undo safety, descriptions, and conflict handling`（�
 
 ---
 
-## Phase 2C-D 變更清單（本階段 commit）
+## Phase 2C-D 變更清單（commit `79eaecc`，前次）
 
 | 檔案 | 變更 |
 |---|---|
@@ -340,27 +359,44 @@ Commit：`feat: phase-2c-d undo safety, descriptions, and conflict handling`（�
 
 ---
 
+## Security Audit 1 變更清單（本階段 commit；唯讀稽核）
+
+| 檔案 | 變更 |
+|---|---|
+| `docs/engineering/SECURITY-AUDIT.md` | 新增：稽核報告（F1–F8、正面清單、情境判定、SR-1 建議、限制、附錄） |
+| `docs/engineering/STATUS.md`, `AGENTS.md` | 稽核結果與修復優先級校準 |
+
+**未變更**：產品程式碼（shop/、web/、tools/）、`config.json`、依賴、schema、測試——**全部零修改**；稽核僅使用暫存資料根（已刪除）。
+
+---
+
 ## 本地與遠端同步狀態
 
 | 項 | 狀態 |
 |---|---|
 | Branch | main |
-| Ahead/Behind | 11 ahead, 0 behind（未 push；本階段 commit 後） |
+| Ahead/Behind | 12 ahead, 0 behind（未 push；本階段 commit 後） |
 | Uncommitted Changes | 0（本階段變更全數進入獨立 commit） |
 | 衝突 | 無 |
-| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61`、`7927faf`、`5a4c792` —— 未修改、未 amend、未 rebase |
+| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61`、`7927faf`、`5a4c792`、`79eaecc` —— 未修改、未 amend、未 rebase |
 
 ---
 
 ## 下一個明確任務
 
-### Phase 3：垃圾桶與資料生命週期（依 ROADMAP）
+### Security Remediation 1（SR-1；依 SECURITY-AUDIT.md §4）——優先
 檢查清單：
-- [ ] 垃圾桶頁面（void 紀錄）＋還原
-- [ ] 30 天保留與永久刪除（明確使用者意圖、可稽核；原照片保護規則先定案）
-- [ ] 補充測試、全測試通過
+- [ ] F1/F3：Host 白名單＋變更端點自訂標頭（middleware）＋阻斷測試
+- [ ] F2：test 端點禁止「已存 key＋自訂 base_url」＋canary 監聽測試
+- [ ] F4：body／單檔／檔數上限＋`Image.MAX_IMAGE_PIXELS`＋analyze 節流
+- [ ] F6：前端 escaping util＋`nosniff`／上傳型別檢查＋Playwright XSS 斷言
+- [ ] F5：預設 loopback＋顯式「開放區網」選項與啟動警告
+- [ ] F7/F8（可拆）：安全標頭、docs 開關、模板 script 過濾
 
-（收尾選項可穿插：R 型跨照片身分的下一輪 prompt 評測（模型在有上下文時仍可能擇一）；屬性逐鍵來源標籤；Phase 1B-B。）
+### 接著（Phase 3：垃圾桶與資料生命週期）
+- 垃圾桶頁面（void 紀錄）＋還原；30 天保留與永久刪除（明確使用者意圖、可稽核）
+
+（收尾選項可穿插：R 型跨照片身分的下一輪 prompt 評測；屬性逐鍵來源標籤；Phase 1B-B。）
 
 ### AI-Native 架構研究對照（`docs/engineering/AI-NATIVE-ARCHITECTURE.md`）
 - ✓ S1（提案命名空間）→ Phase 2B：`attribute:<key>` 受驗證契約
@@ -393,3 +429,4 @@ Commit：`feat: phase-2c-d undo safety, descriptions, and conflict handling`（�
 - **2026-10-10**：Phase 2C-B 完成——證據選擇「最早 2＋最新 6」；可回復的自動套用（描述屬性／空身分／auto 修訂；決定性、不看信心）；使用者保護（編輯/確認/清空/復原皆鎖定）；衝突升級（L4 錄製回放）；`POST /suggestions/{id}/undo`；詳情頁 banner＋復原；瀏覽器 E2E（自動更新→復原→套用→搜尋）；測試基線 962 → 983
 - **2026-10-10**：Phase 2C-C 完成——Live 驗證（7 次成功＋1 次 4xx、僅合成圖）：自動修訂可行（BOSE→SONY）、使用者保護、衝突泛化、9 張選擇修復、失敗/重試；抓到「過期 undo 可覆寫後續編輯」缺陷；`attribute:description` 0/9 出現；產出 2C-D 五條驗收條件；測試基線不變 983（未改程式碼/測試）
 - **2026-10-10**：Phase 2C-D 完成——過期 undo 防護（409 零副作用＋逐欄位批次＋UI 逐項說明）；描述與跨照片身分 prompt 上線；banner 修訂前後值；可重複 Live 驗證入口；Live 回評：C1 描述 ✓、C6 雙身分 ✓、P/S/F ✓、R 型仍可能擇一（限制記錄）；測試基線 983 → 994
+- **2026-10-10**：Security Audit 1 完成（唯讀）——F1 DNS rebinding／Host 未驗證、F2 API key 轉送、F3 CSRF、F4 資源上限、F5 0.0.0.0 綁定、F6 前端 XSS、F7/F8 縱深；正面清單（穿越防護、秘密衛生、參數化 SQL 等）；情境判定與 SR-1 修復建議；測試基線不變 994（未改任何程式碼／設定／測試）
