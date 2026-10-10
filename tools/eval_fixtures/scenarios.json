@@ -84,6 +84,27 @@
         {"kind": "any_value_contains_any", "contains": ["nikkor", "50mm"], "ci": true},
         {"kind": "any_value_contains", "contains": "2234567"}
       ]
+    },
+    {
+      "id": "C1_unknown_mug",
+      "title": "無品牌的紅色馬克杯（描述行為）",
+      "purpose": "驗證：沒有品牌/型號可讀時，模型是否仍給出有用的視覺描述。",
+      "photos": ["object_mug.jpg"],
+      "context": "",
+      "expectations": [
+        {"kind": "any_value_contains_any", "contains": ["杯", "mug", "cup"], "ci": true},
+        {"kind": "no_field_prefix", "prefix": "identifier:"}
+      ]
+    },
+    {
+      "id": "C4b_conflict_printers",
+      "title": "Canon 標籤 vs HP 墨水匣收據（衝突泛化）",
+      "purpose": "驗證 L4 型矛盾在另一組內容上的一般行為（不得把兩個品牌併成一個值）。",
+      "photos": ["label_canon.jpg", "receipt_hp_ink.jpg"],
+      "context": "",
+      "expectations": [
+        {"kind": "no_value_combines", "tokens": ["canon", "hp"], "ci": true}
+      ]
     }
   ]
 }

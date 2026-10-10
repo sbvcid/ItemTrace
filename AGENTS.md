@@ -51,7 +51,7 @@
 - 測試：pytest (983 tests)
 - 部署：local-first, 無外部依賴
 
-**當前階段**：Phase 2C-B 完成 - 可回復的 AI 自動更新（下一個建議：Phase 3 垃圾桶與資料生命週期）
+**當前階段**：Phase 2C-C 完成 - 自主性 Live 驗證（下一步建議：Phase 2C-D 收斂，見 docs/engineering/AI-AUTONOMY-VALIDATION.md）
 
 ---
 

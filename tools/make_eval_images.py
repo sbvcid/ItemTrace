@@ -100,6 +100,20 @@ def dark_image(name: str) -> None:
     print(f"wrote {name}")
 
 
+def mug_image(name: str) -> None:
+    """色塊畫的紅色馬克杯（無任何文字）：測試「可描述但無品牌」的情況。"""
+    image = Image.new("RGB", SIZE, (245, 245, 242))
+    draw = ImageDraw.Draw(image)
+    # 桌面陰影 → 把手 → 杯身 → 杯口
+    draw.ellipse((230, 478, 560, 532), fill=(222, 220, 216))
+    draw.arc((500, 248, 648, 424), start=-70, end=90, fill=(196, 60, 48), width=36)
+    draw.rounded_rectangle((260, 200, 520, 500), radius=36, fill=(196, 60, 48))
+    draw.ellipse((276, 178, 504, 242), fill=(238, 232, 224))
+    draw.ellipse((300, 190, 480, 230), fill=(88, 54, 36))
+    image.save(OUT / name, "JPEG", quality=90)
+    print(f"wrote {name}")
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
 
@@ -136,6 +150,20 @@ def main() -> None:
                ("相機王", "相機背帶", "金額: NT$690", "日期: 2026-06-01"))
     for index in range(2, 9):
         noise_image(f"noise_{index:02d}.jpg", seed=100 + index)
+
+    # Phase 2C-C：可描述但無品牌的物件（驗證描述行為）
+    mug_image("object_mug.jpg")
+
+    # Phase 2C-C：新一組「標籤 vs 另一張收據」矛盾（驗證衝突規則的泛化）
+    text_image("label_bose.jpg",
+               ("BOSE", "SoundLink Flex", "Serial No. 7701234"),
+               big_first=True)
+    text_image("label_canon.jpg",
+               ("Canon", "PIXMA G3020", "Serial No. CN4819"),
+               big_first=True)
+    text_image("receipt_hp_ink.jpg",
+               ("燦坤 3C", "HP 67 黑色墨水匣",
+                "金額: NT$590", "日期: 2026-04-18"))
 
 
 if __name__ == "__main__":

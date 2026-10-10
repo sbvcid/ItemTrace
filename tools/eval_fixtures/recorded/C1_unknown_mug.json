@@ -1,0 +1,32 @@
+{
+  "scenario_id": "C1_unknown_mug",
+  "provider": "google",
+  "model": "gemini-3.5-flash-lite",
+  "recorded_at": "2026-10-10T12:51:47",
+  "photos": [
+    "object_mug.jpg"
+  ],
+  "context": "",
+  "response_text": "```json\n{\n  \"suggestions\": [\n    {\n      \"field\": \"name\",\n      \"value\": \"馬克杯\",\n      \"confidence\": 0.9,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"category\",\n      \"value\": \"日用品\",\n      \"confidence\": 0.8,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"attribute:color\",\n      \"value\": \"紅色\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 0\n    }\n  ]\n}\n```",
+  "valid": true,
+  "parsed": [
+    {
+      "field": "name",
+      "value": "馬克杯",
+      "confidence": 0.9,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "category",
+      "value": "日用品",
+      "confidence": 0.8,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "attribute:color",
+      "value": "紅色",
+      "confidence": 0.95,
+      "source_photo_id": "PH0"
+    }
+  ]
+}

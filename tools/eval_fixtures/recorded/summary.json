@@ -1,9 +1,27 @@
 {
   "provider": "google",
   "model": "gemini-3.5-flash-lite",
-  "started_at": "2026-10-10T03:24:21",
-  "finished_at": "2026-10-10T03:24:47",
-  "calls": 7,
-  "quality_misses": 0,
-  "note": "合成 fixture 評測；非使用者資料"
+  "note": "合成 fixture 評測；非使用者資料。錄製檔來自多次執行，時間戳見 runs／各錄製檔的 recorded_at。",
+  "runs": [
+    {
+      "label": "phase-2c-a baseline",
+      "started_at": "2026-10-10T03:24:21",
+      "finished_at": "2026-10-10T03:24:45",
+      "calls": 7,
+      "scenarios": [
+        "L1_label_sony", "L2_unknown_no_text", "L3_receipt_updates",
+        "L4_contradiction", "L5_insufficient_dark",
+        "L6a_latest8_drops_label", "L6b_label_included"
+      ],
+      "quality_misses": 0
+    },
+    {
+      "label": "phase-2c-c supplementary",
+      "started_at": "2026-10-10T12:51:47",
+      "finished_at": "2026-10-10T12:51:51",
+      "calls": 2,
+      "scenarios": ["C1_unknown_mug", "C4b_conflict_printers"],
+      "quality_misses": 0
+    }
+  ]
 }
