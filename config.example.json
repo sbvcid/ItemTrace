@@ -6,5 +6,11 @@
   "server_host": "127.0.0.1",
   "server_port": 8731,
   "allow_lan": false,
-  "allowed_hosts": []
+  "allowed_hosts": [],
+  "enable_docs": false,
+  "max_request_bytes": 33554432,
+  "max_upload_bytes": 25165824,
+  "max_upload_files": 20,
+  "max_image_pixels": 50000000,
+  "analyze_per_minute": 10
 }

@@ -729,4 +729,5 @@ Phase 7 (Windows Release)
 - **2026-10-10（Phase 2C-C）**：自主性 Live 驗證完成（7 次成功＋1 次 4xx、僅合成圖）：修訂/保護/衝突/選擇/失敗重試通過；抓到過期 undo 缺陷與 description 缺口；測試基線不變（未改程式碼）；下一階段 = Phase 2C-D 收斂五條驗收，接 Phase 3
 - **2026-10-10（Phase 2C-D）**：撤銷安全、描述與衝突處理完成（409 防護、banner 前後值、描述/身分 prompt、Live 回評 C1/C6 通過、R 型限制記錄、可重複 Live 入口）；零 schema migration；測試基線更新為 994；下一階段 = Phase 3 垃圾桶與資料生命週期
 - **2026-10-10（Security Audit 1 + SR-1）**：桌面安全稽核（F1–F8）與修復完成——Host／Origin／`X-Requested-With` 守門、已存 key 只送 preset、LAN opt-in（非 loopback 未設定拒啟）、前端 escaping＋CSP/nosniff＋媒體附件化；F4/F7/F8 列安全後續；測試基線更新為 1013；下一階段 = Phase 3（計畫未變）
+- **2026-10-10（SR-2）**：資源上限、資訊衛生與列印安全完成——body／單檔／檔數／像素／列印光柵上限（413／400）、AI 節流（429＋Retry-After）、`/docs` 預設關閉（`enable_docs`）、API `no-store`＋照片 `private`、錯誤訊息去路徑化；列印管線重新序列化（註解丟棄、文字 escape、屬性白名單、render 前重驗）並修復兩個實測 mXSS；列印瀏覽器預設保留 sandbox（受限環境用 `ITEMTRACE_PRINT_NO_SANDBOX=1` 退回）；零 schema migration；測試基線更新為 1049（1013＋30 新 SR-2 測試＋6 個新 config 文件參數化；見 STATUS）；下一階段 = Phase 3（計畫未變）
 

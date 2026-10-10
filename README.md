@@ -229,6 +229,12 @@ node --check ui/item.js               # JS 語法（有 node 才需要）
 | `server_host` | `127.0.0.1` | 綁定位址；非 loopback 必須同時設 `allow_lan` |
 | `allow_lan` | `false` | 明確開放區網（沒有登入機制，請只在受信任網路開啟） |
 | `allowed_hosts` | `[]` | 額外允許的 Host 名稱（例如自訂主機名） |
+| `enable_docs` | `false` | 開發用：開啟 `/docs` 與 `/openapi.json`（預設關閉） |
+| `max_request_bytes` | `33554432` | 單次 HTTP 請求 body 上限（32 MiB） |
+| `max_upload_bytes` | `25165824` | 單一上傳檔案上限（24 MiB） |
+| `max_upload_files` | `20` | 一次請求最多幾個檔案 |
+| `max_image_pixels` | `50000000` | 單張圖片像素上限（50 MP，防解壓縮炸彈） |
+| `analyze_per_minute` | `10` | 每分鐘 AI provider 呼叫上限（0＝停用節流） |
 | `server_port` | `8731` | 連接埠 |
 
 `config.example.json` 是樣板，`init` 會由它產生 `config.json`。
@@ -247,6 +253,26 @@ node --check ui/item.js               # JS 語法（有 node 才需要）
   CSP；非圖片副檔名一律以附件下載（上傳的 HTML 不會以網頁執行）
 * **AI key 不外送**：測試 API 時，已儲存的 key 只會送到已知 provider
   端點；自訂 base URL 必須在該次請求明確帶上臨時 key
+
+### 資源上限與輸出衛生（SR-2）
+
+第二輪安全強化（對應 `docs/engineering/SECURITY-AUDIT.md` 的 F4／F7／F8）：
+
+* **請求與上傳上限**：body、單檔、檔數、圖片像素都在落盤前擋（413／400）；
+  超限時**先前已成功的檔案保持不變**，不會靜默丟掉合法證據。數值可由
+  config.json 調整（見上表）。
+* **AI 呼叫節流**：`analyze` 與「測試 API」共用每分鐘 10 次的滑動視窗（429＋
+  `Retry-After`）。這是**單一行程**的計數器；本應用正常只有一個 worker，
+  若未來改用多 worker，每個行程各有自己的視窗。
+* **列印尺寸上限**：Template 尺寸換算後的光柵像素超過 60 MP 就直接 400，
+  不啟動瀏覽器、不讓記憶體爆掉。
+* **API 文件預設關閉**：`/docs`、`/openapi.json`、`/redoc` 預設 404；
+  開發時在 config.json 設 `"enable_docs": true`。
+* **快取政策**：API 回應 `Cache-Control: no-store`（含私人資料）；照片是
+  `private, max-age`（只進自己的瀏覽器快取）；靜態資產維持正常快取。
+* **列印管線硬化**：模板渲染重新序列化輸出（文字 escape、註解丟棄、屬性
+  走白名單、渲染前重新驗證），列印瀏覽器**預設保留 sandbox**；只有環境
+  真的起不來時才用 `ITEMTRACE_PRINT_NO_SANDBOX=1` 明確退回。
 
 **整個資料夾就是全部資料**：`catalog.db` + `files/`（原始照片）+ `inbox/`。
 關掉程式、整份搬到任何位置、重新啟動即可，不需改任何設定 —— 資料庫裡只存相對於

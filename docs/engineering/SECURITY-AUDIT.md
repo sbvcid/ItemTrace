@@ -21,12 +21,78 @@
 | **F3** CSRF | ✅ **已修** | 變更類（POST/PATCH/PUT/DELETE）一律要求 `X-Requested-With: ItemTrace`；Origin 驗證同上。實測：無標頭 POST→**403**、`Origin: evil` → 403、同源→201；`web/core/api.js`、`tools/analyze_item.py`、驗證工具同步帶標頭 |
 | **F5** 綁定 | ✅ **已修** | 程式預設 loopback；非 loopback 需 config `"allow_lan": true`。實測：現值 `0.0.0.0` 下 `python serve.py` **拒絕啟動（exit 2）** 並印出明確指示；隔離實例實際監聽 **127.0.0.1**；LAN 模式有警語＋README 信任模型說明 |
 | **F6** 儲存型 XSS／媒體 | ✅ **已修** | 前端 `escapeHtml` 套用於紀錄／建議／錯誤訊息（home／capture／detail／router）；移除所有 inline `onerror`/`onclick`（CSP 相容）；回應加 `nosniff`／`Referrer-Policy`／HTML CSP（`script-src 'self'`、`frame-ancestors 'none'`）；`/files` 非圖片 → `application/octet-stream`＋`attachment`＋`default-src 'none'; sandbox`。實測：payload 名稱／備註／屬性（含惡意鍵）全部純文字、`window.__xss` 未定義、evil.html 下載化；瀏覽器 0 console errors；`tests/test_security.py`＋兩條靜態守門 |
-| **F4** 資源上限 | ⏳ **未修**（SR-1 範圍外） | 依 SR-1 任務切分保留：body／單檔／檔數上限、PIL 像素上限、analyze 節流——建議列下一階段 |
-| **F7** 資訊衛生／**F8** 列印 | ⏳ **未修**（低） | `/docs` 開關、錯誤訊息簡化、模板 script 過濾——候選後續 |
+| **F4** 資源上限 | ⏳ **未修**（SR-1 範圍外）→ **已於 SR-2 處理** | 依 SR-1 任務切分保留：body／單檔／檔數上限、PIL 像素上限、analyze 節流——建議列下一階段 |
+| **F7** 資訊衛生／**F8** 列印 | ⏳ **未修**（低）→ **已於 SR-2 處理** | `/docs` 開關、錯誤訊息簡化、模板 script 過濾——候選後續 |
 
 修復後重演的原始攻擊（隔離實例）：H1 evil Host 200→**403**；C1 CSRF void 200→**403**；K1 canary 外送→**400＋零外送**；evil.html `text/html`→**attachment/octet-stream**；有效綁定 0.0.0.0→**127.0.0.1**（且 0.0.0.0 未 opt-in 直接拒啟）。
 
 **殘餘（已知且刻意保留）**：無登入系統的「信任區網」模型不變——LAN 上的直接用戶端（已 opt-in）仍可完整讀寫；非瀏覽器腳本只要帶標頭即可操作（設計如此）。F4/F7/F8 未動。
+
+---
+
+## SR-2 修復狀態（2026-10-10；對應 commit 見 `STATUS.md`）
+
+> 本節由 SR-2 施工階段追加，接續 SR-1。上方的稽核發現（§1–§5）與 SR-1 表
+> 保留**當時快照**；F4／F7／F8 的現況以本節為準。
+
+### 施工前基線重驗（不信任舊報告，全部重跑）
+
+- Git：`main @ 24d1909`（SR-1 commit；13 ahead / 0 behind `origin/main`；工作區乾淨）。
+- `pytest -q`：**1013 收集、0 失敗、0 跳過**（exit 0）——與 SR-1 報告一致。
+- SR-1 實作重讀＋重驗：`shop/security.py` Host／Origin／標頭守門、`serve.py`
+  LAN opt-in、`/files` 附件化與 CSP、前端 escaping 靜態守門**全部仍在且測試通過**。
+- F4 現況（修復前程式碼重讀，確認報告仍適用）：上傳端點 `await upload.read()`
+  全量進記憶體、無檔數上限、無 body 中介層；`ai_client.encode_photo` 用 PIL
+  但未設 `Image.MAX_IMAGE_PIXELS`；analyze 每次直接打 provider、無節流。
+  → 報告描述的風險在目前 checkout **仍然成立**。
+- F7 現況：`/docs`、`/openapi.json` 開放；`/files` 仍 `Cache-Control: public`；
+  `ConfigError` 例外訊息含絕對路徑（可經 API 回應外洩）。→ 成立。
+- F8 現況：`print_backend.py` 仍以 `--no-sandbox` 執行；模板渲染會原樣輸出
+  註解與**解碼後**的文字（見下方兩個實測 mXSS）。→ 成立且**比報告更嚴重**。
+
+### 修復狀態
+
+| 發現 | 狀態 | 修復與驗證（隔離實例、合成資料） |
+|---|---|---|
+| **F4** 資源上限 | ✅ **已修（附殘餘限制聲明）** | ① `BodySizeLimitMiddleware`（純 ASGI）：body 上限 32 MiB，有 `Content-Length` 直接拒、chunked 逐塊累計拒，皆回 **413** 且不讀滿 body；② 單檔 24 MiB（邊讀邊檢查，超過即中止）、每請求 20 檔（400），**先前已成功的檔案保留**；③ 圖片像素 50 MP：JPEG（SOF）＋PNG（IHDR）**零解碼**讀寬高，上傳即 400；其他格式由 analyze 端 PIL bomb 防護兜底；④ 列印光柵上限 60 MP：送瀏覽器前＋量測 PDF 後各檢查一次，400 且不啟動 Chromium；⑤ AI 節流：滑動視窗每分鐘 10 次，`analyze` 與 `settings/ai/test` 共用，超限 **429＋Retry-After**（第 3 次不會打到 provider）。**型別政策**：上傳端刻意**不設型別白名單**（證據原檔不可被拒收；見 D6），安全處理放在輸出端——SR-1 附件化／CSP、SR-2 inline MIME 白名單與像素上限。全部可由 config.json 覆寫。**殘餘**：節流是單一 worker 行程內計數器（重啟歸零、多 worker 會是 N 倍、極端併發可能多放行 1 次）——local-first 桌面部署正常只有一個 worker；已文件化，不引入外部限流服務。 |
+| **F7** 資訊衛生 | ✅ **已修** | ① `/docs`／`/openapi.json`／`/redoc` **預設關閉**（404 且不回退成 SPA 頁）；開發用 `"enable_docs": true` 明示開啟；② API 回應 `Cache-Control: no-store`；`/files` 照片改 `private, max-age=86400`（不再 `public`）；靜態資產維持正常快取；③ `ConfigError` 經 API 一律回不帶路徑的通用訊息，完整原因只印伺服器 console；④ 一般 404／400 訊息重查：`/files` 404 只回請求路徑（不回 DATA_ROOT）。 |
+| **F8** 列印管線 | ⚠ **已緩解（兩個 mXSS 已實測修復）＋殘餘不確定性聲明** | 修復前實測（本機 Edge headless，真實管線）：**(a) 立即結束註解**——模板 `<!--><img src=x onerror="document.title='PWNED'">-->` 通過 validator（Python HTMLParser 整段當註解、Chromium 在第一個 `>` 就結束註解），renderer 原樣輸出，`--dump-dom` 顯示 `<title>PWNED</title>`＝**JS 已執行**；**(b) 實體編碼注入**——模板文字 `&lt;img … onerror=…&gt;` 通過 validator，renderer 把實體**解碼後原樣輸出**成真 `<img onerror>`，`--dump-dom` 顯示 `<title>PWNED2</title>`＝**JS 已執行**（validator 未攔、renderer 是破口）。修復：renderer 重新序列化——**註解一律丟棄**、文字重新 HTML escape（`<style>` raw text 除外，CSS `>` 保證不壞）、屬性只輸出 allowlist（`on*` 永遠不出現）、**渲染前重新跑 `validate_template`**（直接寫 DB 的違規模板也 400）；validator 追加「註解含 `<`／`>` 拒絕」與 Template 1 MB 上限；列印照片 inline 只接受 raster MIME（`.svg` 等不進排版引擎）。瀏覽器：**預設保留 sandbox**（實測本機 Chrome/Edge 新版 headless `--print-to-pdf` 不需 `--no-sandbox`；受限環境才用 `ITEMTRACE_PRINT_NO_SANDBOX=1` 明示退回）；**未採用** `--blink-settings=scriptEnabled=false`——實測它會讓 `--print-to-pdf` 不產生任何 PDF（mojo 錯誤），不能當停用 script 的手段。回歸：`tests/test_security_sr2.py` 含真實 Chromium canary（PDF 文字保留 `MARKER-OK`、無 `SCRIPT-RAN`）。**殘餘不確定性**：列印瀏覽器仍啟用 JS 引擎；安全性建立在「renderer 輸出不可能含可執行內容」上（allowlist 解析→重新序列化→再驗證），已知 mXSS 類已修，但未對所有 HTML 解析器差異做 fuzzing；不同 Chromium 版本理論上仍可能有未發現的解析歧義。 |
+
+### 修復後隔離實例重演（真 uvicorn、僅 127.0.0.1、暫存資料根）
+
+| 重演 | 結果 |
+|---|---|
+| `GET /docs`／`/openapi.json`（預設） | **404**「API 文件已停用」；SPA `/` 仍 200 |
+| `GET /api/items` | `Cache-Control: no-store` |
+| 40 MB body（Content-Length） | **413**（路由前） |
+| 40 MB body（chunked，無 Content-Length） | **413**（逐塊累計；真 uvicorn 驗證） |
+| 25 MB 單檔 multipart | **413**「單檔上限 24 MB」 |
+| 30000×30000（900 MP）小檔 JPEG | **400**「像素過大…上限 50 MP」 |
+| 正常小圖上傳 → `GET /files/...` | 201 → 200，`Cache-Control: private, max-age=86400` |
+| 不存在檔案 404 | detail 只含請求路徑，不含 DATA_ROOT |
+
+### SR-1 保護保存（SR-2 期間重驗）
+
+- `tests/test_security.py`（17 測試）全數維持通過：Host 白名單（含 config 追加）、
+  evil Host→403、Origin 同源／埠一致／`null` 拒絕、變更端點必帶
+  `X-Requested-With`、已存 key 不轉送（canary＋接收器）、LAN opt-in、
+  媒體 nosniff／附件化／CSP。
+- 完整測試套件（見 `STATUS.md` 數字）：SR-1 的信任模型與斷言**未被削弱**；
+  唯一依 SR-2 政策更新的既有斷言：`/docs` 改「預設關閉、enable_docs 開啟」
+  （2 個測試改為明示開發模式）、照片 `Cache-Control` 由 `public` 改 `private`
+  （同一測試，斷言強度不變）。
+
+### 新增限制一覽（預設值；config.json 可覆寫）
+
+| 面向 | 預設 | 超限回應 |
+|---|---|---|
+| HTTP body | 32 MiB | 413（路由前） |
+| 單檔上傳 | 24 MiB | 413（已完成的檔案保留） |
+| 每請求檔數 | 20 | 400（不落盤） |
+| 圖片像素 | 50 MP | 400（JPEG/PNG 零解碼判讀） |
+| 列印光柵 | 60 MP | 400（不啟動瀏覽器） |
+| AI 呼叫 | 10 次／分鐘 | 429＋Retry-After |
+| Template HTML | 1 MB | 400 |
 
 ---
 

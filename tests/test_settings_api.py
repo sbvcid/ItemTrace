@@ -90,9 +90,25 @@ def fake_provider(monkeypatch):
 
 
 
-def test_settings_page_is_not_in_the_api_contract(client):
-    assert "/settings" not in client.get("/openapi.json").json()["paths"]
-    assert "/api/settings/ai" in client.get("/openapi.json").json()["paths"]
+def test_settings_page_is_not_in_the_api_contract(config):
+    """SR-2（F7）：API 文件預設關閉；開發模式（enable_docs=true）下檢查契約。
+
+    契約本身不變：頁面路由（/settings）不是 API，/api/settings/ai 是。
+    """
+    import dataclasses
+
+    from fastapi.testclient import TestClient
+
+    from shop.api import create_app
+
+    with TestClient(
+        create_app(dataclasses.replace(config, enable_docs=True)),
+        base_url="http://localhost",
+        headers={"X-Requested-With": "ItemTrace"},
+    ) as docs_client:
+        paths = docs_client.get("/openapi.json").json()["paths"]
+    assert "/settings" not in paths
+    assert "/api/settings/ai" in paths
 
 
 # ----------------------------------------------------------------------

@@ -320,8 +320,11 @@ def test_photo_serving_and_byte_preservation(client, config):
     assert res_legacy.status_code == 200
     assert res_legacy.content == raw_data
 
-    # 4. 驗證 Cache-Control 標頭存在以加速瀏覽器重複顯示
-    assert "public" in res_direct.headers.get("cache-control", "")
+    # 4. 驗證 Cache-Control 標頭存在以加速瀏覽器重複顯示；
+    #    SR-2（F7）：照片是私人資料，語義是 private（不進共享快取）。
+    cache_control = res_direct.headers.get("cache-control", "")
+    assert "private" in cache_control
+    assert "max-age" in cache_control
 
 
 # ----------------------------------------------------------------------

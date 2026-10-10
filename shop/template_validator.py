@@ -90,6 +90,10 @@ ALLOWED_BINDING_FIELDS: frozenset[str] = frozenset(
 #: data-bind-src 只接受圖片欄位。
 IMAGE_BINDINGS: frozenset[str] = frozenset(("item.primary_photo",))
 
+#: SR-2（F8）：Template HTML 的大小上限（1 MB bytes）。標籤 Template 是
+#: 小型排版文件；1 MB 已經比任何正常模板大兩個數量級。
+MAX_TEMPLATE_BYTES = 1_000_000
+
 
 class TemplateValidator(HTMLParser):
     """HTML 模板驗證器。
@@ -183,6 +187,16 @@ class TemplateValidator(HTMLParser):
             if scheme in lowered:
                 self.errors.append(f"註解中包含禁止的 URL 協定: {data[:50]}...")
                 return
+        # SR-2（F8）：Python HTMLParser 與瀏覽器對 `<!-->` 這類「立刻結束
+        # 的註解」處理不同（前者整段當註解、後者在第一個 `>` 就結束），
+        # 註解內的標記可能在瀏覽器裡變成真元素。含 `<`／`>` 的註解一律
+        # 拒絕；renderer 另外會直接丟棄註解（雙層防護）。
+        if "<" in data or ">" in data:
+            self.errors.append(
+                f"註解包含標記字元（< 或 >），不同 HTML 解析器可能產生歧義: "
+                f"{data[:50]}..."
+            )
+            return
         self._check_css(data, where="註解")
 
     def _check_css(self, css: str, *, where: str = "CSS") -> None:
@@ -207,6 +221,11 @@ class TemplateValidator(HTMLParser):
 
 def validate_template(html: str) -> None:
     """驗證 Template，失敗拋 ValidationError。"""
+    if len(html.encode("utf-8")) > MAX_TEMPLATE_BYTES:
+        raise ValidationError(
+            f"Template 過大：{len(html.encode('utf-8'))} bytes，"
+            f"上限 {MAX_TEMPLATE_BYTES} bytes"
+        )
     validator = TemplateValidator()
     errors = validator.validate(html)
     if errors:

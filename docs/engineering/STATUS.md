@@ -1,15 +1,29 @@
 # ItemTrace Engineering Status
 
-最後更新：2026-10-10 18:35  
-當前階段：SR-1 安全修復完成（F1/F2/F3/F5/F6；本地 commit，未 push）  
-遠端狀態：本地領先 origin/main（本階段 commit 後 13 ahead；未 push）  
-測試驗證：`pytest -q` 完全通過，全 1013 測試無失敗、無跳過
+最後更新：2026-10-10 20:30  
+當前階段：SR-2 資源上限／資訊衛生／列印安全完成（F4/F7/F8；本地 commit，未 push）  
+遠端狀態：本地領先 origin/main（本階段 commit 後 14 ahead；未 push）  
+測試驗證：`pytest -q` 完全通過，全 1049 測試無失敗、無跳過
 
 ---
 
 ## 當前階段
 
-**SR-1：安全修復（本機應用）** ← **COMPLETED**
+**SR-2：資源上限、資訊衛生與列印安全（本機應用）** ← **COMPLETED**
+
+完成時間：2026-10-10  
+Commit：`feat: sr-2 resource limits, caching hygiene, and print pipeline hardening`（本地，未 push）
+報告：`docs/engineering/SECURITY-AUDIT.md`（新增「SR-2 修復狀態」節）
+
+完成內容：
+- ✓ **F4 資源上限**：`shop/limits.py` 單一事實來源＋config 可覆寫（body 32 MiB、單檔 24 MiB、每請求 20 檔、圖片 50 MP、列印光柵 60 MP、AI 10 次/分、Template 1 MB）；`BodySizeLimitMiddleware`（純 ASGI；Content-Length 直拒＋chunked 逐塊累計）413 於路由前；上傳邊讀邊檢查、先前成功檔案保留；JPEG/PNG 零解碼像素判讀；analyze＋settings 測試共用滑動視窗（429＋Retry-After）；列印尺寸在啟動瀏覽器前先擋
+- ✓ **F7 資訊衛生**：`/docs`、`/openapi.json`、`/redoc` 預設 404（`enable_docs` 明示開啟）；API `Cache-Control: no-store`、照片 `private, max-age`、靜態資產維持快取；`ConfigError` 對外通用化（完整原因只進伺服器 console）；404 不回 DATA_ROOT 路徑
+- ✓ **F8 列印管線**：重驗發現**兩個實測 mXSS**（`<!-->` 立即結束註解、實體編碼標記解碼後原樣輸出）——renderer 改「重新序列化」：註解丟棄、文字 escape（`<style>` raw text 除外）、屬性 allowlist（`on*` 不輸出）、渲染前重新驗證；validator 加嚴（註解含 `<`/`>` 拒絕）；列印照片 inline 只收 raster MIME；**sandbox 預設保留**（實測新版 headless 不需 `--no-sandbox`；受限環境 `ITEMTRACE_PRINT_NO_SANDBOX=1` 明示退回）；未採用會壞 `--print-to-pdf` 的 `--blink-settings=scriptEnabled=false`（實測證據在稽核報告）
+- ✓ 驗證：`tests/test_security_sr2.py` 30 測試（含**真實 Chromium canary PDF**：`MARKER-OK` 留存、`SCRIPT-RAN` 不存在）；SR-1 保護全數重驗通過（17 安全測試＋完整套件）
+- ✓ 測試：+36（SR-2 30＋config 文件參數化 6）；全 1049 通過；未刪除／跳過／弱化既有測試（3 個既有契約測試依 SR-2 政策更新並強化）
+- ✓ 零 schema migration、無登入系統、未動 Phase 3 功能；殘餘限制（單行程節流、列印瀏覽器 JS 引擎仍啟用）已誠實文件化
+
+### SR-1 安全修復（前序；已完成）
 
 完成時間：2026-10-10  
 Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media hardening`（本地，未 push）
@@ -91,6 +105,7 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 - Phase 2C-C：自主性 Live 驗證（`5a4c792`；報告 AI-AUTONOMY-VALIDATION.md）
 - Phase 2C-D：撤銷安全、描述與衝突處理（`79eaecc`）
 - Security Audit 1：桌面應用唯讀安全稽核（`3e002d2`；F1–F8 報告）
+- SR-1：安全修復 F1/F2/F3/F5/F6（`24d1909`；Host／Origin／標頭、key 不轉送、LAN opt-in、媒體硬化）
 
 ---
 
@@ -98,11 +113,11 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 
 | 項目 | 數值 | 備註 |
 |---|---|---|
-| 測試檔案數 | 39 | conftest + 38 test_*.py（SR-1 新增 test_security.py） |
-| 總測試數 | 1013 | 全 pytest 計數（SR-1 +19：安全 17＋文件參數化 2） |
-| 通過 | 1013 ✓ | 100% pass rate |
+| 測試檔案數 | 40 | conftest + 39 test_*.py（SR-2 新增 test_security_sr2.py） |
+| 總測試數 | 1049 | 全 pytest 計數（SR-2 +36：安全 30＋config 文件參數化 6） |
+| 通過 | 1049 ✓ | 100% pass rate |
 | 失敗 | 0 | 零失敗 |
-| 跳過 | 0 | 無跳過 |
+| 跳過 | 0 | 無跳過（本機有 Chromium／PyMuPDF，列印與 canary 測試皆實跑） |
 | 覆蓋率 | 未測 | 建議後續補充 |
 
 **測試框架**：pytest（可選 pytest-cov 補充覆蓋率）
@@ -116,8 +131,9 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 - **V3 核心驗收**：test_v3_core_slice.py (15) —— 原始 5 情境 + Phase 1B-A 5 項 + Phase 2A 1 項 + Phase 2B 2 項 + Phase 2C-B 1 項 + Phase 2C-D 1 項
 - **評測 harness**：test_evaluate_models.py (7)、test_validate_autonomy_live.py (2) —— 離線守門（不碰網路）
 - **安全（SR-1）**：test_security.py (17) —— Host／Origin／自訂標頭、key 不轉送（canary＋接收器）、綁定 opt-in、媒體標頭、CSP/escaping 靜態守門
+- **安全（SR-2）**：test_security_sr2.py (30) —— body／單檔／檔數／像素／列印尺寸上限、AI 節流、docs 開關、快取政策、錯誤訊息去路徑化、註解／實體 mXSS、render-time 驗證、sandbox 命令、raster MIME、真實 Chromium canary PDF
 
-**最近運行**：2026-10-10，`pytest -q --junitxml` → tests=1013, failures=0, errors=0, skipped=0
+**最近運行**：2026-10-10，`pytest -q` → collected=1049（逐檔加總），failures=0，exit=0
 
 ---
 
@@ -181,10 +197,11 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 - 依 `ROADMAP.md` Phase 3：垃圾桶 UI／30 天保留／永久刪除（明確使用者意圖、可稽核）
 - 收尾選項（可穿插）：R 型跨照片身分的下一輪評測；屬性逐鍵來源標籤；Phase 1B-B
 
-### 安全後續（F4／F7／F8；SR-1 範圍外）
-- F4：body／單檔／檔數上限、`Image.MAX_IMAGE_PIXELS`、analyze 節流（Medium）
-- F7：`/docs` 開關、錯誤訊息簡化、`Cache-Control: private`（Low）
-- F8：模板 script 過濾、評估移除 `--no-sandbox`（Low）
+### 安全後續（F4／F7／F8）— SR-2 已完成
+- F4：body／單檔／檔數／像素／列印尺寸上限、analyze 節流（單行程；多 worker 限制已文件化）
+- F7：`/docs` 預設關閉（`enable_docs`）、錯誤訊息去路徑化、`Cache-Control: private`／`no-store`
+- F8：列印輸出重新序列化（註解丟棄＋文字 escape＋屬性白名單＋render 前重驗）；sandbox 預設保留
+- 殘餘（已知）：列印瀏覽器 JS 引擎仍啟用（防線在「輸出不含可執行內容」）；單行程節流重啟歸零；未對 HTML 解析器差異做 fuzzing
 
 ### 短期（Phase 2–3）
 - Phase 2：AI Contract 2.0 —— **完成（2A/2B/2C-A/2C-B/2C-C/2C-D）**
@@ -222,8 +239,9 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 | 【安全】F5 現值綁 0.0.0.0 | High（as-configured） | **已解決（SR-1）** | 非 loopback 需 `allow_lan: true`；實測 0.0.0.0 未 opt-in → serve.py 拒啟 exit 2 |
 | 【安全】F3 CSRF | Medium | **已解決（SR-1）** | 變更類一律要求 `X-Requested-With: ItemTrace`＋Origin 驗證；實測無標頭→403 |
 | 【安全】F6 前端 XSS／媒體 | Medium | **已解決（SR-1）** | escapeHtml 全面＋CSP/nosniff＋非圖片附件化；瀏覽器 E2E 驗證 |
-| 【安全】F4 資源上限 | Medium | 開放（SR-1 範圍外） | upload/像素/節流上限；列安全後續 |
-| 【安全】F7／F8 縱深 | Low | 開放（SR-1 範圍外） | docs 開關、模板 script 過濾等；列安全後續 |
+| 【安全】F4 資源上限 | Medium | **已解決（SR-2）** | body/單檔/檔數/像素/列印尺寸上限＋AI 節流；413/400/429；殘餘：單行程計數器（已文件化） |
+| 【安全】F7 資訊衛生 | Low | **已解決（SR-2）** | `/docs` 預設 404（`enable_docs` 開啟）；API `no-store`／照片 `private`；ConfigError 去路徑化 |
+| 【安全】F8 列印管線 | Low（重驗後為可執行 mXSS，Medium） | **已緩解（SR-2）** | 實測兩個 mXSS 已修（renderer 重新序列化＋render 前重驗）；sandbox 預設保留；殘餘：瀏覽器 JS 引擎仍啟用（未 fuzz 全解析器差異） |
 | 屬性逐鍵來源標籤（✨AI／✍手動） | 低 | 開放 | 目前以 banner＋事件/建議可追溯；逐鍵 UI 標籤後續 |
 | 生活備忘欄位設計 | 中 | 開放 | Phase 1B-B；參考 FEATURE-PLAN.md, JOB-TO-BE-DONE.md |
 | 搜尋效能基線 | 低 | 未測 | Phase 5 時詳細評估 |
@@ -367,7 +385,7 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 
 ---
 
-## SR-1 變更清單（本階段 commit）
+## SR-1 變更清單（前次 commit `24d1909`）
 
 | 檔案 | 變更 |
 |---|---|
@@ -389,15 +407,41 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 
 ---
 
+## SR-2 變更清單（本階段 commit）
+
+| 檔案 | 變更 |
+|---|---|
+| `shop/limits.py` | 新增：上限常數（body／單檔／檔數／像素／列印光柵／AI 節流）、`image_dimensions`（JPEG/PNG 零解碼）、`check_image_pixels`／`check_print_pixels`、`SlidingWindowLimiter`、`read_upload_limited` |
+| `shop/errors.py` | `PayloadTooLargeError`（→413） |
+| `shop/config.py` | 新欄位：`enable_docs`、`max_request_bytes`、`max_upload_bytes`、`max_upload_files`、`max_image_pixels`、`analyze_per_minute`（含 DEFAULTS／load()） |
+| `shop/api.py` | `BodySizeLimitMiddleware`（純 ASGI；CL＋chunked）；docs 網址依 `enable_docs`（關閉時文件路徑 404 不回退 SPA）；API `no-store`；上傳端點檔數／單檔／像素檢查；analyze 過節流；`_file_response` 改 `private`；`ConfigError` 對外通用化（完整內容進 stderr） |
+| `shop/security.py` | `enforce_ai_quota`（analyze 與 settings 測試共用；429＋Retry-After） |
+| `shop/settings.py` | `/api/settings/ai/test` 過節流 |
+| `shop/template_renderer.py` | 渲染前 `validate_template`；註解丟棄；文字資料重新 HTML escape（`<style>` raw text 例外）；屬性 allowlist（`on*` 不再輸出） |
+| `shop/template_validator.py` | 註解含 `<`／`>` 拒絕；Template 1 MB 上限 |
+| `shop/print_backend.py` | `build_browser_command`（預設無 `--no-sandbox`；`ITEMTRACE_PRINT_NO_SANDBOX=1` 才加）；列印光柵上限（啟動瀏覽器前＋量測後）；`inline_photos` 只接受 raster MIME |
+| `serve.py` | 啟動訊息依 `enable_docs` 顯示（預設不指向 `/docs`） |
+| `config.example.json` | 新欄位樣板（6 個） |
+| `README.md` | 設定表新增欄位＋「資源上限與輸出衛生（SR-2）」節 |
+| `tests/test_security_sr2.py` | 新增 30 測試（F4／F7／F8；含真實 Chromium canary PDF） |
+| `tests/test_api.py`、`tests/test_settings_api.py` | `/docs`／`/openapi.json` 契約測試改「預設關閉、`enable_docs` 開啟」（覆蓋不減） |
+| `tests/test_v3_core_slice.py` | 照片 `Cache-Control` 斷言 public → private（同一斷言強度） |
+| `tests/test_phase10_docs.py` | stdlib allowlist 加 `sys`（api.py 需要；第三方偵測不變） |
+| `docs/engineering/SECURITY-AUDIT.md`、`STATUS.md`、`ROADMAP.md`、`DECISIONS.md`(D10)、`AGENTS.md` | SR-2 狀態與決策 |
+
+**未變更**：schema（零 migration）、`config.json`（使用者現值未動）、無登入系統、Phase 3 功能未動、`shop/repo.py` 與 DB 層未動。
+
+---
+
 ## 本地與遠端同步狀態
 
 | 項 | 狀態 |
 |---|---|
 | Branch | main |
-| Ahead/Behind | 13 ahead, 0 behind（未 push；本階段 commit 後） |
+| Ahead/Behind | 14 ahead, 0 behind（未 push；本階段 commit 後） |
 | Uncommitted Changes | 0（本階段變更全數進入獨立 commit） |
 | 衝突 | 無 |
-| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61`、`7927faf`、`5a4c792`、`79eaecc`、`3e002d2` —— 未修改、未 amend、未 rebase |
+| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61`、`7927faf`、`5a4c792`、`79eaecc`、`3e002d2`、`24d1909` —— 未修改、未 amend、未 rebase |
 
 ---
 
@@ -409,7 +453,7 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 - [ ] 30 天保留與永久刪除（明確使用者意圖、可稽核；原照片保護規則先定案）
 - [ ] 補充測試、全測試通過
 
-（收尾選項可穿插：R 型跨照片身分的下一輪 prompt 評測；屬性逐鍵來源標籤；Phase 1B-B；安全後續 F4／F7／F8。）
+（收尾選項可穿插：R 型跨照片身分的下一輪 prompt 評測；屬性逐鍵來源標籤；Phase 1B-B。）
 
 ### AI-Native 架構研究對照（`docs/engineering/AI-NATIVE-ARCHITECTURE.md`）
 - ✓ S1（提案命名空間）→ Phase 2B：`attribute:<key>` 受驗證契約
@@ -444,3 +488,4 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 - **2026-10-10**：Phase 2C-D 完成——過期 undo 防護（409 零副作用＋逐欄位批次＋UI 逐項說明）；描述與跨照片身分 prompt 上線；banner 修訂前後值；可重複 Live 驗證入口；Live 回評：C1 描述 ✓、C6 雙身分 ✓、P/S/F ✓、R 型仍可能擇一（限制記錄）；測試基線 983 → 994
 - **2026-10-10**：Security Audit 1 完成（唯讀）——F1 DNS rebinding／Host 未驗證、F2 API key 轉送、F3 CSRF、F4 資源上限、F5 0.0.0.0 綁定、F6 前端 XSS、F7/F8 縱深；正面清單（穿越防護、秘密衛生、參數化 SQL 等）；情境判定與 SR-1 修復建議；測試基線不變 994（未改任何程式碼／設定／測試）
 - **2026-10-10**：SR-1 完成——Host／Origin／`X-Requested-With` 守門（F1/F3）、已存 key 只送 preset＋自訂 URL 需臨時 key（F2）、LAN opt-in＋綁定實測 loopback（F5）、escaping＋CSP／nosniff＋媒體附件化＋移除 inline 處理器（F6）；修復後重演原攻擊全數攔下；測試基線 994 → 1013
+- **2026-10-10**：SR-2 完成——資源上限（body／單檔／檔數／像素／列印光柵；413/400；先前成功檔案保留）＋AI 節流（429＋Retry-After）；`/docs` 預設關閉、API `no-store`／照片 `private`、錯誤訊息去路徑化；列印管線重新序列化並實測修復兩個 mXSS（`<!-->` 註解、實體編碼標記）＋sandbox 預設保留；測試基線 1013 → 1049（+36）

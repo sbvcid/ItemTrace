@@ -15,6 +15,10 @@ class ShopError(Exception):
     """本專案所有資料存取例外的基底類別。"""
 
 
+class PayloadTooLargeError(ShopError):
+    """請求或檔案超過資源上限（SR-2／F4）→ 413。"""
+
+
 class NotFoundError(ShopError):
     """指定的資料不存在。"""
 

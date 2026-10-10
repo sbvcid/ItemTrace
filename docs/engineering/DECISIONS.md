@@ -299,6 +299,60 @@ Security Audit 1 確認（隔離實測）：F1 DNS rebinding（無 Host/Origin �
 
 ---
 
+## D10. SR-2 資源上限、輸出衛生與列印管線硬化（2026-10-10）
+
+### 背景
+Security Audit 1 的 F4（資源上限）、F7（資訊衛生）、F8（列印管線）在 SR-2
+逐一重驗後實作。F8 重驗時發現兩個**可實際執行 JS** 的 mXSS（見
+SECURITY-AUDIT.md「SR-2」節）：立即結束註解（`<!-->`）與實體編碼標記
+（`&lt;img …&gt;`）都能穿過存檔驗證、由 renderer 原樣重送進列印瀏覽器。
+
+### 決定
+1. **資源上限是明示的 config 欄位**（`shop/limits.py` 為單一事實來源）：
+   body 32 MiB、單檔 24 MiB、每請求 20 檔、圖片 50 MP、列印光柵 60 MP、
+   AI 每分鐘 10 次、Template 1 MB。超限回 413／400／429；**先前已成功
+   的檔案保留**，不因後段失敗回滾。上傳端**不設型別白名單**（D6：證據
+   原檔不可被拒收），安全處理放在輸出端（SR-1 附件化／CSP、SR-2
+   inline MIME 白名單、像素上限）。
+2. **body 上限用純 ASGI middleware**：有 Content-Length 直接拒；chunked
+   逐塊累計，超限由 middleware 自己送 413（FastAPI 會把 body 讀取例外
+   吞成 400，所以不能只丟例外）。
+3. **像素防護零解碼優先**：JPEG（SOF）／PNG（IHDR）在上傳時讀檔頭判寬高；
+   Pillow 只在 analyze 縮圖時作為其他格式的兜底。
+4. **AI 節流是單行程滑動視窗**（不引入 Redis 等外部服務）；限制誠實
+   文件化：多 worker 時為 N 倍、重啟歸零。
+5. **列印輸出採「重新序列化」策略**：renderer 不再原樣轉貼模板——
+   註解丟棄、文字 escape（`<style>` raw text 除外）、屬性 allowlist、
+   render 前再驗一次。validator 同步加嚴（註解含 `<`／`>` 拒絕）。
+6. **列印瀏覽器預設保留 sandbox**：實測本機新版 headless 不需
+   `--no-sandbox`；受限環境用 `ITEMTRACE_PRINT_NO_SANDBOX=1` 明示退回。
+   實測 `--blink-settings=scriptEnabled=false` 會讓 `--print-to-pdf` 失效，
+   不採用；JS 的防線在 renderer 端（輸出不可能含可執行內容）。
+7. **API 文件預設關閉**（`enable_docs` 開發選項）；API `no-store`、
+   照片 `private`、靜態資產維持可快取；`ConfigError` 對外通用化、細節
+   只進伺服器 console。
+
+### 取捨
+- 手動 curl／自訂工具在多檔上傳時會拿到 413／400 而非默默接受；換得
+  「小檔大像素」與巨量 body 不會打爆記憶體。
+- 模板作者若在註解裡用 `<`／`>`（例如 `<!-- a > b -->`）存檔會被拒——
+  訊息明確，且此類註解在列印情境沒有功能價值。
+- 節流不是分散式；以本專案「local-first、單一桌面實例」的定位，這是
+  刻意取捨（文件已載明多 worker 的語義）。
+- 列印 JS 引擎仍開著；我們選擇「不讓可執行內容抵達瀏覽器」而不是
+  「關 JS」（後者在目前 Chromium 沒有可靠的 CLI 開關，實測會壞）。
+
+### 驗證
+- `tests/test_security_sr2.py`（30 測試）：body（CL＋chunked）、單檔／檔數／
+  像素、列印尺寸上限、節流與視窗行為、docs 開關、快取政策、錯誤訊息
+  去路徑化、註解／實體 mXSS、render-time 驗證、sandbox 命令契約、
+  raster MIME 白名單、**真實 Chromium canary PDF**（無 `SCRIPT-RAN`）。
+- 完整回歸見 `STATUS.md`；SR-1 測試全數保留。
+
+**狀態**：✓ Accepted（SR-2）
+
+---
+
 ## 開放問題
 
 | 編號 | 問題 | 優先級 | 決策期限 |
@@ -316,4 +370,5 @@ Security Audit 1 確認（隔離實測）：F1 DNS rebinding（無 Host/Origin �
 - **2026-10-09**：初始版本建立，記錄 Phase 0–Phase 7 的關鍵決策
 - **2026-10-10**：新增 D8（AI 自動更新邊界與復原安全，Phase 2C-B/C/D 實作與驗證）
 - **2026-10-10**：新增 D9（SR-1 安全基線：Host／Origin／標頭、key 外送、綁定、媒體輸出）
+- **2026-10-10**：新增 D10（SR-2：資源上限、輸出衛生、列印管線硬化）
 

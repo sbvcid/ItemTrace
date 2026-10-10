@@ -25,6 +25,7 @@ import ipaddress
 import socket
 from urllib.parse import urlsplit
 
+from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -164,3 +165,24 @@ def check_request(request: Request, allowed_hosts: frozenset[str]) -> Response |
                 },
             )
     return None
+
+
+def enforce_ai_quota(request: Request) -> None:
+    """SR-2（F4）：AI provider 呼叫端點共用的節流（analyze／settings 測試）。
+
+    限流器掛在 `app.state.analyze_limiter`（單一行程；多 worker 的限制
+    見 shop/limits.py docstring）。超限回 429 並附 Retry-After。
+    """
+    limiter = getattr(request.app.state, "analyze_limiter", None)
+    if limiter is None:
+        return
+    if not limiter.consume():
+        retry = limiter.retry_after() or 60
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"AI 分析請求過於頻繁（每分鐘上限 {limiter.limit} 次）；"
+                f"請在 {retry} 秒後再試。"
+            ),
+            headers={"Retry-After": str(retry)},
+        )

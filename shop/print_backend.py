@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .errors import ValidationError
+from . import limits
 
 #: 1 inch = 25.4 mm。列印全程用這組常數換算，不用任何近似值。
 MM_PER_INCH = 25.4
@@ -84,6 +85,19 @@ _SRC_PATTERN = re.compile(r'src="(?P<quote>)(?P<value>/files/[^"]*)(?P=quote)')
 
 #: 列印文件預設名稱前綴（會出現在 Windows 列印佇列裡）。
 JOB_TITLE = "ItemTrace"
+
+#: SR-2（F8）：在**受限環境**才允許退回 `--no-sandbox` 的明確開關。
+#: 預設不加 —— 實測（2026-10-10）本機 Chrome/Edge 的新版 headless
+#: `--print-to-pdf` 不需要 `--no-sandbox` 就能運作；sandbox 保留時，
+#: 就算列印 HTML 出了意外，執行範圍仍被 Chromium 的沙箱限制住。
+NO_SANDBOX_ENV = "ITEMTRACE_PRINT_NO_SANDBOX"
+
+#: 可以 inline 成 data URI 的照片型別（SR-2）。非 raster 型別（例如被
+#: 命名成照片的 .svg/.html）不 inline —— 與其把可疑內容送進排版引擎，
+#: 不如跟讀不到檔案一樣留白。
+SAFE_INLINE_IMAGE_MIME: frozenset[str] = frozenset((
+    "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp",
+))
 
 
 class PrintUnavailableError(ValidationError):
@@ -227,6 +241,36 @@ def find_browser() -> str:
     )
 
 
+def build_browser_command(browser: str, pdf_path: Path, html_path: Path) -> list[str]:
+    """組出 headless Chromium 的列印命令。
+
+    參數刻意保持最小（`shell=False`、參數陣列、無使用者可控值）。
+
+    SR-2（F8）沙箱決策（逐項有實測依據，見 SECURITY-AUDIT.md「SR-2」節）：
+
+    * **預設不加 `--no-sandbox`**：本機實測（Chrome 與 Edge 的新版
+      headless）不加也能穩定產生 PDF；保留 sandbox 是多一層隔離。
+    * **不採用 `--blink-settings=scriptEnabled=false`**：實測在本機
+      Edge 上會讓 `--print-to-pdf` 直接不產生檔案（print pipeline 依賴
+      被關掉的機制），不能拿來當停用 script 的手段。真正的防線是
+      renderer 端「輸出不可能含可執行內容」（見 template_renderer.py）。
+    * 少數環境（受限容器、特殊 CI）sandbox 起不來時，用環境變數
+      `ITEMTRACE_PRINT_NO_SANDBOX=1` 明確退回；不是預設值。
+    """
+    command = [
+        browser,
+        "--headless",
+        "--disable-gpu",
+        "--no-pdf-header-footer",
+        "--run-all-compositor-stages-before-draw",
+        f"--print-to-pdf={pdf_path}",
+        html_path.as_uri(),
+    ]
+    if os.environ.get(NO_SANDBOX_ENV) == "1":
+        command.insert(1, "--no-sandbox")
+    return command
+
+
 def _require_pymupdf() -> Any:
     try:
         import pymupdf
@@ -263,12 +307,20 @@ def inline_photos(html: str, reader: Callable[[str], bytes | None]) -> str:
 
     只有 `/files/` 開頭的 src 會被替換。Template 是不可信輸入，
     validator 已經擋掉外部 URL，所以這個前綴只會是本站照片。
+
+    SR-2（F8）：只 inline raster 型別（見 `SAFE_INLINE_IMAGE_MIME`）。
+    擴檔名不可信（一張叫 photo.jpg 的檔案可能是任何 bytes），所以型別
+    由檔名推得後必須在白名單內；不在白名單就維持原 src —— 與讀不到
+    檔案一致（預覽空白），而不是把可疑內容送進排版引擎。
     """
     if FILES_MOUNT not in html:
         return html
 
     def replace(match: "re.Match[str]") -> str:
         relative = match.group("value")[len(FILES_MOUNT):]
+        mime = mimetypes.guess_type(relative)[0] or ""
+        if mime not in SAFE_INLINE_IMAGE_MIME:
+            return match.group(0)
         try:
             payload = reader(relative)
         except Exception:
@@ -277,7 +329,6 @@ def inline_photos(html: str, reader: Callable[[str], bytes | None]) -> str:
             return match.group(0)
         if payload is None:
             return match.group(0)
-        mime = mimetypes.guess_type(relative)[0] or "application/octet-stream"
         encoded = base64.b64encode(payload).decode("ascii")
         return f'src="data:{mime};base64,{encoded}"'
 
@@ -341,16 +392,7 @@ def html_to_pdf(html: str, page_mm: tuple[float, float] | None) -> bytes:
             encoding="utf-8",
         )
 
-        command = [
-            browser,
-            "--headless",
-            "--disable-gpu",
-            "--no-sandbox",
-            "--no-pdf-header-footer",
-            "--run-all-compositor-stages-before-draw",
-            f"--print-to-pdf={pdf_path}",
-            html_path.as_uri(),
-        ]
+        command = build_browser_command(browser, pdf_path, html_path)
         try:
             completed = subprocess.run(
                 command,
@@ -729,8 +771,14 @@ def print_html(
     if photo_reader is not None:
         html = inline_photos(html, photo_reader)
     page_mm = resolve_page_mm(width_mm, height_mm, unit)
+    # SR-2（F4）：已知尺寸時先擋，不啟動瀏覽器也不光柵化。
+    if page_mm:
+        limits.check_print_pixels(page_mm[0], page_mm[1], dpi)
     pdf_bytes = html_to_pdf(html, page_mm)
     pdf_width_mm, pdf_height_mm = measure_pdf_mm(pdf_bytes)
+    # 沒有宣告尺寸（page_mm=None）時，實際大小只有量了 PDF 才知道 ——
+    # 光柵化之前再檢查一次。
+    limits.check_print_pixels(pdf_width_mm, pdf_height_mm, dpi)
 
     target = page_mm if page_mm else (pdf_width_mm, pdf_height_mm)
     pixmap = rasterize(pdf_bytes, dpi)
@@ -770,6 +818,10 @@ def build_pdf(
     if photo_reader is not None:
         html = inline_photos(html, photo_reader)
     page_mm = resolve_page_mm(width_mm, height_mm, unit)
+    # SR-2（F4）：列印尺寸對應的光柵量也設上限（見 print_html 的說明）。
+    if page_mm:
+        limits.check_print_pixels(page_mm[0], page_mm[1], DEFAULT_DPI)
     pdf_bytes = html_to_pdf(html, page_mm)
     pdf_width_mm, pdf_height_mm = measure_pdf_mm(pdf_bytes)
+    limits.check_print_pixels(pdf_width_mm, pdf_height_mm, DEFAULT_DPI)
     return pdf_bytes, pdf_width_mm, pdf_height_mm

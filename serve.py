@@ -57,7 +57,12 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"資料根目錄：{config.data_root}")
     print(f"資料庫     ：{config.database}")
-    print(f"開啟       ：http://{host}:{port}/docs")
+    if config.enable_docs:
+        print(f"開啟       ：http://{host}:{port}/docs（enable_docs=true）")
+    else:
+        print(f"開啟       ：http://{host}:{port}/")
+        print("             API 文件預設關閉；開發時可在 config.json 設 "
+              '"enable_docs": true')
     uvicorn.run(
         "shop.api:create_app",
         factory=True,

@@ -19,6 +19,7 @@ DATA_ROOT 底下還有 catalog.db 與 config.json，不能一併端出去。
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Iterator
@@ -38,12 +39,18 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, ai_client, ai_config, config as config_mod, db as db_mod, ids
 from . import inbox as inbox_mod
+from . import limits
 from . import photos as photos_mod
 from . import print_backend as print_backend_mod
 from . import template_renderer as template_renderer_mod
 from .ai_config import AiConfigError
 from .config import Config, ConfigError
-from .errors import ConflictError, NotFoundError, ValidationError
+from .errors import (
+    ConflictError,
+    NotFoundError,
+    PayloadTooLargeError,
+    ValidationError,
+)
 from . import evidence as evidence_mod
 from . import security
 from .models import Item, Photo
@@ -94,6 +101,90 @@ router = APIRouter()
 #: 見本模組 docstring 的說明 —— 做成參數是為了不把政策藏起來。
 DEFAULT_GROUP_GAP_MINUTES = 30
 
+#: SR-2（F7）：API 文件路徑；未開啟時連 SPA 回退都不服務這幾個路徑，
+#: 免得「/openapi.json 回 index.html」這種看似可用實則誤導的回應。
+_DOC_PATHS = frozenset({"docs", "openapi.json", "redoc"})
+
+
+class BodySizeLimitMiddleware:
+    """在路由前限制 HTTP body 大小（SR-2／F4）。
+
+    兩條路都擋：
+
+    1. 有 `Content-Length`：直接與上限比較，不讀任何 body。
+    2. 沒有（chunked）：包住 ASGI `receive` 累計實際位元組。超過時**由
+       middleware 自己送出 413**，並讓內層看到 `http.disconnect` ——
+       不能只丟例外：FastAPI 讀 body 的 except 會把任何解析例外吞成
+       400「error parsing the body」，這樣超限就會變成語義錯誤的回應。
+       413 送出後，內層對斷線的反應（400/500）一律不再往外送。
+
+    超限回 413 JSON（與全站錯誤形狀一致）並附 nosniff。
+    """
+
+    def __init__(self, app, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = int(max_bytes)
+
+    @staticmethod
+    def _content_length(scope) -> str | None:
+        """從 ASGI scope 取 Content-Length（純 stdlib，不依賴框架型別）。"""
+        for key, value in scope.get("headers", ()):
+            if key.lower() == b"content-length":
+                return value.decode("latin-1")
+        return None
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        declared = self._content_length(scope)
+        if declared and declared.isdigit() and int(declared) > self.max_bytes:
+            await self._send_rejection(scope, receive, send)
+            return
+
+        received = 0
+        rejected = False
+
+        async def limited_receive():
+            nonlocal received, rejected
+            if rejected:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    rejected = True
+                    await self._send_rejection(scope, receive, send)
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def tracking_send(message):
+            if rejected:
+                return  # 413 已送出；內層的後續回應全部丟棄
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, tracking_send)
+        except BaseException:
+            # 內層對「讀 body 時被斷線」的處理（FastAPI 400、ClientDisconnect
+            # 等）在已拒絕的情況下不需要也不該外洩。
+            if not rejected:
+                raise
+
+    async def _send_rejection(self, scope, receive, send) -> None:
+        response = JSONResponse(
+            status_code=413,
+            content={
+                "detail": (
+                    f"請求 body 超過上限 {self.max_bytes // (1024 * 1024)} MB；"
+                    "請減少張數或縮小檔案。"
+                )
+            },
+            headers={"X-Content-Type-Options": "nosniff"},
+        )
+        await response(scope, receive, send)
+
 
 def get_config(request: Request) -> Config:
     return request.app.state.config
@@ -110,6 +201,9 @@ Repo = Annotated[Repository, Depends(get_repo)]
 
 def create_app(config: Config | None = None) -> FastAPI:
     cfg = config or config_mod.load()
+    # SR-2（F7）：互動式 API 文件預設關閉（桌面單人使用不需要介面地圖；
+    # 需要開發時在 config.json 設 "enable_docs": true）。
+    docs_enabled = bool(cfg.enable_docs)
     app = FastAPI(
         title="商品證據與歸檔工具",
         version=__version__,
@@ -117,8 +211,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             "local-first 商品證據與歸檔工具的 HTTP 介面。"
             "所有寫入都會留下 events，照片只存相對 DATA_ROOT 的路徑。"
         ),
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
     app.state.config = cfg
+    # SR-2（F4）：AI provider 呼叫的節流（單一行程；限制見 shop/limits.py）。
+    app.state.analyze_limiter = limits.SlidingWindowLimiter(
+        cfg.analyze_per_minute, limits.ANALYZE_WINDOW_SECONDS
+    )
 
     # SR-1（SECURITY-AUDIT F1/F3）：Host／Origin 驗證＋變更端點自訂標頭；
     # 回應統一套上 nosniff／Referrer-Policy，HTML 另加 CSP 與 frame 保護。
@@ -132,10 +233,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
+        # SR-2（F7）：API 回應帶私人資料（紀錄、設定、事件），一律 no-store，
+        # 不進任何共享快取；靜態資產與媒體另見其各自的政策。
+        if request.url.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
         if response.headers.get("content-type", "").startswith("text/html"):
             response.headers.setdefault("Content-Security-Policy", security.APP_CSP)
             response.headers.setdefault("X-Frame-Options", "DENY")
         return response
+
+    # SR-2（F4）：body 大小上限要在最外層 —— 超限的請求不進守門、
+    # 不進路由、不碰資料庫。放在 security guard 之後加入，成為最外圈。
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=cfg.max_request_bytes)
 
     _register_error_handlers(app)
     app.include_router(router)
@@ -145,7 +254,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     def serve_file(path: str, cfg: Annotated[Config, Depends(get_config)]) -> FileResponse:
         return _serve_file(cfg, path)
 
-    _register_web(app)
+    _register_web(app, docs_enabled)
     _register_ui(app)
 
     return app
@@ -155,13 +264,15 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
 
-def _register_web(app: FastAPI) -> None:
+def _register_web(app: FastAPI, docs_enabled: bool = False) -> None:
     """掛載 ItemTrace V3 現代零建置 Web 介面（web/ 目錄）。
 
     SPA 路由契約：
     1. 非 /api/* 與非 /files/* 的請求，若檔案存在則返回靜態檔案（如 .css, .js）。
     2. 其他前端路由（/capture, /i/:id, /settings 等）回退至 web/index.html 由客戶端 router 處理。
     3. 不干擾 /api/* 的 404 回應。
+    4. SR-2（F7）：API 文件停用時，/docs、/openapi.json、/redoc 明確 404，
+       不回退成 index.html（避免「看似文件、實際是網頁」的誤導）。
     """
     if not WEB_DIR.is_dir() or not (WEB_DIR / "index.html").is_file():
         return
@@ -170,6 +281,11 @@ def _register_web(app: FastAPI) -> None:
     async def serve_spa(full_path: str) -> FileResponse:
         if full_path.startswith("api/"):
             raise NotFoundError(f"API 端點不存在：/{full_path}")
+        if not docs_enabled and full_path.rstrip("/") in _DOC_PATHS:
+            raise NotFoundError(
+                f"API 文件已停用：/{full_path}（開發時可在 config.json 設 "
+                '"enable_docs": true）'
+            )
         if full_path:
             candidate = (WEB_DIR / full_path).resolve()
             if candidate.is_file() and candidate.is_relative_to(WEB_DIR.resolve()):
@@ -241,6 +357,7 @@ def _register_error_handlers(app: FastAPI) -> None:
         (ValidationError, 400),
         (ConflictError, 409),
         (ConfigError, 400),
+        (PayloadTooLargeError, 413),
     ):
         app.add_exception_handler(
             exc_type,
@@ -261,6 +378,11 @@ def _detail(exc: Exception) -> Any:
             {"loc": list(error.get("loc", [])), "msg": error.get("msg", "")}
             for error in exc.errors()
         ]
+    if isinstance(exc, ConfigError):
+        # SR-2（F7）：設定錯誤可能帶絕對路徑／內部設定值；完整內容只留在
+        # 伺服器 console，回應給呼叫端的是不帶路徑的說明。
+        print(f"[itemtrace] 設定錯誤（僅伺服器顯示）：{exc}", file=sys.stderr)
+        return "伺服器設定錯誤（詳細資訊僅顯示在伺服器主控台）"
     return str(exc)
 
 
@@ -397,16 +519,24 @@ async def upload_photos(
 
     重複（同一商品已有同樣 sha256）不回報失敗，而是列在 skipped 裡 ——
     手機一次傳八張，其中一張重複不該讓另外七張一起白傳。
+
+    SR-2（F4）：檔數上限、單檔大小（邊讀邊檢查）與像素上限都在落盤前
+    檢查；超限回 400/413，先前已處理成功的檔案留在原處。
     """
     if not files:
         raise ValidationError("沒有收到檔案（multipart 欄位名要是 files）")
+    if len(files) > cfg.max_upload_files:
+        raise ValidationError(
+            f"一次最多 {cfg.max_upload_files} 個檔案（收到 {len(files)} 個）"
+        )
     observation = repo.get_observation(observation_id)
 
     archived: list[PhotoOut] = []
     skipped: list[PhotoSkipped] = []
     for upload in files:
-        data = await upload.read()
+        data = await limits.read_upload_limited(upload, cfg.max_upload_bytes)
         name = upload.filename or "photo.jpg"
+        limits.check_image_pixels(data, name, max_pixels=cfg.max_image_pixels)
         try:
             photo = inbox_mod.archive_bytes(
                 cfg, repo, observation.item_id, observation_id, name, data,
@@ -585,6 +715,7 @@ def analyze_item_photos(
     item_id: str,
     repo: Repo,
     cfg: Annotated[Config, Depends(get_config)],
+    request: Request,
     auto: Annotated[
         bool,
         Query(description="依政策自動套用低風險項目（可復原）；預設全部待確認"),
@@ -622,6 +753,10 @@ def analyze_item_photos(
             " 先用 Inbox 建檔並上傳照片。"
         )
     photos = _select_photos_for_analysis(photos)
+
+    # SR-2（F4）：每次 analyze 都是一次（可能付費的）provider 呼叫 ——
+    # 先過節流，超限 429，不碰設定檔也不對外連線。
+    security.enforce_ai_quota(request)
 
     try:
         ai = ai_config.load_config()
@@ -787,12 +922,22 @@ async def upload_to_inbox(
     cfg: Annotated[Config, Depends(get_config)],
     files: Annotated[list[UploadFile], File()] = None,
 ) -> InboxListing:
-    """手機上傳 → 落盤 inbox/。不寫資料庫，等按「處理」。"""
+    """手機上傳 → 落盤 inbox/。不寫資料庫，等按「處理」。
+
+    SR-2（F4）：檔數、單檔大小與像素上限與 observations 上傳同一組政策；
+    超限回 400/413，成功落盤的檔案保留（不因後面的檔案失敗而回滾）。
+    """
     if not files:
         raise ValidationError("沒有收到檔案（multipart 欄位名要是 files）")
+    if len(files) > cfg.max_upload_files:
+        raise ValidationError(
+            f"一次最多 {cfg.max_upload_files} 個檔案（收到 {len(files)} 個）"
+        )
     for upload in files:
-        data = await upload.read()
-        inbox_mod.save_to_inbox(cfg, upload.filename or "photo.jpg", data)
+        data = await limits.read_upload_limited(upload, cfg.max_upload_bytes)
+        name = upload.filename or "photo.jpg"
+        limits.check_image_pixels(data, name, max_pixels=cfg.max_image_pixels)
+        inbox_mod.save_to_inbox(cfg, name, data)
     entries = inbox_mod.scan_inbox(cfg)
     return InboxListing(
         entries=[
@@ -1122,11 +1267,15 @@ FILE_CSP = "default-src 'none'; sandbox"
 
 
 def _file_response(target: Path) -> FileResponse:
-    """媒體檔的統一回應：nosniff＋嚴格 CSP；非圖片一律附件下載。"""
+    """媒體檔的統一回應：nosniff＋嚴格 CSP；非圖片一律附件下載。
+
+    SR-2（F7）：`Cache-Control` 改 `private` —— 這些是使用者的私人照片，
+    語義上只該進單一使用者的瀏覽器快取，不進共享快取。
+    """
     headers = {
         "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": FILE_CSP,
-        "Cache-Control": "public, max-age=86400",
+        "Cache-Control": "private, max-age=86400",
     }
     if target.suffix.lower() in SAFE_INLINE_IMAGE_EXTENSIONS:
         return FileResponse(target, headers=headers)

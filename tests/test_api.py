@@ -6,12 +6,26 @@
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
 
 import pytest
 
 from tests.conftest import make_jpeg
+
+
+def _docs_enabled_client(config):
+    """開發模式客戶端：config enable_docs=true 才有 /docs 與 /openapi.json。"""
+    from fastapi.testclient import TestClient
+
+    from shop.api import create_app
+
+    return TestClient(
+        create_app(dataclasses.replace(config, enable_docs=True)),
+        base_url="http://localhost",
+        headers={"X-Requested-With": "ItemTrace"},
+    )
 
 
 def jpeg(name: str = "a.jpg", **kwargs) -> tuple:
@@ -64,17 +78,24 @@ def test_stats_counts_and_recent_events(client):
     assert body["recent"][0]["entity_id"] == item["id"]
 
 
-def test_openapi_is_available(client):
-    """SPEC §5：自動產生 OpenAPI，未來的手機 App 依它。"""
-    spec = client.get("/openapi.json").json()
-    assert "/api/items" in spec["paths"]
-    assert "/api/items/{item_id}" in spec["paths"]
-    assert "/api/observations/{observation_id}/photos" in spec["paths"]
-    assert "/files/{path}" not in spec["paths"]  # 靜態檔案刻意不進契約
+def test_openapi_is_available_when_explicitly_enabled(config):
+    """SPEC §5：自動產生 OpenAPI，未來的手機 App 依它。
+
+    SR-2（F7）：互動式 API 文件**預設關閉**（桌面單人使用不需要介面
+    地圖）—— 需要在 config.json 明示 "enable_docs": true；預設關閉的
+    行為由 tests/test_security_sr2.py 釘住。
+    """
+    with _docs_enabled_client(config) as docs_client:
+        spec = docs_client.get("/openapi.json").json()
+        assert "/api/items" in spec["paths"]
+        assert "/api/items/{item_id}" in spec["paths"]
+        assert "/api/observations/{observation_id}/photos" in spec["paths"]
+        assert "/files/{path}" not in spec["paths"]  # 靜態檔案刻意不進契約
 
 
-def test_docs_page_is_served(client):
-    assert client.get("/docs").status_code == 200
+def test_docs_page_is_served_when_explicitly_enabled(config):
+    with _docs_enabled_client(config) as docs_client:
+        assert docs_client.get("/docs").status_code == 200
 
 
 # ----------------------------------------------------------------------

@@ -150,8 +150,9 @@ def test_every_third_party_import_is_declared():
     imported = set(re.findall(r"^\s*from\s+([a-z_]+)", source, re.M)) | set(
         re.findall(r"^\s*import\s+([a-z_]+)", source, re.M)
     )
+    # 標準函式庫的 allowlist；清單外的模組一律要求在 requirements.txt。
     local = {"shop", "dataclasses", "datetime", "pathlib", "typing", "__future__",
-             "contextlib", "json"}
+             "contextlib", "json", "sys"}
     for module in sorted(imported - local):
         # python-multipart 提供 multipart
         declared = module in requirements or (

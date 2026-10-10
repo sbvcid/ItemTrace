@@ -11,6 +11,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import limits
+
 CONFIG_NAME = "config.json"
 DEFAULTS = {
     "data_root": ".",
@@ -24,6 +26,15 @@ DEFAULTS = {
     # SR-1（F1）：Host 白名單的補充項（例如自訂主機名）；loopback 與
     # 綁定位址一律自動允許。
     "allowed_hosts": [],
+    # SR-2（F7）：互動式 API 文件（/docs、/openapi.json）預設關閉；
+    # 開發時可明示開啟。
+    "enable_docs": False,
+    # SR-2（F4）：資源上限；數值與語意見 shop/limits.py。
+    "max_request_bytes": limits.MAX_REQUEST_BYTES,
+    "max_upload_bytes": limits.MAX_UPLOAD_BYTES,
+    "max_upload_files": limits.MAX_UPLOAD_FILES,
+    "max_image_pixels": limits.MAX_IMAGE_PIXELS,
+    "analyze_per_minute": limits.ANALYZE_PER_MINUTE,
 }
 
 
@@ -42,6 +53,12 @@ class Config:
     server_port: int
     allow_lan: bool = False
     allowed_hosts: tuple[str, ...] = ()
+    enable_docs: bool = False
+    max_request_bytes: int = limits.MAX_REQUEST_BYTES
+    max_upload_bytes: int = limits.MAX_UPLOAD_BYTES
+    max_upload_files: int = limits.MAX_UPLOAD_FILES
+    max_image_pixels: int = limits.MAX_IMAGE_PIXELS
+    analyze_per_minute: int = limits.ANALYZE_PER_MINUTE
 
     @property
     def config_path(self) -> Path:
@@ -111,6 +128,12 @@ def load(base_dir: Path | None = None) -> Config:
             for item in (raw.get("allowed_hosts") or [])
             if str(item).strip()
         ),
+        enable_docs=bool(raw.get("enable_docs", False)),
+        max_request_bytes=int(raw.get("max_request_bytes", limits.MAX_REQUEST_BYTES)),
+        max_upload_bytes=int(raw.get("max_upload_bytes", limits.MAX_UPLOAD_BYTES)),
+        max_upload_files=int(raw.get("max_upload_files", limits.MAX_UPLOAD_FILES)),
+        max_image_pixels=int(raw.get("max_image_pixels", limits.MAX_IMAGE_PIXELS)),
+        analyze_per_minute=int(raw.get("analyze_per_minute", limits.ANALYZE_PER_MINUTE)),
     )
 
 

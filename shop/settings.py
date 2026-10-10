@@ -35,6 +35,7 @@ from fastapi import APIRouter, Request
 
 from . import ai_config
 from . import print_config
+from . import security
 from .ai_config import AiConfigError
 from .errors import ValidationError
 from .schemas import (
@@ -244,6 +245,10 @@ def test_ai_api(body: AiSettingsUpdate, request: Request) -> AiApiTestResult:
         endpoint = ai_config.chat_endpoint(provider, base_url)
     except AiConfigError as exc:
         raise ValidationError(ai_config.redact(str(exc))) from None
+
+    # SR-2（F4）：這個端點也是一次真實 provider 呼叫，與 analyze 共用
+    # 同一條節流（超限 429），避免被拿來當免費探測／費用放大器。
+    security.enforce_ai_quota(request)
 
     payload = json.dumps({
         "model": model,

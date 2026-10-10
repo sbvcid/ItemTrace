@@ -3,11 +3,17 @@
 架構：
 Item → View Model → Binding Resolver → Renderer → Rendered HTML
 
-安全性：
-- Template 被視為不可信輸入，只透過 allowlisted binding 存取資料
-- 所有文字值經過 HTML escaping
-- 圖片 binding 經過受控的 photo resolution
-- 不執行 JavaScript、不存取任意 DB 欄位
+安全性（SR-2/F8 起比原設計更嚴格）：
+- Template 被視為不可信輸入：`render_template` 在渲染前**重新跑一次
+  `validate_template`**（save 時驗一次、render 時再驗一次；直接寫進 DB
+  的模板也擋得住）。
+- 輸出是**重新序列化**的 HTML，不是原文轉貼：
+  * 文字資料經 HTML escape（`&lt;img …&gt;` 不會在瀏覽器裡變成真標籤）
+  * 註解一律丟棄（Python HTMLParser 與瀏覽器對 `<!-->` 的解讀不同，
+    保留註解等於保留 mXSS 通道）
+  * 屬性只輸出 allowlist 內的（事件處理器 `on*` 永遠不會出現在輸出）
+- 所有資料值（binding 的文字與圖片欄位）經 HTML escaping。
+- 不執行 JavaScript、不存取任意 DB 欄位。
 """
 
 from __future__ import annotations
@@ -22,7 +28,11 @@ from .config import Config
 from .errors import ValidationError
 from .models import Item, Template
 from .repo import Repository
-from .template_validator import ALLOWED_BINDING_FIELDS
+from .template_validator import (
+    ALLOWED_ATTRS,
+    ALLOWED_BINDING_FIELDS,
+    validate_template,
+)
 
 
 #: 沒有結束標籤的元素，渲染時不要補 </img> 這種無效標記。
@@ -116,7 +126,8 @@ class TemplateRenderer(HTMLParser):
       （HTML escaped），元素內既有的靜態內容會被丟棄
     - <tag data-bind-src="item.field"> → src 屬性換成欄位值
     - 移除所有 data-bind / data-bind-src 屬性
-    - 其他屬性、靜態文字、註解、doctype 原樣保留（值會 HTML escape）
+    - 文字資料重新 escape、註解丟棄、屬性只輸出 allowlist（見模組 docstring）
+    - 其他屬性與 doctype 原樣保留（值會 HTML escape）
     """
 
     def __init__(self, view_model: TemplateViewModel) -> None:
@@ -128,12 +139,20 @@ class TemplateRenderer(HTMLParser):
         self._bind_tag: str | None = None
         self._bind_value: str = ""
         self._bind_depth: int = 0
+        # <style> 的內容是 raw text（CSS 的 `>` 不是標記），不能 escape；
+        # 其餘文字資料一律 escape 後才輸出。
+        self._raw_text_tag: str | None = None
 
     # -- helpers ---------------------------------------------------------
 
     def _render_attrs(self, attrs: list[tuple[str, str | None]]) -> str:
         parts = []
         for name, value in attrs:
+            # SR-2（F8）：只有 allowlist 內的屬性會輸出 —— 事件處理器
+            # （on*）與任何未預期屬性永遠到不了瀏覽器，即使模板繞過
+            # 存檔驗證、直接寫進資料庫。
+            if name not in ALLOWED_ATTRS:
+                continue
             if value is None:
                 parts.append(name)
             else:
@@ -166,6 +185,8 @@ class TemplateRenderer(HTMLParser):
             self._bind_tag = tag
             self._bind_value = bind_text
             self._bind_depth = 1
+        elif tag == "style":
+            self._raw_text_tag = "style"
 
     def handle_endtag(self, tag: str) -> None:
         if self._bind_tag is not None:
@@ -177,17 +198,29 @@ class TemplateRenderer(HTMLParser):
             self.output.append(
                 html.escape(self.view_model.get_field(self._bind_value))
             )
+        elif tag == "style" and self._raw_text_tag == "style":
+            self._raw_text_tag = None
         if tag not in VOID_ELEMENTS:
             self.output.append(f"</{tag}>")
 
     def handle_data(self, data: str) -> None:
         # 綁定元素內的靜態文字會被欄位值取代。
-        if self._bind_tag is None:
+        if self._bind_tag is not None:
+            return
+        if self._raw_text_tag is not None:
+            # raw text（目前只有 <style> 的 CSS）：維持原樣。
             self.output.append(data)
+            return
+        # SR-2（F8）：重新序列化時 escape 文字。HTMLParser 已把實體
+        # （&lt; 等）解碼成字元；不 escape 直接輸出的話，`&lt;img onerror…&gt;`
+        # 會在瀏覽器裡變成真正的 <img> 標籤。escape 後視覺內容不變。
+        self.output.append(html.escape(data))
 
     def handle_comment(self, data: str) -> None:
-        if self._bind_tag is None:
-            self.output.append(f"<!--{data}-->")
+        # SR-2（F8）：註解一律丟棄。Python HTMLParser 與瀏覽器對
+        # `<!-->`／`<!--->` 這一類「立刻結束的註解」處理不同，保留註解
+        # 等於保留一條 mXSS 通道；列印／預覽都不需要註解。
+        return
 
     def handle_entityref(self, name: str) -> None:
         if self._bind_tag is None:
@@ -234,9 +267,14 @@ def render_template(
         渲染後的 HTML 字串
 
     Raises:
-        RenderError: 渲染失敗
+        RenderError: 渲染失敗（含**渲染前的重新驗證**：save 時驗一次、
+            render 時再驗一次，直接寫進 DB 的違規模板也擋得住）。
     """
     try:
+        # SR-2（F8）：渲染前重新驗證。存檔端點本來就會驗，但模板也可能
+        # 由 CLI／舊資料／直接操作 DB 進來 —— 列印與預覽永遠只吃
+        # 「當下這份驗證規則通過」的模板。
+        validate_template(template.html)
         view_model = TemplateViewModel.from_item(item, repo, config)
         renderer = TemplateRenderer(view_model)
         renderer.feed(template.html)
