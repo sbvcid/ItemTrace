@@ -12,6 +12,7 @@
 6. Phase 2A：capture 部分失敗語意（靜態接線檢查；非瀏覽器端對端測試）
 7. Phase 2B：證據累積——補照片到既有紀錄、情境式重新理解、更新後仍可搜尋
 8. Phase 2C-B：證據選擇、可回復的自動套用、衝突升級（含紀錄回放）
+9. Phase 2C-D：過期 undo 防護與修訂顯示（含靜態檢查）
 """
 
 from __future__ import annotations
@@ -606,5 +607,26 @@ def test_phase2c_b_detail_autonomy_static_checks(client):
     en = client.get("/i18n/en.js").text
     for key in ("analysisApplied", "undo", "undoDone", "undoFailed",
                 "conflictNote"):
+        assert key in zh
+        assert key in en
+
+
+def test_phase2c_d_undo_guard_and_revisions_static_checks(client):
+    """Phase 2C-D 前端接線靜態檢查（非瀏覽器端對端測試）：
+
+    詳情頁在自動更新 banner 顯示修訂前後值；過期復原逐項說明。
+    """
+    detail_js = client.get("/views/record-detail.js").text
+    assert "buildRevisionDetails" in detail_js
+    assert "revisionChanged" in detail_js
+    assert "revisionFilled" in detail_js
+    assert "undoStale" in detail_js
+
+    api_js = client.get("/core/api.js").text
+    assert "listEvents" in api_js
+
+    zh = client.get("/i18n/zh-TW.js").text
+    en = client.get("/i18n/en.js").text
+    for key in ("revisionChanged", "revisionFilled", "undoStale"):
         assert key in zh
         assert key in en

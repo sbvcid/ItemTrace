@@ -1,41 +1,39 @@
 # ItemTrace Engineering Status
 
-最後更新：2026-10-10 13:10  
-當前階段：Phase 2C-C 完成（自主性驗證；本地 commit，未 push）  
-遠端狀態：本地領先 origin/main（本階段 commit 後 10 ahead；未 push）  
-測試驗證：`pytest -q` 完全通過，全 983 測試無失敗、無跳過（驗證階段未改程式碼與測試）
+最後更新：2026-10-10 15:10  
+當前階段：Phase 2C-D 完成（undo 防護、描述與身分衝突改善；本地 commit，未 push）  
+遠端狀態：本地領先 origin/main（本階段 commit 後 11 ahead；未 push）  
+測試驗證：`pytest -q` 完全通過，全 994 測試無失敗、無跳過
 
 ---
 
 ## 當前階段
 
-**Phase 2C-C：驗證自主 AI 行為（Live 模型實測）** ← **COMPLETED**（驗證階段；未改產品程式碼／schema／API／測試）
+**Phase 2C-D：撤銷安全、描述性理解與衝突處理** ← **COMPLETED**
 
 完成時間：2026-10-10  
-Commit：`docs: phase-2c-c validate autonomous ai behavior`（本地，未 push）
-報告：`docs/engineering/AI-AUTONOMY-VALIDATION.md`
+Commit：`feat: phase-2c-d undo safety, descriptions, and conflict handling`（本地，未 push）
+報告：`docs/engineering/AI-AUTONOMY-VALIDATION.md`（含 Phase 2C-D 補充驗證）
 
 完成內容：
-- ✓ **Live 實測 7 次成功＋1 次 4xx**（`google / gemini-3.5-flash-lite`，free tier，僅合成 fixture）＋新增 2 個錄製情境（C1／C4b）與 4 張合成圖
-- ✓ **修訂路徑可行（Live）**：BOSE 標籤自動填入 → 加入 SONY 標籤後 `brand/model` **自動修訂**；`country_of_origin` 自動；BOSE/SONY 兩個序號都輸出 → 同欄位矛盾 → **雙雙升級衝突確認**（政策正確攔截）
-- ✓ **使用者保護（Live）**：手打名稱不受收據影響（留待確認）；品牌/型號/購買資訊（同張收據）自動；備註完好
-- ✓ **證據選擇（Live）**：9 張紀錄送出 8 張（最早 2＋最新 6），`brand/model/serial` 全部溯源最早標籤；配件收據購買資訊升級衝突（正確不誤掛）
-- ✓ **失敗/重試（Live）**：無效模型 → 400、照片保留、零寫入；重試成功、紀錄完整
-- ✓ **描述行為（Live）**：可描述物件（馬克杯）→ `name=馬克杯`＋`category=日用品`＋`color=紅色`；**9 情境中 `attribute:description` 出現 0 次**（產品缺口，見報告 §2）
-- ✓ **缺陷重現**：過期 undo——使用者改過 brand 後，對較舊自動套用按「復原」→ 使用者值被靜默清空（報告 §4；列入 2C-D 驗收）
-- ✓ 決策性產出：2C-D 五條驗收條件（undo 防護、描述 prompt、跨照片身分聲明、修訂前後值可見、全測試＋E2E）
-- ✓ 未改產品程式碼、schema、API、既有測試；未 push；未傳任何真實資料
+- ✓ **過期 undo 防護**：復原前驗證「現值＝該次套用值」且「之後沒有任何改到同欄位的事件（值改回亦算）」；不符回 **409、零副作用**；批次 undo 逐欄位獨立
+- ✓ **UI**：banner 顯示修訂前後值（`品牌：BOSE → SONY`／`（新增）`）；過期復原逐項說明（實測 toast：「未復原：品牌（值已被後續修改，維持現值）」）
+- ✓ **描述 prompt**：看得見但認不出身分 → 描述性 `name`＋`attribute:description`（看見 vs「看起來像」），不得編造品牌/型號
+- ✓ **跨照片身分 prompt**：不同照片不同值 → 分別輸出（多值），由既有重複值偵測升級衝突
+- ✓ **Live 回評（新 prompt）**：C1 ✅ `name=紅色馬克杯`＋真描述；C6 ✅ 兩組身分都輸出→衝突；P/S/F 流程 ✅；**R 型（有上下文）仍可能擇一 → 限制誠實記錄**
+- ✓ **可重複入口**：`tools/validate_autonomy_live.py`（--allow-live 守門、合成圖限定、呼叫上限、資料目錄防誤刪）＋守門測試
+- ✓ 證據：Live 7 成功＋1 次 4xx（僅合成圖）；recorded replay 10 情境 0 問題；+11 測試（undo×6、衝突×2、靜態×1、driver 守門×2）；全 994 通過
+- ✓ 零 schema migration；未加欄位、未引入欄位鎖定子系統
 
-### Phase 2C-C 驗證結論摘要（細節見報告）
+### Phase 2C-D 撤銷語義（實作即規格）
 
-| 面向 | 結論 |
+| 情境 | 結果 |
 |---|---|
-| 自動修訂 | ✓ Live 可行（BOSE→SONY）；跨照片身分「沉默擇一」仍需 prompt 導正 |
-| 使用者保護 | ✓ Live 可行（名稱/備註不動；編輯後不再自動） |
-| 衝突處理 | ✓ 三種內容泛化（L4 回放、C4b、S3 背帶收據）；重複值偵測連模型「兩者都給」也接得住 |
-| 證據選擇 | ✓ Live 修復 L6a（最早標籤進得來） |
-| 描述契約 | ✗ `attribute:description` 從未被使用（建議最小 prompt 調整，未實作） |
-| Undo | ✗ 過期 undo 可覆寫後續編輯（已重現；2C-D 修補） |
+| 自動套用後無任何變更 | 復原 200：還原前值、建議 rejected、寫回 actor=user（該欄位之後不再自動） |
+| 使用者改過同欄位（含改掉又改回） | **409**：值/建議狀態/事件全部不動；UI 逐項列「未復原」欄位 |
+| 被較新的自動套用取代 | 舊的 409；最新那筆（未被動過）仍可復原 |
+| attributes 其他鍵被編輯 | 不影響（僅同鍵變更才擋） |
+| 批次 undo | 每欄位獨立；成功者還原、過期者維持現值 |
 
 ### Phase 2C-B 自動套用規則（實作即規格）
 
@@ -91,6 +89,7 @@ Commit：`docs: phase-2c-c validate autonomous ai behavior`（本地，未 push�
 - Phase 2B：證據累積與情境式重新理解（`22b0c22`）
 - Phase 2C-A：AI 評測與自主性政策（`dda8b61`）
 - Phase 2C-B：可回復的 AI 自動更新與證據感知自主性（`7927faf`）
+- Phase 2C-C：自主性 Live 驗證（`5a4c792`；報告 AI-AUTONOMY-VALIDATION.md）
 
 ---
 
@@ -98,9 +97,9 @@ Commit：`docs: phase-2c-c validate autonomous ai behavior`（本地，未 push�
 
 | 項目 | 數值 | 備註 |
 |---|---|---|
-| 測試檔案數 | 37 | conftest + 36 test_*.py |
-| 總測試數 | 983 | 全 pytest 計數（Phase 2C-B +21） |
-| 通過 | 983 ✓ | 100% pass rate |
+| 測試檔案數 | 38 | conftest + 37 test_*.py（2C-D 新增 test_validate_autonomy_live.py） |
+| 總測試數 | 994 | 全 pytest 計數（Phase 2C-D +11） |
+| 通過 | 994 ✓ | 100% pass rate |
 | 失敗 | 0 | 零失敗 |
 | 跳過 | 0 | 無跳過 |
 | 覆蓋率 | 未測 | 建議後續補充 |
@@ -113,10 +112,10 @@ Commit：`docs: phase-2c-c validate autonomous ai behavior`（本地，未 push�
 - AI & 分析：test_ai_*.py (15-78), test_analyze_item.py (78)
 - 前端與 UI：test_capture_ui.py (6), test_inbox_ui.py (35)
 - 列印：test_print.py (31), test_print_settings_api.py (20)
-- **V3 核心驗收**：test_v3_core_slice.py (14) —— 原始 5 情境 + Phase 1B-A 5 項 + Phase 2A 1 項 + Phase 2B 2 項 + Phase 2C-B 1 項
-- **評測 harness**：test_evaluate_models.py (7) —— 離線重播、契約回歸守門、live 需 --allow-live（不碰網路）
+- **V3 核心驗收**：test_v3_core_slice.py (15) —— 原始 5 情境 + Phase 1B-A 5 項 + Phase 2A 1 項 + Phase 2B 2 項 + Phase 2C-B 1 項 + Phase 2C-D 1 項
+- **評測 harness**：test_evaluate_models.py (7)、test_validate_autonomy_live.py (2) —— 離線守門（不碰網路）
 
-**最近運行**：2026-10-10，`pytest -q --junitxml` → tests=983, failures=0, errors=0, skipped=0
+**最近運行**：2026-10-10，`pytest -q --junitxml` → tests=994, failures=0, errors=0, skipped=0
 
 ---
 
@@ -127,7 +126,7 @@ Commit：`docs: phase-2c-c validate autonomous ai behavior`（本地，未 push�
 | 狀態 | 定義 | 範例 |
 |---|---|---|
 | **Implemented** | 程式碼存在且功能可用 | SQLite schema, FastAPI endpoints, V3 前端已實作 |
-| **Tested** | 實作已驗證，測試通過 | 983 個 pytest 全通過，V3 core slice test 驗收 |
+| **Tested** | 實作已驗證，測試通過 | 994 個 pytest 全通過，V3 core slice test 驗收 |
 | **Committed** | 變更已進入版本控制 | main branch 上的所有程式碼 |
 | **Pushed** | 變更已推送到遠端 | origin/main 的最新狀態（多個本地 commit 未 push；見下方同步狀態） |
 
@@ -144,7 +143,8 @@ Commit：`docs: phase-2c-c validate autonomous ai behavior`（本地，未 push�
 - ✓ 證據累積與情境式重新理解（Phase 2B） — **Implemented, Tested, Committed（22b0c22）, Not Pushed**
 - ✓ AI 評測 harness 與自主性政策（Phase 2C-A；工具＋文件，未改產品行為） — **Implemented, Tested, Committed（dda8b61）, Not Pushed**
 - ✓ 可回復的 AI 自動更新（Phase 2C-B：選擇策略、自動套用、undo、衝突升級） — **Implemented, Tested, Committed（7927faf）, Not Pushed**
-- ✓ 自主性驗證與殘餘缺口（Phase 2C-C：Live 實測、報告、fixture／錄製） — **Evaluated, Committed（本階段）, Not Pushed**
+- ✓ 自主性驗證與殘餘缺口（Phase 2C-C：Live 實測、報告、fixture／錄製） — **Evaluated, Committed（5a4c792）, Not Pushed**
+- ✓ 撤銷安全、描述性理解與衝突處理（Phase 2C-D） — **Implemented, Tested, Committed（本階段）, Not Pushed**
 
 ### 後端基礎
 - ✓ SQLite + WAL + STRICT 約束 — **Implemented, Tested, Committed, Pushed**
@@ -173,18 +173,12 @@ Commit：`docs: phase-2c-c validate autonomous ai behavior`（本地，未 push�
 
 ## 未完成工作
 
-### 立即待做（Phase 2C-D：驗證結論收斂，建議；依 AI-AUTONOMY-VALIDATION.md §7）
-1. **undo 過期防護**：目前值 ≠ 該次自動套用值時回 409（不再靜默覆寫後續編輯）
-2. **描述 prompt 調整**（最小）：看得見但認不出 → 以描述性 `name`＋`attribute:description`（看見 vs 推測）；C1 期望加入「必須有描述且不得編造品牌/型號」
-3. **跨照片身分聲明 prompt**：不同照片支持不同身分時分別輸出（讓既有重複值偵測升級衝突）；新增 harness 情境 C6
-4. 修訂 banner 顯示前後值（BOSE → SONY）＋確認清單保留「先前判讀（已被取代）」
-5. 全測試通過＋一次瀏覽器 E2E；零 schema migration
-
-### 接著（Phase 3：垃圾桶與資料生命週期）
+### 立即待做（Phase 3：垃圾桶與資料生命週期）
 - 依 `ROADMAP.md` Phase 3：垃圾桶 UI／30 天保留／永久刪除（明確使用者意圖、可稽核）
+- 收尾選項（可穿插）：R 型跨照片身分（有上下文時模型仍可能擇一）的下一輪評測；屬性逐鍵來源標籤；Phase 1B-B
 
 ### 短期（Phase 2–3）
-- Phase 2：AI Contract 2.0 —— **完成（2A 生命週期、2B 證據累積、2C-A 評測、2C-B 可回復自動套用、2C-C Live 驗證；2C-D 收斂待做）**
+- Phase 2：AI Contract 2.0 —— **完成（2A/2B/2C-A/2C-B/2C-C/2C-D）**
 - Phase 3：垃圾桶 & 30 天保留 + 永久刪除
 
 ### 中期（Phase 4–6）
@@ -211,9 +205,9 @@ Commit：`docs: phase-2c-c validate autonomous ai behavior`（本地，未 push�
 | 矛盾證據被靜默合併 | 中 | 已解決 | Phase 2C-B：L4 錄製輸出回放 → 購買資訊轉 `external_conflict` 確認，絕不自動併入 |
 | 最新-8 選擇會丟最早的身分照 | 中 | 已解決 | Phase 2C-B：「最早 2＋最新 6」；邊界與兩端整合測試 |
 | 模型自報信心無鑑別力 | 低 | 已驗證（全場 0.9~1.0） | 政策不得依賴信心；信心僅記錄 |
-| `attribute:description` 未被模型自發產生 | 中 | 已驗證（2C-C Live：9 情境 0 次） | 2C-D：最小 prompt 調整＋C1 驗收（見 AI-AUTONOMY-VALIDATION §2） |
-| 過期 undo 可覆寫後續編輯 | 中 | 已重現（2C-C） | 使用者改過值後按較舊的復原 → 靜默清空；2C-D：值不符回 409 |
-| 跨照片身分「沉默擇一」 | 中 | 已驗證（2C-C S1b） | 模型直接以新標籤修訂舊身分（非錯誤但無示警）；2C-D：prompt 身分聲明＋C6 |
+| `attribute:description` 未被模型自發產生 | — | 已解決 | Phase 2C-D：prompt 上線；C1 Live 回評已產生真描述（無品牌幻覺） |
+| 過期 undo 可覆寫後續編輯 | — | 已解決 | Phase 2C-D：值不符或有中間變更 → 409 零副作用；批次逐欄位＋UI 逐項說明 |
+| 跨照片身分「沉默擇一」 | 中 | 部分解決（2C-D） | C6（無上下文）：兩身分都輸出→衝突 ✓；R 型（有上下文）模型仍可能擇一 → 限制已記錄（AI-AUTONOMY-VALIDATION §2C-D） |
 | 屬性逐鍵來源標籤（✨AI／✍手動） | 低 | 開放 | 目前以 banner＋事件/建議可追溯；逐鍵 UI 標籤後續 |
 | 生活備忘欄位設計 | 中 | 開放 | Phase 1B-B；參考 FEATURE-PLAN.md, JOB-TO-BE-DONE.md |
 | 搜尋效能基線 | 低 | 未測 | Phase 5 時詳細評估 |
@@ -309,7 +303,7 @@ Commit：`docs: phase-2c-c validate autonomous ai behavior`（本地，未 push�
 
 ---
 
-## Phase 2C-C 變更清單（本階段 commit）
+## Phase 2C-C 變更清單（commit `5a4c792`，前次）
 
 | 檔案 | 變更 |
 |---|---|
@@ -324,37 +318,56 @@ Commit：`docs: phase-2c-c validate autonomous ai behavior`（本地，未 push�
 
 ---
 
+## Phase 2C-D 變更清單（本階段 commit）
+
+| 檔案 | 變更 |
+|---|---|
+| `shop/repo.py` | `undo_auto_suggestion` 過期防護（現值比對＋`_has_intervening_change` 逐鍵事件檢查；不符 ConflictError→409、零副作用） |
+| `shop/ai_client.py` | PROMPT：描述規則（看得見→描述性 name＋attribute:description；看見 vs「看起來像」）＋跨照片身分聲明（不同值分別輸出，不默默擇一） |
+| `web/views/record-detail.js` | `buildRevisionDetails`（banner 顯示前→後／新增）；`undoSuggestions` 逐欄位結果（409→未復原欄位清單） |
+| `web/core/api.js` | `listEvents` |
+| `web/i18n/zh-TW.js`, `web/i18n/en.js` | +3 keys × 2（revisionChanged／revisionFilled／undoStale）；undoFailed 改為逐欄位文案 |
+| `tools/validate_autonomy_live.py` | 新增：可重複的 Live 管線驗證入口（--allow-live 守門、合成圖限定、呼叫上限、資料目錄防誤刪） |
+| `tools/evaluate_models.py` | 新增期望 kind：`has_field`、`field_has_multiple_values` |
+| `tools/eval_fixtures/scenarios.json` | C1 加入 description 期望；新增 C6（兩張身分標籤） |
+| `tools/eval_fixtures/recorded/` | C1 錄製更新（新 prompt）、新增 C6 錄製；summary 記錄第三次 run |
+| `tests/test_ai_analyze.py` | +8（過期 undo×6、跨照片衝突×2） |
+| `tests/test_v3_core_slice.py` | +1（2C-D 前端接線靜態檢查） |
+| `tests/test_validate_autonomy_live.py` | 新增：驅動安全守門×2（不碰網路） |
+| `docs/engineering/` | STATUS／ROADMAP／DECISIONS（D8）／AI-AUTONOMY-VALIDATION（2C-D 補充） |
+
+**未變更**：schema（零 migration）、API 契約形狀、media 結構、capture/home/settings view；未引入欄位鎖定子系統。
+
+---
+
 ## 本地與遠端同步狀態
 
 | 項 | 狀態 |
 |---|---|
 | Branch | main |
-| Ahead/Behind | 10 ahead, 0 behind（未 push；本階段 commit 後） |
+| Ahead/Behind | 11 ahead, 0 behind（未 push；本階段 commit 後） |
 | Uncommitted Changes | 0（本階段變更全數進入獨立 commit） |
 | 衝突 | 無 |
-| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61`、`7927faf` —— 未修改、未 amend、未 rebase |
+| 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61`、`7927faf`、`5a4c792` —— 未修改、未 amend、未 rebase |
 
 ---
 
 ## 下一個明確任務
 
-### Phase 2C-D：驗證結論收斂（依 AI-AUTONOMY-VALIDATION.md §7）
+### Phase 3：垃圾桶與資料生命週期（依 ROADMAP）
 檢查清單：
-- [ ] undo 過期防護（值不符 → 409；測試＋瀏覽器路徑）
-- [ ] 描述 prompt 規則＋`C1` 期望升級（必須有描述、不得編造品牌/型號）＋離線重播全綠
-- [ ] 跨照片身分聲明 prompt＋新 harness 情境 `C6_two_identity_labels`
-- [ ] 修訂 banner 顯示前後值＋確認清單保留「先前判讀（已被取代）」
-- [ ] 全測試通過＋一次瀏覽器 E2E；零 schema migration
+- [ ] 垃圾桶頁面（void 紀錄）＋還原
+- [ ] 30 天保留與永久刪除（明確使用者意圖、可稽核；原照片保護規則先定案）
+- [ ] 補充測試、全測試通過
 
-### 接著（Phase 3：垃圾桶與資料生命週期）
-- 垃圾桶頁面（void 紀錄）＋還原；30 天保留與永久刪除（明確使用者意圖、可稽核）
+（收尾選項可穿插：R 型跨照片身分的下一輪 prompt 評測（模型在有上下文時仍可能擇一）；屬性逐鍵來源標籤；Phase 1B-B。）
 
 ### AI-Native 架構研究對照（`docs/engineering/AI-NATIVE-ARCHITECTURE.md`）
 - ✓ S1（提案命名空間）→ Phase 2B：`attribute:<key>` 受驗證契約
 - ✓ S2（修訂語意＋可靠性修正）→ Phase 2A
-- ◐ S3（前端呈現/可溯性）→ 審閱＋屬性顯示＋失敗重試＋自動更新 banner/undo 完成；逐鍵來源標籤後續
-- ✓ S4（模型評測 harness）→ Phase 2C-A（評測＋政策；含真實模型證據）＋2C-C（Live 驗證）
-- ✓ S5（受控自動套用）→ Phase 2C-B：決定性政策、可回復、衝突升級；2C-C 驗證修訂可行、抓到 undo 過期缺陷
+- ◐ S3（前端呈現/可溯性）→ 審閱＋屬性顯示＋失敗重試＋自動更新 banner（含前後值/撤銷逐項說明）完成；逐鍵來源標籤後續
+- ✓ S4（模型評測 harness）→ Phase 2C-A（評測＋政策）＋2C-C（Live 驗證）＋2C-D（回評；描述與 C6 通過，R 型限制記錄）
+- ✓ S5（受控自動套用）→ Phase 2C-B：決定性政策、可回復、衝突升級；2C-C 抓到 undo 過期缺陷；2C-D 修補（409 防護）
 - 研究結論：不換資料模型；全部 additive、無 schema migration
 
 ---
@@ -379,3 +392,4 @@ Commit：`docs: phase-2c-c validate autonomous ai behavior`（本地，未 push�
 - **2026-10-10**：Phase 2C-A 完成——評測 harness＋合成 fixture；實際評測 `gemini-3.5-flash-lite`（8 次呼叫、free tier、僅合成圖）：契約 7/7 合法、`attribute:<key>` 被自發使用、信心無鑑別力、L4 矛盾證據合併、L6a 選擇策略丟失身分；產出證據選擇建議與 T0/T1 自主性政策＋2C-B 驗收條件；測試基線 955 → 962
 - **2026-10-10**：Phase 2C-B 完成——證據選擇「最早 2＋最新 6」；可回復的自動套用（描述屬性／空身分／auto 修訂；決定性、不看信心）；使用者保護（編輯/確認/清空/復原皆鎖定）；衝突升級（L4 錄製回放）；`POST /suggestions/{id}/undo`；詳情頁 banner＋復原；瀏覽器 E2E（自動更新→復原→套用→搜尋）；測試基線 962 → 983
 - **2026-10-10**：Phase 2C-C 完成——Live 驗證（7 次成功＋1 次 4xx、僅合成圖）：自動修訂可行（BOSE→SONY）、使用者保護、衝突泛化、9 張選擇修復、失敗/重試；抓到「過期 undo 可覆寫後續編輯」缺陷；`attribute:description` 0/9 出現；產出 2C-D 五條驗收條件；測試基線不變 983（未改程式碼/測試）
+- **2026-10-10**：Phase 2C-D 完成——過期 undo 防護（409 零副作用＋逐欄位批次＋UI 逐項說明）；描述與跨照片身分 prompt 上線；banner 修訂前後值；可重複 Live 驗證入口；Live 回評：C1 描述 ✓、C6 雙身分 ✓、P/S/F ✓、R 型仍可能擇一（限制記錄）；測試基線 983 → 994

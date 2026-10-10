@@ -22,6 +22,15 @@
       "calls": 2,
       "scenarios": ["C1_unknown_mug", "C4b_conflict_printers"],
       "quality_misses": 0
+    },
+    {
+      "label": "phase-2c-d re-eval (updated prompt)",
+      "started_at": "2026-10-10T14:10:19",
+      "finished_at": "2026-10-10T14:10:21",
+      "calls": 2,
+      "scenarios": ["C1_unknown_mug", "C6_two_identity_labels"],
+      "quality_misses": 0,
+      "note": "C1 錄製已由此次覆蓋（新增 attribute:description）；C6 為新情境"
     }
   ]
 }

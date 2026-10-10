@@ -157,7 +157,7 @@ Commit: "feat: phase-1a integrate V3 SPA frontend and core tests"
 
 ---
 
-### Phase 2：AI Contract 2.0 與視覺紀錄基礎（2A、2B、2C-A、2C-B、2C-C COMPLETED）
+### Phase 2：AI Contract 2.0 與視覺紀錄基礎（2A、2B、2C-A、2C-B、2C-C、2C-D COMPLETED）
 
 **依賴**：Phase 1A
 
@@ -172,6 +172,8 @@ Commit: "feat: phase-1a integrate V3 SPA frontend and core tests"
 **已完成（Phase 2C-B，2026-10-10）**：可回復的 AI 自動更新與證據感知自主性 —— 證據選擇「最早 2＋最新 6」；`commit_analysis(auto=1)` 依決定性政策自動套用（描述屬性／空身分／auto 來源修訂），使用者編輯、確認、清空、復原過的欄位永不自動覆蓋；購買資訊僅在「同張照片提供身分」時自動、否則升級衝突確認（L4 錄製回放為回歸測試）；`POST /api/suggestions/{id}/undo` 還原前值並鎖定欄位；詳情頁「已自動更新＋復原」banner 與來源照片標示。零 schema migration；+21 測試，全 983 通過；瀏覽器 E2E 驗證。細則見 `STATUS.md`。
 
 **已完成（Phase 2C-C，2026-10-10）**：自主性 Live 驗證 —— 對 `gemini-3.5-flash-lite`（free tier、僅合成 fixture、7 次成功＋1 次 4xx）：自動修訂可行（BOSE→SONY）、使用者修正受保護、衝突規則在三種內容上泛化、9 張選擇在真實管線修復 L6a、失敗/重試乾淨；**抓到「過期 undo 可覆寫後續編輯」缺陷**、`attribute:description` 0/9 出現。報告：`AI-AUTONOMY-VALIDATION.md`（含 2C-D 五條驗收條件：undo 防護、描述 prompt、跨照片身分聲明、修訂前後值可見、全測試＋E2E）。
+
+**已完成（Phase 2C-D，2026-10-10）**：撤銷安全、描述性理解與衝突處理 —— 過期 undo 防護（現值＋中間事件檢查，409 零副作用；批次逐欄位、UI 逐項說明）；banner 顯示修訂前後值；描述與跨照片身分 prompt 上線並以 Live 回評（C1 描述 ✓、C6 雙身分 ✓、P/S/F ✓；**R 型有上下文時模型仍可能擇一 → 限制誠實記錄**）；新增可重複 Live 驗證入口 `tools/validate_autonomy_live.py`。零 schema migration；+11 測試，全 994 通過。細則見 `STATUS.md`／`AI-AUTONOMY-VALIDATION.md`。
 
 **工作範圍**：
 1. **AI Contract 升級**
@@ -725,4 +727,5 @@ Phase 7 (Windows Release)
 - **2026-10-10（Phase 2C-A）**：評測與政策完成（harness＋合成 fixture、7 情境實測 `gemini-3.5-flash-lite`、證據選擇建議「最早 2＋最新 6」、T0/T1 自主性政策、2C-B 驗收條件）；零產品程式碼變更；測試基線更新為 962；下一階段 = Phase 2C-B 自動套用實作
 - **2026-10-10（Phase 2C-B）**：可回復的自動套用完成（選擇策略、決定性政策、使用者保護、衝突升級、undo、banner/來源標示）；零 schema migration；測試基線更新為 983；Phase 2 核心完成；下一階段 = Phase 3 垃圾桶與資料生命週期（收尾選項：description prompt 調校、屬性來源標籤）
 - **2026-10-10（Phase 2C-C）**：自主性 Live 驗證完成（7 次成功＋1 次 4xx、僅合成圖）：修訂/保護/衝突/選擇/失敗重試通過；抓到過期 undo 缺陷與 description 缺口；測試基線不變（未改程式碼）；下一階段 = Phase 2C-D 收斂五條驗收，接 Phase 3
+- **2026-10-10（Phase 2C-D）**：撤銷安全、描述與衝突處理完成（409 防護、banner 前後值、描述/身分 prompt、Live 回評 C1/C6 通過、R 型限制記錄、可重複 Live 入口）；零 schema migration；測試基線更新為 994；下一階段 = Phase 3 垃圾桶與資料生命週期
 

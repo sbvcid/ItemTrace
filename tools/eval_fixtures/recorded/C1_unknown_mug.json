@@ -2,30 +2,36 @@
   "scenario_id": "C1_unknown_mug",
   "provider": "google",
   "model": "gemini-3.5-flash-lite",
-  "recorded_at": "2026-10-10T12:51:47",
+  "recorded_at": "2026-10-10T14:10:19",
   "photos": [
     "object_mug.jpg"
   ],
   "context": "",
-  "response_text": "```json\n{\n  \"suggestions\": [\n    {\n      \"field\": \"name\",\n      \"value\": \"馬克杯\",\n      \"confidence\": 0.9,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"category\",\n      \"value\": \"日用品\",\n      \"confidence\": 0.8,\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"attribute:color\",\n      \"value\": \"紅色\",\n      \"confidence\": 0.95,\n      \"source_photo_index\": 0\n    }\n  ]\n}\n```",
+  "response_text": "```json\n{\n  \"suggestions\": [\n    {\n      \"field\": \"name\",\n      \"value\": \"紅色馬克杯\",\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"category\",\n      \"value\": \"餐具\",\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"attribute:color\",\n      \"value\": \"紅色\",\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"attribute:description\",\n      \"value\": \"這是一個紅色的馬克杯，杯口帶有一圈白邊，側面附有把手，內部看起來裝有深色液體。\",\n      \"source_photo_index\": 0\n    }\n  ]\n}\n```",
   "valid": true,
   "parsed": [
     {
       "field": "name",
-      "value": "馬克杯",
-      "confidence": 0.9,
+      "value": "紅色馬克杯",
+      "confidence": null,
       "source_photo_id": "PH0"
     },
     {
       "field": "category",
-      "value": "日用品",
-      "confidence": 0.8,
+      "value": "餐具",
+      "confidence": null,
       "source_photo_id": "PH0"
     },
     {
       "field": "attribute:color",
       "value": "紅色",
-      "confidence": 0.95,
+      "confidence": null,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "attribute:description",
+      "value": "這是一個紅色的馬克杯，杯口帶有一圈白邊，側面附有把手，內部看起來裝有深色液體。",
+      "confidence": null,
       "source_photo_id": "PH0"
     }
   ]

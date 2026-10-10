@@ -110,7 +110,10 @@ export default {
     analysisApplied: 'AI 已自動更新 {n} 項：{fields}',
     undo: '復原',
     undoDone: '已復原 AI 自動更新',
-    undoFailed: '有 {n} 項復原失敗，請重試',
+    undoFailed: '未復原：{fields}，請稍後再試',
+    undoStale: '未復原：{fields}（值已被後續修改，維持現值）',
+    revisionChanged: '{field}：{from} → {to}',
+    revisionFilled: '{field}：{to}（新增）',
     conflictNote: '這筆與其他證據可能不一致，請確認後再套用',
   },
   settings: {

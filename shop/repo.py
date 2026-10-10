@@ -1108,6 +1108,15 @@ class Repository:
         只允許 source='auto' 且 status='accepted' 的建議。復原本身是
         使用者動作，寫回時 actor=user —— 之後同一欄位不會再被自動覆蓋
         （使用者已表達意圖），新證據只會進確認清單。
+
+        過期防護（Phase 2C-D）：只有在這筆自動套用仍是「目前的作用值」
+        且之後沒有任何人改過同一欄位時才復原 ——
+          (a) 目前值必須等於這筆套用的值（欄位／attributes 單鍵）；且
+          (b) 套用事件之後，沒有任何真的改到同一欄位的 item 事件
+              （使用者編輯、其他自動套用、先前的復原都算；值改掉又改
+              回來也算「有中間變更」）。
+        不符時丟 ConflictError（API 409），**不修改任何狀態**：值、建議
+        狀態與事件歷史全部保持原樣，由呼叫端向使用者說明哪個欄位要先處理。
         """
         with db.transaction(self.conn):
             suggestion = self.get_suggestion(suggestion_id)
@@ -1129,9 +1138,26 @@ class Repository:
             if applied_event is None:
                 raise ValidationError("找不到這筆自動套用的復原資訊")
 
-            previous = applied_event.prev_value
             key = suggestion.attribute_key
             item = self.get_item(suggestion.item_id)
+            if key is not None:
+                current = item.attributes.get(key)
+            else:
+                current = getattr(item, suggestion.field, "") or None
+            if current != suggestion.value:
+                raise ConflictError(
+                    f"{suggestion.field} 目前不是這筆自動套用的值"
+                    f"（現值：{current!r}），復原已取消、維持現值不變"
+                )
+            if self._has_intervening_change(
+                suggestion.item_id, suggestion.field, applied_event
+            ):
+                raise ConflictError(
+                    f"{suggestion.field} 在自動套用之後還有其他變更，"
+                    "復原已取消、維持現值不變"
+                )
+
+            previous = applied_event.prev_value
             if key is not None:
                 merged = dict(item.attributes)
                 if previous is None:
@@ -1157,6 +1183,33 @@ class Repository:
                 payload={"previous_value": previous},
             )
             return after
+
+    def _has_intervening_change(
+        self, item_id: str, field: str, applied_event: Event
+    ) -> bool:
+        """套用事件之後，有沒有「真的改到同一欄位」的 item 事件。
+
+        身分欄位看同名 field.changed；attribute:<key> 看 attributes 事件
+        中該鍵的前後差異（其他鍵的編輯不算）。事件是 newest-first，
+        一旦走到比套用事件舊的就停。
+        """
+        key = attribute_key(field)
+        applied_stamp = (applied_event.created_at, applied_event.id)
+        for event in self.list_events("item", item_id, limit=500):
+            if event.type != "field.changed":
+                continue
+            if (event.created_at, event.id) <= applied_stamp:
+                break  # 已經比套用事件舊了
+            if key is not None:
+                if event.field != "attributes":
+                    continue
+                before = event.prev_value if isinstance(event.prev_value, dict) else {}
+                after = event.next_value if isinstance(event.next_value, dict) else {}
+                if before.get(key) != after.get(key):
+                    return True
+            elif event.field == field:
+                return True
+        return False
 
     def find_photos_by_sha256(
         self, sha256: str, *, item_id: str | None = None, role: str | None = None

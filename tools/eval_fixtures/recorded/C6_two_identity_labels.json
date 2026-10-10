@@ -1,0 +1,57 @@
+{
+  "scenario_id": "C6_two_identity_labels",
+  "provider": "google",
+  "model": "gemini-3.5-flash-lite",
+  "recorded_at": "2026-10-10T14:10:21",
+  "photos": [
+    "label_bose.jpg",
+    "label_sony.jpg"
+  ],
+  "context": "",
+  "response_text": "```json\n{\n  \"suggestions\": [\n    {\n      \"field\": \"brand\",\n      \"value\": \"BOSE\",\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"model\",\n      \"value\": \"SoundLink Flex\",\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"identifier:serial\",\n      \"value\": \"7701234\",\n      \"source_photo_index\": 0\n    },\n    {\n      \"field\": \"brand\",\n      \"value\": \"SONY\",\n      \"source_photo_index\": 1\n    },\n    {\n      \"field\": \"model\",\n      \"value\": \"WH-1000XM5\",\n      \"source_photo_index\": 1\n    },\n    {\n      \"field\": \"identifier:serial\",\n      \"value\": \"4528653\",\n      \"source_photo_index\": 1\n    },\n    {\n      \"field\": \"attribute:made_in\",\n      \"value\": \"Malaysia\",\n      \"source_photo_index\": 1\n    }\n  ]\n}\n```",
+  "valid": true,
+  "parsed": [
+    {
+      "field": "brand",
+      "value": "BOSE",
+      "confidence": null,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "model",
+      "value": "SoundLink Flex",
+      "confidence": null,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "identifier:serial",
+      "value": "7701234",
+      "confidence": null,
+      "source_photo_id": "PH0"
+    },
+    {
+      "field": "brand",
+      "value": "SONY",
+      "confidence": null,
+      "source_photo_id": "PH1"
+    },
+    {
+      "field": "model",
+      "value": "WH-1000XM5",
+      "confidence": null,
+      "source_photo_id": "PH1"
+    },
+    {
+      "field": "identifier:serial",
+      "value": "4528653",
+      "confidence": null,
+      "source_photo_id": "PH1"
+    },
+    {
+      "field": "attribute:made_in",
+      "value": "Malaysia",
+      "confidence": null,
+      "source_photo_id": "PH1"
+    }
+  ]
+}

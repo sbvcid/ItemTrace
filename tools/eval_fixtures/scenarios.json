@@ -88,11 +88,12 @@
     {
       "id": "C1_unknown_mug",
       "title": "無品牌的紅色馬克杯（描述行為）",
-      "purpose": "驗證：沒有品牌/型號可讀時，模型是否仍給出有用的視覺描述。",
+      "purpose": "驗證：沒有品牌/型號可讀時，模型是否仍給出有用的視覺描述（Phase 2C-D 期望：輕量 name＋attribute:description）。",
       "photos": ["object_mug.jpg"],
       "context": "",
       "expectations": [
         {"kind": "any_value_contains_any", "contains": ["杯", "mug", "cup"], "ci": true},
+        {"kind": "has_field", "field": "attribute:description"},
         {"kind": "no_field_prefix", "prefix": "identifier:"}
       ]
     },
@@ -104,6 +105,17 @@
       "context": "",
       "expectations": [
         {"kind": "no_value_combines", "tokens": ["canon", "hp"], "ci": true}
+      ]
+    },
+    {
+      "id": "C6_two_identity_labels",
+      "title": "兩張不同品牌標籤（跨照片身分衝突）",
+      "purpose": "Phase 2C-D：兩張標籤寫不同品牌時，模型應把兩個值分別輸出（讓系統升級衝突），而不是默默擇一。",
+      "photos": ["label_bose.jpg", "label_sony.jpg"],
+      "context": "",
+      "expectations": [
+        {"kind": "field_has_multiple_values", "field": "brand"},
+        {"kind": "no_value_combines", "tokens": ["bose", "sony"], "ci": true}
       ]
     }
   ]

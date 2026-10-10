@@ -82,6 +82,11 @@ export const api = {
     });
   },
 
+  // Item events（Phase 2C-D：自動更新 banner 顯示前後值用）
+  async listEvents(itemId, limit = 50) {
+    return request(`/api/items/${itemId}/events?limit=${limit}`);
+  },
+
   // Evidence accumulation (Phase 2B): add photos to an existing record
   async createObservation(itemId, { kind = 'recheck', note = '' } = {}) {
     return request(`/api/items/${itemId}/observations`, {

@@ -48,10 +48,10 @@
 **技術棧**：
 - 後端：Python + FastAPI + SQLite (WAL mode)
 - 前端：零建置 ESM 純 JavaScript SPA
-- 測試：pytest (983 tests)
+- 測試：pytest (994 tests)
 - 部署：local-first, 無外部依賴
 
-**當前階段**：Phase 2C-C 完成 - 自主性 Live 驗證（下一步建議：Phase 2C-D 收斂，見 docs/engineering/AI-AUTONOMY-VALIDATION.md）
+**當前階段**：Phase 2C-D 完成 - 撤銷安全、描述與衝突處理（下一個建議：Phase 3 垃圾桶與資料生命週期）
 
 ---
 

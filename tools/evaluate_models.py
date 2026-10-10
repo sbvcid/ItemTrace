@@ -27,6 +27,8 @@
   no_value_contains         沒有任何建議值包含字串（＝沒有幻覺/回吐）
   no_value_contains_any     沒有任何建議值包含清單任一字串
   no_value_combines         沒有單一建議值同時包含清單所有字串（不得把矛盾併成一個值）
+  has_field                 存在非空的某欄位建議
+  field_has_multiple_values 某欄位出現兩種以上不同的值（跨照片矛盾聲明）
   count_at_most             建議數不超過 n
 """
 
@@ -120,6 +122,18 @@ def evaluate_expectation(expectation: dict, suggestions: list[dict]) -> dict:
             all(_contains(v, token, ci) for token in tokens) for v in values
         )
         detail = f"沒有單一值同時包含 {tokens!r}"
+    elif kind == "has_field":
+        target = expectation["field"]
+        hit = any(
+            s["field"] == target and str(s["value"]).strip()
+            for s in suggestions
+        )
+        detail = f"有非空的 {target} 建議"
+    elif kind == "field_has_multiple_values":
+        target = expectation["field"]
+        distinct = {str(s["value"]) for s in suggestions if s["field"] == target}
+        hit = len(distinct) >= 2
+        detail = f"{target} 出現兩種以上的值（實際 {len(distinct)} 種）"
     elif kind == "count_at_most":
         hit = len(suggestions) <= int(expectation["n"])
         detail = f"建議數 <= {expectation['n']}"

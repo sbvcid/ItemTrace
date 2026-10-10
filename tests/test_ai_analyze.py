@@ -1331,3 +1331,195 @@ def test_failed_auto_analysis_changes_nothing(
     events = client.get(f"/api/items/{item.id}/events").json()
     assert len(events) == before_events
     assert not [e for e in events if e["type"] == "suggestion.auto_applied"]
+
+
+# ----------------------------------------------------------------------
+# I. Phase 2C-D：過期 undo 防護（2C-C 重現的缺陷）
+# ----------------------------------------------------------------------
+
+
+def _apply_auto(client, fake_provider, item_id, entries):
+    """跑一輪 auto 分析，回傳建立的自動套用建議。"""
+    fake_provider(provider_response(entries))
+    body = client.post(f"/api/items/{item_id}/ai/analyze?auto=1").json()
+    return [s for s in body if s["source"] == "auto"]
+
+
+def _brand_entry(value):
+    return {"field": "brand", "value": value, "confidence": 0.9,
+            "source_photo_index": 0}
+
+
+def test_stale_undo_after_user_edit_is_refused_with_zero_side_effects(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """使用者改過值之後：復原回 409，值／建議狀態／事件全部不動。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    applied = _apply_auto(client, fake_provider, item.id, [_brand_entry("Makita")])
+    suggestion_id = applied[0]["id"]
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "Makita"
+
+    client.patch(f"/api/items/{item.id}", json={"brand": "我自己確認的品牌"})
+    suggestions_before = len(client.get(f"/api/items/{item.id}").json()["suggestions"])
+    events_before = client.get(f"/api/items/{item.id}/events").json()
+
+    undo = client.post(f"/api/suggestions/{suggestion_id}/undo")
+    assert undo.status_code == 409
+    assert "brand" in undo.json()["detail"]
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["brand"] == "我自己確認的品牌"       # 值不被動
+    stored = [s for s in detail["suggestions"] if s["id"] == suggestion_id][0]
+    assert stored["status"] == "accepted"                      # 狀態不被動
+    assert len(detail["suggestions"]) == suggestions_before    # 沒有新列
+    assert client.get(f"/api/items/{item.id}/events").json() == events_before
+
+
+def test_undo_of_replaced_auto_is_refused_and_newer_auto_still_undoable(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """較舊的自動套用被新的自動修訂取代後不可復原；最新那筆仍可復原。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    first = _apply_auto(client, fake_provider, item.id, [_brand_entry("Makita")])
+    second = _apply_auto(client, fake_provider, item.id, [_brand_entry("牧田")])
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "牧田"
+
+    old_undo = client.post(f"/api/suggestions/{first[0]['id']}/undo")
+    assert old_undo.status_code == 409
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "牧田"
+
+    new_undo = client.post(f"/api/suggestions/{second[0]['id']}/undo")
+    assert new_undo.status_code == 200
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "Makita"
+
+
+def test_undo_refused_when_user_reverted_to_the_applied_value(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """值改掉又改回來：目前值等於套用值，但有中間變更 → 仍不得復原。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    applied = _apply_auto(client, fake_provider, item.id, [_brand_entry("Makita")])
+
+    client.patch(f"/api/items/{item.id}", json={"brand": "別的"})
+    client.patch(f"/api/items/{item.id}", json={"brand": "Makita"})
+
+    undo = client.post(f"/api/suggestions/{applied[0]['id']}/undo")
+    assert undo.status_code == 409
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["brand"] == "Makita"                 # 維持現值
+    stored = [s for s in detail["suggestions"] if s["id"] == applied[0]["id"]][0]
+    assert stored["status"] == "accepted"
+
+
+def test_batch_undo_handles_each_field_independently(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """批次中每個欄位獨立：過期的留在原狀，未過期的正常復原。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    applied = _apply_auto(client, fake_provider, item.id, [
+        _brand_entry("Makita"),
+        {"field": "model", "value": "DHP484", "confidence": 0.9,
+         "source_photo_index": 0},
+    ])
+    by_field = {s["field"]: s["id"] for s in applied}
+    client.patch(f"/api/items/{item.id}", json={"brand": "手動牌子"})
+
+    brand_undo = client.post(f"/api/suggestions/{by_field['brand']}/undo")
+    model_undo = client.post(f"/api/suggestions/{by_field['model']}/undo")
+    assert brand_undo.status_code == 409
+    assert model_undo.status_code == 200
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["brand"] == "手動牌子"                # 未復原，維持現值
+    assert detail["item"]["model"] == ""                      # 已還原
+    stored = {s["id"]: s for s in detail["suggestions"]}
+    assert stored[by_field["brand"]]["status"] == "accepted"
+    assert stored[by_field["model"]]["status"] == "rejected"
+
+
+def test_undo_of_attribute_refused_after_same_key_edit(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """屬性鍵被使用者改過 → 該鍵的自動套用不可復原。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    applied = _apply_auto(client, fake_provider, item.id, [
+        {"field": "attribute:color", "value": "紅色", "confidence": 0.9,
+         "source_photo_index": 0},
+    ])
+    client.patch(f"/api/items/{item.id}", json={"attributes": {"color": "藍色"}})
+
+    undo = client.post(f"/api/suggestions/{applied[0]['id']}/undo")
+    assert undo.status_code == 409
+    assert client.get(f"/api/items/{item.id}").json()["item"]["attributes"] == {
+        "color": "藍色"
+    }
+
+
+def test_undo_of_attribute_unaffected_by_other_key_edits(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """改的是「其他屬性鍵」→ 不影響原鍵的復原。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    applied = _apply_auto(client, fake_provider, item.id, [
+        {"field": "attribute:origin", "value": "Malaysia", "confidence": 0.9,
+         "source_photo_index": 0},
+    ])
+    # 使用者保留 origin、另外加上 warranty（origin 的值不變）
+    client.patch(f"/api/items/{item.id}", json={
+        "attributes": {"origin": "Malaysia", "warranty": "兩年"},
+    })
+
+    undo = client.post(f"/api/suggestions/{applied[0]['id']}/undo")
+    assert undo.status_code == 200
+    assert client.get(f"/api/items/{item.id}").json()["item"]["attributes"] == {
+        "warranty": "兩年"
+    }
+
+
+# ----------------------------------------------------------------------
+# J. Phase 2C-D：跨照片身分衝突的政策行為（決定性）
+# ----------------------------------------------------------------------
+
+
+def test_cross_photo_competing_identities_escalate_not_replaced(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """兩張照片各自主張不同身分：不得靜默自動選邊；非衝突資訊照常處理。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=2)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "TOSHIBA", "confidence": 0.95,
+         "source_photo_index": 0},
+        {"field": "brand", "value": "SEAGATE", "confidence": 0.95,
+         "source_photo_index": 1},
+        {"field": "attribute:color", "value": "銀色", "confidence": 0.8,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    by_field: dict[str, list] = {}
+    for s in body:
+        by_field.setdefault(s["field"], []).append(s)
+
+    brands = by_field["brand"]
+    assert [s["status"] for s in brands] == ["pending", "pending"]
+    assert all(s["source"] == "external_conflict" for s in brands)
+    # 安全的部分不因衝突停擺
+    assert by_field["attribute:color"][0]["status"] == "accepted"
+
+    detail = client.get(f"/api/items/{item.id}").json()
+    assert detail["item"]["brand"] == ""
+    assert detail["item"]["attributes"] == {"color": "銀色"}
+    assert len(detail["photos"]) == 2                    # 原始照片全保留
+
+
+def test_clear_correction_of_prior_ai_guess_still_auto_revises(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """新證據「明確」更正先前的 AI 誤判（單一身分）：自動修訂仍然可行。"""
+    item, photos, _ = add_item_with_photos(repo, config)
+    first = _apply_auto(client, fake_provider, item.id, [_brand_entry("SOYN")])
+    assert first[0]["status"] == "accepted"
+
+    fake_provider(provider_response([_brand_entry("SONY")]))
+    second = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert second[0]["status"] == "accepted"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "SONY"

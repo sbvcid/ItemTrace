@@ -110,7 +110,10 @@ export default {
     analysisApplied: 'AI auto-updated {n} item(s): {fields}',
     undo: 'Undo',
     undoDone: 'AI update undone',
-    undoFailed: '{n} undo(s) failed, please retry',
+    undoFailed: 'Could not undo: {fields}. Please retry.',
+    undoStale: 'Not undone: {fields} (value changed since; kept as-is)',
+    revisionChanged: '{field}: {from} → {to}',
+    revisionFilled: '{field}: {to} (added)',
     conflictNote: 'This may conflict with other evidence; review before applying',
   },
   settings: {

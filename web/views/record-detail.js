@@ -232,13 +232,14 @@ export async function createRecordDetailView(params, router) {
         s => s.status === 'accepted' && s.source === 'auto'
       );
       if (applied.length > 0) {
-        const labels = applied.map(s => fieldLabel(s.field)).join('、');
+        // Phase 2C-D：顯示「先前判讀 → 新值」，讓修訂看得懂。
+        const details = await buildRevisionDetails(applied);
         setStatus(
           'applied',
-          t('detail.analysisApplied', { n: applied.length, fields: labels }),
+          t('detail.analysisApplied', { n: applied.length, fields: details }),
           {
             label: t('detail.undo'),
-            onClick: () => undoSuggestions(applied.map(s => s.id)),
+            onClick: () => undoSuggestions(applied),
           }
         );
       } else {
@@ -256,21 +257,79 @@ export async function createRecordDetailView(params, router) {
     }
   }
 
-  async function undoSuggestions(suggestionIds) {
-    if (busy || suggestionIds.length === 0) return;
+  async function buildRevisionDetails(applied) {
+    // 從事件找每次自動套用的前值：banner 顯示「先前判讀 → 新值」。
+    let events = [];
+    try {
+      events = (await api.listEvents(itemId, 50)) || [];
+    } catch (err) {
+      console.warn('events unavailable for revision details:', err);
+    }
+    const fieldPrevious = new Map();
+    const attributePrevious = new Map();
+    for (const event of events) {
+      if (event.type !== 'field.changed' || event.actor !== 'system') continue;
+      if (event.field === 'attributes') {
+        const before = (event.prev_value && typeof event.prev_value === 'object')
+          ? event.prev_value
+          : {};
+        const after = (event.next_value && typeof event.next_value === 'object')
+          ? event.next_value
+          : {};
+        for (const s of applied) {
+          if (!s.field.startsWith('attribute:')) continue;
+          const key = s.field.slice('attribute:'.length);
+          if (!attributePrevious.has(key) && before[key] !== after[key]) {
+            attributePrevious.set(key, before[key]);
+          }
+        }
+      } else if (!fieldPrevious.has(event.field)) {
+        fieldPrevious.set(event.field, event.prev_value);
+      }
+    }
+    return applied.map(s => {
+      const label = fieldLabel(s.field);
+      const key = s.field.startsWith('attribute:')
+        ? s.field.slice('attribute:'.length)
+        : null;
+      const from = key ? attributePrevious.get(key) : fieldPrevious.get(s.field);
+      if (from === undefined || from === null || from === '') {
+        return t('detail.revisionFilled', { field: label, to: s.value });
+      }
+      return t('detail.revisionChanged', {
+        field: label, from: String(from), to: s.value,
+      });
+    }).join('、');
+  }
+
+  async function undoSuggestions(applied) {
+    if (busy || applied.length === 0) return;
     setBusy(true);
     try {
       const results = await Promise.allSettled(
-        suggestionIds.map(id => api.undoSuggestion(id))
+        applied.map(s => api.undoSuggestion(s.id))
       );
-      const failed = results.filter(r => r.status === 'rejected').length;
+      const stale = [];
+      const failed = [];
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') return;
+        const label = fieldLabel(applied[index].field);
+        if (result.reason && result.reason.status === 409) {
+          stale.push(label);
+        } else {
+          failed.push(label);
+        }
+      });
       setStatus(null);
       await loadDetail();
-      showToast(
-        failed > 0
-          ? t('detail.undoFailed', { n: failed })
-          : t('detail.undoDone')
-      );
+      if (stale.length > 0) {
+        // 過期（值已被後續修改）：逐項說明哪些欄位維持現值。
+        showToast(t('detail.undoStale', { fields: stale.join('、') }));
+      } else if (failed.length > 0) {
+        showToast(t('detail.undoFailed', { fields: failed.join('、') }));
+      } else {
+        showToast(t('detail.undoDone'));
+      }
     } finally {
       setBusy(false);
     }
