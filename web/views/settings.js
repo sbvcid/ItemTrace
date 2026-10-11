@@ -64,7 +64,7 @@ export async function createSettingsView(params, router) {
           </div>
 
           <div class="ai-field-row" id="row-base-url">
-            <label class="ai-field-label">API Base URL</label>
+            <label class="ai-field-label">${t('settings.apiBaseUrlLabel')}</label>
             <input type="text" class="ai-edit-input" id="setting-base-url" placeholder="https://..." />
           </div>
 
@@ -81,13 +81,13 @@ export async function createSettingsView(params, router) {
         </form>
       </div>
 
-      <!-- 3. 手機連線提示 -->
-      <div class="detail-card" style="margin-top: 16px;">
-        <h3 style="font-size: 1rem; font-weight: 700; margin-bottom: 6px;">📱 Local Wi-Fi Access</h3>
-        <p style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
-          Connect your phone to the same Wi-Fi network and open <code>http://&lt;your-pc-ip&gt;:8731/</code> on your mobile browser to enjoy the native camera snap experience.
-        </p>
-      </div>
+       <!-- 3. 手機連線提示 -->
+       <div class="detail-card" style="margin-top: 16px;">
+         <h3 style="font-size: 1rem; font-weight: 700; margin-bottom: 6px;">📱 ${t('settings.lanAccessTitle')}</h3>
+         <p style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
+           ${t('settings.lanAccessDescription')}
+         </p>
+       </div>
     </main>
   `;
 

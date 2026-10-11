@@ -159,7 +159,7 @@ body {
   width: 100%;
   max-width: var(--max-content-width);
   margin: 0 auto;
-  padding: 20px 16px 80px;
+  padding: 20px 16px 20px;
   flex: 1;
 }
 
@@ -193,17 +193,11 @@ body {
 }
 
 .hero-capture-title {
-  font-size: 1.3rem;
-  font-weight: 700;
-  line-height: 1.35;
-  letter-spacing: -0.02em;
+  display: none;
 }
 
 .hero-capture-subtitle {
-  font-size: 0.92rem;
-  color: hsl(220, 20%, 82%);
-  max-width: 440px;
-  line-height: 1.5;
+  display: none;
 }
 
 .btn-shutter-hero {
@@ -294,10 +288,11 @@ body {
 /* Records List Header */
 .records-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   margin-bottom: 14px;
   padding: 0 2px;
+  gap: 12px;
 }
 
 .records-title {
@@ -311,6 +306,21 @@ body {
   font-size: 0.85rem;
   font-weight: 500;
   color: var(--text-muted);
+}
+
+.records-trash-link {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.records-trash-link:hover {
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
 }
 
 /* Card Grid (Photo-First) */
@@ -560,43 +570,13 @@ body {
   line-height: 1.5;
 }
 
-/* Mobile Floating Shutter Button */
+/* Mobile Floating Shutter Button (Removed) */
 .mobile-fab-container {
-  display: none;
-  position: fixed;
-  bottom: 24px;
-  left: 0;
-  right: 0;
-  justify-content: center;
-  z-index: 99;
-  pointer-events: none;
-}
-
-@media (max-width: 768px) {
-  .mobile-fab-container {
-    display: flex;
-  }
+  display: none !important;
 }
 
 .btn-shutter-fab {
-  pointer-events: auto;
-  width: 60px;
-  height: 60px;
-  border-radius: 50%;
-  background: var(--color-brand);
-  color: #fff;
-  border: 3px solid #ffffff;
-  box-shadow: 0 6px 20px rgba(24, 29, 40, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.6rem;
-  cursor: pointer;
-  text-decoration: none;
-  transition: transform 0.15s ease;
-}
-.btn-shutter-fab:active {
-  transform: scale(0.92);
+  display: none !important;
 }
 
 /* ==========================================================================
@@ -862,7 +842,20 @@ body {
 }
 
 /* Provenance Badges */
+.header-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-id {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
 .badge-seen {
+  display: none;
+}
   font-size: 0.72rem;
   color: var(--color-seen);
   background: var(--color-seen-surface);
@@ -1464,4 +1457,10 @@ body {
 
 .detail-tool-btn.is-danger:hover {
   border-color: var(--color-danger);
+}
+
+.detail-meta {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  padding-top: 8px;
 }

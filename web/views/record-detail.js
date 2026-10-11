@@ -22,15 +22,14 @@ export async function createRecordDetailView(params, router) {
   const itemId = params.id;
 
   el.innerHTML = `
-    <header class="app-header">
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <a href="/" class="icon-btn" title="${t('detail.backHome')}" data-link>←</a>
-        <span style="font-weight: 700; font-size: 1.05rem;" id="header-id">${itemId}</span>
-      </div>
-      <div class="header-actions">
-        <span class="badge-seen" id="status-badge">${t('detail.statusActive')}</span>
-      </div>
-    </header>
+     <header class="app-header">
+       <div class="header-breadcrumb">
+         <a href="/" class="icon-btn" title="${t('detail.backHome')}" data-link>←</a>
+         <span class="header-id">${itemId}</span>
+       </div>
+       <div class="header-actions">
+       </div>
+     </header>
 
     <div class="container detail-toolbar-wrap">
       <div class="detail-toolbar">
@@ -653,15 +652,14 @@ export async function createRecordDetailView(params, router) {
               <div class="spec-val" style="font-weight: normal; font-size: 0.95rem; line-height: 1.5;">${escapeHtml(item.notes)}</div>
             </div>
           ` : ''}
-          ${attributesHtml}
-        </div>
+           ${attributesHtml}
+         </div>
 
-        <div style="font-size: 0.82rem; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center; padding-top: 8px;">
-          <span>${t('detail.fieldCreated')}：${escapeHtml(item.created_at ? item.created_at.replace('T', ' ').slice(0, 19) : '剛剛')}</span>
-          <a href="/" class="btn-secondary" style="width: auto; padding: 6px 14px;" data-link>${t('detail.backHome')}</a>
-        </div>
-      </div>
-    `;
+         <div class="detail-meta" style="font-size: 0.82rem; color: var(--text-muted); padding-top: 8px;">
+           ${t('detail.fieldCreated')}：${escapeHtml(item.created_at ? item.created_at.replace('T', ' ').slice(0, 19) : '剛剛')}
+         </div>
+       </div>
+     `;
 
     // Hook thumbnail click
     const mainPhoto = detailContent.querySelector('#main-photo');

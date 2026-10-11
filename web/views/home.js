@@ -21,76 +21,69 @@ export async function createHomeView(params, router) {
     window.history.replaceState(null, '', '/');
   }
 
-  el.innerHTML = `
-    <header class="app-header">
-      <a href="/" class="brand" data-link>
-        <span class="brand-icon">IT</span>
-        <span>ItemTrace</span>
-      </a>
-      <div class="header-actions">
-        <a href="/trash" class="icon-btn" title="${t('trash.title')}" data-link>🗑</a>
-        <a href="/settings" class="icon-btn" title="${t('app.settings')}" data-link>⚙</a>
-      </div>
-    </header>
+   el.innerHTML = `
+     <header class="app-header">
+       <a href="/" class="brand" data-link>
+         <span class="brand-icon">IT</span>
+         <span>ItemTrace</span>
+       </a>
+       <div class="header-actions">
+         <a href="/settings" class="icon-btn" title="${t('app.settings')}" data-link>⚙</a>
+       </div>
+     </header>
 
-    <main class="container">
-      <!-- 📷 拍下來 (Core Action 1: Shutter Hero) -->
-      <section class="hero-capture">
-        <div class="hero-capture-title">${t('home.heroTitle')}</div>
-        <div class="hero-capture-subtitle">${t('home.heroSubtitle')}</div>
-        <a href="/capture" class="btn-shutter-hero" data-link>
-          <span>📷</span>
-          <span>${t('home.heroBtn')}</span>
-        </a>
-      </section>
+     <main class="container">
+       <!-- 📷 拍下來 (Core Action 1: Capture Hero) -->
+       <section class="hero-capture">
+         <a href="/capture" class="btn-shutter-hero" data-link>
+           <span>📷</span>
+           <span>${t('home.heroTitle')}</span>
+         </a>
+       </section>
 
-      <!-- 🔍 找回來 (Core Action 2: Omni-Search) -->
-      <section class="search-wrapper">
-        <span class="search-icon">🔍</span>
-        <input
-          type="search"
-          class="search-input"
-          id="search-input"
-          placeholder="${t('home.searchPlaceholder')}"
-          autocomplete="off"
-        />
-        <button type="button" class="search-clear" id="search-clear" aria-label="Clear search">✕</button>
-      </section>
+       <!-- 🔍 找回來 (Core Action 2: Omni-Search) -->
+       <section class="search-wrapper">
+         <span class="search-icon">🔍</span>
+         <input
+           type="search"
+           class="search-input"
+           id="search-input"
+           placeholder="${t('home.searchPlaceholder')}"
+           autocomplete="off"
+         />
+         <button type="button" class="search-clear" id="search-clear" aria-label="Clear search">✕</button>
+       </section>
 
-      <!-- 紀錄列表 -->
-      <section class="records-section">
-        <div class="records-header">
-          <div class="records-title" id="records-heading">${t('detail.headerTitle')}</div>
-          <div class="records-count" id="records-count">${t('app.loading')}</div>
-        </div>
+       <!-- 紀錄列表 -->
+       <section class="records-section">
+         <div class="records-header">
+           <div class="records-title" id="records-heading">${t('home.recordsTitle')}</div>
+           <div class="records-count" id="records-count">${t('app.loading')}</div>
+           <a href="/trash" class="records-trash-link" title="${t('trash.title')}" data-link>${t('trash.title')}</a>
+         </div>
 
-        <div class="card-grid" id="card-grid">
-          <!-- Dynamically populated -->
-        </div>
+         <div class="card-grid" id="card-grid">
+           <!-- Dynamically populated -->
+         </div>
 
-        <div class="empty-state" id="empty-state" style="display: none;">
-          <div class="empty-icon">📷</div>
-          <div class="empty-title">${t('home.emptyTitle')}</div>
-          <div class="empty-subtitle">${t('home.emptySubtitle')}</div>
-          <a href="/capture" class="btn-shutter-hero" data-link>
-            <span>📷</span>
-            <span>${t('home.emptyAction')}</span>
-          </a>
-        </div>
+         <div class="empty-state" id="empty-state" style="display: none;">
+           <div class="empty-icon">📷</div>
+           <div class="empty-title">${t('home.emptyTitle')}</div>
+           <div class="empty-subtitle">${t('home.emptySubtitle')}</div>
+           <a href="/capture" class="btn-shutter-hero" data-link>
+             <span>📷</span>
+             <span>${t('home.emptyAction')}</span>
+           </a>
+         </div>
 
-        <div class="empty-state" id="no-search-results" style="display: none;">
-          <div class="empty-icon">🔍</div>
-          <div class="empty-title">${t('home.searchEmptyTitle')}</div>
-          <div class="empty-subtitle">${t('home.searchEmptySubtitle')}</div>
-        </div>
-      </section>
-    </main>
-
-    <!-- Mobile Floating Action Button -->
-    <div class="mobile-fab-container">
-      <a href="/capture" class="btn-shutter-fab" title="${t('home.heroBtn')}" data-link>📷</a>
-    </div>
-  `;
+         <div class="empty-state" id="no-search-results" style="display: none;">
+           <div class="empty-icon">🔍</div>
+           <div class="empty-title">${t('home.searchEmptyTitle')}</div>
+           <div class="empty-subtitle">${t('home.searchEmptySubtitle')}</div>
+         </div>
+       </section>
+     </main>
+   `;
 
   const searchInput = el.querySelector('#search-input');
   const searchClear = el.querySelector('#search-clear');
@@ -116,33 +109,33 @@ export async function createHomeView(params, router) {
     }
   }
 
-  function renderItems(items, query = '') {
-    cardGrid.innerHTML = '';
+   function renderItems(items, query = '') {
+     cardGrid.innerHTML = '';
 
-    if (!items || items.length === 0) {
-      recordsCount.textContent = t('home.photoCount', { n: 0 });
-      if (query.trim()) {
-        emptyState.style.display = 'none';
-        noSearchResults.style.display = 'block';
-      } else {
-        emptyState.style.display = 'block';
-        noSearchResults.style.display = 'none';
-      }
-      return;
-    }
+     if (!items || items.length === 0) {
+       recordsCount.textContent = t('home.recordCount', { n: 0 });
+       if (query.trim()) {
+         emptyState.style.display = 'none';
+         noSearchResults.style.display = 'block';
+       } else {
+         emptyState.style.display = 'block';
+         noSearchResults.style.display = 'none';
+       }
+       return;
+     }
 
-    emptyState.style.display = 'none';
-    noSearchResults.style.display = 'none';
-    recordsCount.textContent = t('home.photoCount', { n: items.length });
+     emptyState.style.display = 'none';
+     noSearchResults.style.display = 'none';
+     recordsCount.textContent = t('home.recordCount', { n: items.length });
 
-    const isSearch = Boolean(query.trim());
-    items.forEach((item, index) => {
-      // 首頁預設檢視把最新一筆放大呈現；搜尋結果維持一致的緊湊排列。
-      const featured = !isSearch && index === 0;
-      const fresh = !isSearch && Boolean(freshId) && item.id === freshId;
-      cardGrid.appendChild(createRecordCard(item, { featured, fresh }));
-    });
-  }
+     const isSearch = Boolean(query.trim());
+     items.forEach((item, index) => {
+       // 首頁預設檢視把最新一筆放大呈現；搜尋結果維持一致的緊湊排列。
+       const featured = !isSearch && index === 0;
+       const fresh = !isSearch && Boolean(freshId) && item.id === freshId;
+       cardGrid.appendChild(createRecordCard(item, { featured, fresh }));
+     });
+   }
 
   function attachThumbFallback(card) {
     // SR-1／F6：CSP（script-src 'self'）會擋 inline onerror，改用事件監聽；
