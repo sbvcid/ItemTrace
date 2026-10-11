@@ -22,10 +22,15 @@ DEFAULTS = {
     # 手機配對需要區網連線，所以預設綁定所有介面（0.0.0.0）。
     # 這不等於開放資料：未配對的區網裝置只能載入配對頁與完成配對所需的
     # 端點，資料 API 需要電腦本機（loopback）或已配對裝置的權杖
-    # （三層模型見 shop/security.py）。要只限本機使用可明示設為
-    # "server_host": "127.0.0.1" —— 但手機將無法連線。
+    # （三層模型見 shop/security.py）。
+    # 舊版設定檔若留著 server_host: "127.0.0.1"（當時的預設值），load()
+    # 會自動改用 0.0.0.0 —— 既有安裝升級後不必手動編輯設定檔即可用手機
+    # 配對。要只限本機使用請明示 local_only: true。
     "server_host": "0.0.0.0",
     "server_port": 8731,
+    # 純本機模式：只綁 127.0.0.1，手機無法連線（/api/pairing/start 會回
+    # 可操作的錯誤訊息說明如何解除）。其餘安全防護不變。
+    "local_only": False,
     # SR-1（F1）：Host 白名單的補充項（例如自訂主機名）；loopback 與
     # 綁定位址一律自動允許。
     "allowed_hosts": [],
@@ -54,6 +59,7 @@ class Config:
     backup_keep: int
     server_host: str
     server_port: int
+    local_only: bool = False
     allowed_hosts: tuple[str, ...] = ()
     enable_docs: bool = False
     max_request_bytes: int = limits.MAX_REQUEST_BYTES
@@ -107,13 +113,28 @@ def load(base_dir: Path | None = None) -> Config:
     base = (base_dir or find_base_dir()).resolve()
     path = base / CONFIG_NAME
     raw = dict(DEFAULTS)
+    file_data: dict = {}
     if path.exists():
         try:
             # utf-8-sig：Windows 用記事本存檔預設會加 BOM，帶 BOM 會讓
             # json.loads 直接失敗。兩邊都接受，只是把 BOM 當不存在。
-            raw.update(json.loads(path.read_text(encoding="utf-8-sig")))
+            file_data = json.loads(path.read_text(encoding="utf-8-sig"))
+            raw.update(file_data)
         except json.JSONDecodeError as exc:
             raise ConfigError(f"{path} 不是合法的 JSON：{exc}") from exc
+
+    # 綁定位址的兩條相容規則：
+    # 1. local_only（新鍵）→ 一律 loopback；這是明示的純本機模式。
+    # 2. 舊版設定檔（沒有 local_only 鍵）留著當時的預設值 "127.0.0.1"
+    #    → 自動改用 0.0.0.0，讓既有安裝不必手動編輯就能手機配對。
+    #    若設定檔已含 local_only 鍵（新版格式），則完全尊重它寫的
+    #    server_host —— 不覆寫明示的新格式設定。
+    host = str(raw["server_host"])
+    local_only = bool(raw.get("local_only", False))
+    if local_only:
+        host = "127.0.0.1"
+    elif "local_only" not in file_data and host == "127.0.0.1":
+        host = "0.0.0.0"
 
     data_root = _resolve(base, raw["data_root"])
     return Config(
@@ -122,8 +143,9 @@ def load(base_dir: Path | None = None) -> Config:
         database=data_root / raw["database"],
         backup_dir=_resolve(base, raw["backup_dir"]),
         backup_keep=int(raw["backup_keep"]),
-        server_host=str(raw["server_host"]),
+        server_host=host,
         server_port=int(raw["server_port"]),
+        local_only=local_only,
         allowed_hosts=tuple(
             str(item).strip()
             for item in (raw.get("allowed_hosts") or [])

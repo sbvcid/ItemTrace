@@ -48,11 +48,18 @@ def main(argv: list[str] | None = None) -> int:
     print(f"資料庫     ：{config.database}")
     print(f"本機開啟   ：http://localhost:{port}/")
     if security.is_loopback_bind_host(host):
-        print(
-            "注意：server_host 目前是 loopback，手機無法連線。"
-            "要使用手機配對，請把 config.json 的 server_host 設為 "
-            '"0.0.0.0"（預設值）後重新啟動。'
-        )
+        if config.local_only:
+            print(
+                "純本機模式（config.json 的 local_only）：服務只綁 127.0.0.1，"
+                "手機無法連線。要使用手機配對，請把 local_only 設為 false "
+                "或移除後重新啟動。"
+            )
+        else:
+            print(
+                "注意：server_host 目前是 loopback，手機無法連線。"
+                "要使用手機配對，請把 config.json 的 server_host 設為 "
+                '"0.0.0.0"（預設值）後重新啟動。'
+            )
     else:
         for address in pairing.local_ipv4_addresses():
             print(f"區網位址   ：http://{address}:{port}/")

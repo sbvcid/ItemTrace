@@ -1427,9 +1427,16 @@ def _pairing_local_host(cfg: Config) -> str:
     host = (cfg.server_host or "").strip()
     if host and host not in ("0.0.0.0", "::"):
         if security.is_loopback_bind_host(host):
+            if getattr(cfg, "local_only", False):
+                raise ValidationError(
+                    "伺服器目前是純本機模式（local_only），手機無法連線；"
+                    "如要使用手機配對，請把 config.json 的 local_only 設為 "
+                    "false 或移除後重新啟動"
+                )
             raise ValidationError(
                 f"伺服器目前只監聽本機（server_host={host}），手機無法連線；"
-                '請移除 config.json 的 server_host 或設為 "0.0.0.0" 後重新啟動'
+                '請把 config.json 的 server_host 設為 "0.0.0.0"'
+                "（或改用預設值）後重新啟動"
             )
         return host
     addresses = pairing.local_ipv4_addresses()

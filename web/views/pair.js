@@ -1,8 +1,10 @@
 /**
- * Pairing View (/pair?id=…&code=…)
+ * Pairing View (/pair)
  *
- * 手機掃描電腦上的 QR Code 後開啟的頁面。由 QR Code 的網址取得工作階段
- * id 與一次性配對碼，POST /api/pairing/claim 完成配對，成功後把裝置權杖
+ * 手機掃描電腦上的 QR Code 後開啟的頁面。QR 網址把工作階段 id 與一次性
+ * 配對碼放在 **fragment**（`/pair#id=…&code=…`）：瀏覽器不會把 fragment
+ * 送進 HTTP 請求，配對碼因此不會出現在伺服器的 access log。這裡從
+ * fragment 讀出來，POST /api/pairing/claim 完成配對，成功後把裝置權杖
  * 存進本機（後續 API 自動附加授權），並導回首頁。
  *
  * 未配對的裝置只能載入前端殼與配對端點，所以這個頁面在「尚未配對」
@@ -22,13 +24,21 @@ function guessDeviceName() {
   return '手機';
 }
 
+function readPairingParams() {
+  // 主要來源：fragment（#id=…&code=…）—— 不進 HTTP 請求、不落 access log。
+  // query 只作為寬容的備援讀取（例如使用者手動改寫連結），我們的 QR 與
+  // 顯示網址一律使用 fragment。
+  const hash = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+  const query = new URLSearchParams(window.location.search);
+  const pick = (name) => (hash.get(name) || query.get(name) || '').trim();
+  return { sessionId: pick('id'), code: pick('code') };
+}
+
 export async function createPairView() {
   const el = document.createElement('div');
   el.className = 'pair-view';
 
-  const params = new URLSearchParams(window.location.search);
-  const sessionId = (params.get('id') || '').trim();
-  const code = (params.get('code') || '').trim();
+  const { sessionId, code } = readPairingParams();
 
   el.innerHTML = `
     <header class="app-header">

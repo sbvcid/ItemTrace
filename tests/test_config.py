@@ -100,3 +100,49 @@ def test_write_example_does_not_overwrite_existing(tmp_path: Path):
     (tmp_path / "config.json").write_text(json.dumps({"server_port": 1}), encoding="utf-8")
     config_mod.write_example(tmp_path)
     assert config_mod.load(tmp_path).server_port == 1
+
+
+# ----------------------------------------------------------------------
+# 綁定位址相容性：舊版設定檔自動升級、純本機模式
+# ----------------------------------------------------------------------
+
+
+def test_legacy_loopback_default_is_upgraded_for_phone_pairing(tmp_path: Path):
+    """舊版產生的 config.json 留著 server_host: "127.0.0.1"（舊預設值）：
+    load() 自動改用區網綁定，既有安裝不必手動編輯就能手機配對。"""
+    (tmp_path / "config.json").write_text(
+        json.dumps({"server_host": "127.0.0.1"}), encoding="utf-8"
+    )
+    cfg = config_mod.load(tmp_path)
+    assert cfg.server_host == "0.0.0.0"
+    assert cfg.local_only is False
+
+
+def test_local_only_mode_forces_loopback(tmp_path: Path):
+    """明示的純本機模式：不管 server_host 寫什麼都只綁 loopback。"""
+    (tmp_path / "config.json").write_text(
+        json.dumps({"local_only": True, "server_host": "0.0.0.0"}), encoding="utf-8"
+    )
+    cfg = config_mod.load(tmp_path)
+    assert cfg.local_only is True
+    assert cfg.server_host == "127.0.0.1"
+
+
+def test_new_format_host_values_are_preserved(tmp_path: Path):
+    """設定檔已含 local_only 鍵（新版格式）時完全尊重其 server_host ——
+    只有「沒有 local_only 鍵的舊檔」才會觸發自動升級。"""
+    (tmp_path / "config.json").write_text(
+        json.dumps({"local_only": False, "server_host": "127.0.0.1"}),
+        encoding="utf-8",
+    )
+    assert config_mod.load(tmp_path).server_host == "127.0.0.1"
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"server_host": "192.168.1.50"}), encoding="utf-8"
+    )
+    assert config_mod.load(tmp_path).server_host == "192.168.1.50"
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"server_host": "0.0.0.0"}), encoding="utf-8"
+    )
+    assert config_mod.load(tmp_path).server_host == "0.0.0.0"

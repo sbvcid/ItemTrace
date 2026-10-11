@@ -19,6 +19,7 @@ import socket
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -62,7 +63,7 @@ def _new_session(config, ttl_seconds=300):
     """建立一個配對工作階段（走與 HTTP 相同的 repo 方法）。"""
     with Repository.open(config) as repo:
         session_id, code, _expires = repo.create_pairing_session(
-            "http://192.168.50.23:8731/pair?id={session_id}&code={code}",
+            "http://192.168.50.23:8731/pair#id={session_id}&code={code}",
             ttl_seconds=ttl_seconds,
         )
     return session_id, code
@@ -91,13 +92,18 @@ def test_start_creates_short_lived_session_with_openable_url(config, fake_lan_ip
     assert response.status_code == 200
     body = response.json()
     assert re.fullmatch(r"\d{6}", body["code"])
-    # QR Code 內容是手機瀏覽器可直接開啟的網址（不是純文字 JSON）。
+    # QR Code 內容是手機瀏覽器可直接開啟的網址（不是純文字 JSON），
+    # 且配對碼與工作階段 id 只放在 fragment：不會進入 HTTP 請求行。
     assert body["pairing_url"] == (
         f"http://192.168.50.23:8731/pair"
-        f"?id={body['session_id']}&code={body['code']}"
+        f"#id={body['session_id']}&code={body['code']}"
     )
-    assert body["pairing_url"].startswith("http://")
-    assert "/pair?" in body["pairing_url"]
+    parsed = urlsplit(body["pairing_url"])
+    assert parsed.path == "/pair"
+    assert parsed.query == ""
+    assert body["code"] not in parsed.path
+    assert body["session_id"] not in parsed.path
+    assert f"code={body['code']}" in parsed.fragment
 
     with Repository.open(config) as repo:
         session = repo.get_pairing_session(body["session_id"])
@@ -283,7 +289,8 @@ def test_unpaired_lan_cannot_read_or_write_private_data(config):
 def test_unpaired_lan_only_gets_pairing_essentials(config):
     """未配對裝置仍可載入配對頁與完成配對所需的端點。"""
     with _lan(config) as c:
-        assert c.get("/pair", params={"id": "x", "code": "000000"}).status_code == 200
+        # QR 網址的參數在 fragment；瀏覽器送出的就是這個裸路徑。
+        assert c.get("/pair").status_code == 200
         assert c.get("/app.js").status_code == 200
         assert c.get("/app.css").status_code == 200
         assert c.get("/api/health").status_code == 200
@@ -406,6 +413,51 @@ def test_qr_generation_never_uses_the_network(config, fake_lan_ip, monkeypatch):
     assert response.status_code == 200
 
 
+def test_build_pairing_url_keeps_secrets_in_fragment():
+    """fragment 不進 HTTP 請求：配對碼與工作階段 id 都不在 path／query。"""
+    url = pairing_mod.build_pairing_url("192.168.1.5", 8731, "01SESSION", "123456")
+    assert url == "http://192.168.1.5:8731/pair#id=01SESSION&code=123456"
+    parsed = urlsplit(url)
+    assert parsed.path == "/pair"
+    assert parsed.query == ""
+    assert "123456" not in parsed.path and "01SESSION" not in parsed.path
+    assert "id=01SESSION" in parsed.fragment and "code=123456" in parsed.fragment
+
+
+def test_pairing_code_never_appears_in_the_http_request(config, fake_lan_ip):
+    """手機開啟 QR 網址時瀏覽器只送出 path（fragment 留在瀏覽器端）：
+
+    配對碼不會出現在 Uvicorn access log 記下的請求行；配對頁仍可開啟、
+    配對仍能完成。"""
+    with _admin(config) as admin:
+        start = admin.post("/api/pairing/start").json()
+
+    # 模擬瀏覽器實際送出的請求目標：path（＋query，本例為空）。
+    parsed = urlsplit(start["pairing_url"])
+    request_target = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    assert start["code"] not in request_target
+    assert start["session_id"] not in request_target
+
+    with _lan(config) as phone:
+        assert phone.get(request_target).status_code == 200  # 配對頁可開啟
+        # 手機從 fragment 讀到 id/code 後完成配對。
+        claim = phone.post(
+            "/api/pairing/claim",
+            json={
+                "session_id": start["session_id"],
+                "code": start["code"],
+                "device_name": "Fragment Phone",
+            },
+        )
+        assert claim.status_code == 200
+        assert phone.get("/api/items").status_code == 200
+
+
+def test_pairing_page_reads_code_from_fragment():
+    source = (ROOT / "web" / "views" / "pair.js").read_text(encoding="utf-8")
+    assert "location.hash" in source, "配對頁必須從 fragment 讀取配對碼"
+
+
 def test_frontend_has_no_external_qr_service():
     """前端不得把配對資料送往第三方 QR 服務（曾誤用 api.qrserver.com）。"""
     web = ROOT / "web"
@@ -469,6 +521,52 @@ def test_serve_warns_when_explicit_loopback_blocks_phones(config):
 
     loopback_only = dataclasses.replace(config, server_host="127.0.0.1")
     assert resolve_bind_host(loopback_only, None) == "127.0.0.1"
+
+
+def test_legacy_config_file_still_allows_pairing(tmp_path, monkeypatch):
+    """迴歸：舊版設定檔（server_host: "127.0.0.1"）不得讓手機配對意外
+    失效 —— load() 自動升級為區網綁定，start 能產生可掃描的配對網址。"""
+    (tmp_path / "config.json").write_text(
+        json.dumps({"server_host": "127.0.0.1"}), encoding="utf-8"
+    )
+    cfg = config_mod.load(tmp_path)
+    assert cfg.server_host == "0.0.0.0"  # 舊預設值自動升級，不需手改設定
+
+    monkeypatch.setattr(
+        pairing_mod, "local_ipv4_addresses", lambda: ["192.168.50.23"]
+    )
+    db_mod.init(cfg)
+    config_mod.ensure_dirs(cfg)
+    with _admin(cfg) as admin:
+        response = admin.post("/api/pairing/start")
+    assert response.status_code == 200
+    assert response.json()["pairing_url"].startswith(
+        "http://192.168.50.23:8731/pair#"
+    )
+
+
+def test_local_only_mode_binds_loopback_and_explains_the_pairing_block(tmp_path):
+    """純本機模式是真的模式：綁 loopback、本機功能照常，配對端點給出
+    可操作的解除說明（不是把既有模式整個弄壞、也不是只改訊息）。"""
+    (tmp_path / "config.json").write_text(
+        json.dumps({"local_only": True}), encoding="utf-8"
+    )
+    cfg = config_mod.load(tmp_path)
+    assert cfg.local_only is True
+    assert cfg.server_host == "127.0.0.1"
+
+    from serve import resolve_bind_host
+
+    assert resolve_bind_host(cfg, None) == "127.0.0.1"
+
+    db_mod.init(cfg)
+    config_mod.ensure_dirs(cfg)
+    with _admin(cfg) as admin:
+        assert admin.get("/api/items").status_code == 200  # 本機功能不受影響
+        response = admin.post("/api/pairing/start")
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "local_only" in detail and "false" in detail
 
 
 # ----------------------------------------------------------------------

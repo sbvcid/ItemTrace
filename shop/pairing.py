@@ -12,8 +12,10 @@ Android Chrome、iOS Safari 在這種網址上 `window.crypto.subtle` 是
 可行且實際被 LAN 產品採用的做法（本模組實作）：
 
 1. 電腦端建立 **短效、一次性** 的配對工作階段（6 位數字碼 + 工作階段 ID）。
-2. QR Code 內容是手機瀏覽器可直接開啟的 URL：``/pair?id=...&code=...``。
-3. 手機開啟後由 ItemTrace 自己的前端把 `id` + `code` POST 回 ``/api/pairing/claim``。
+2. QR Code 內容是手機瀏覽器可直接開啟的 URL：``/pair#id=…&code=…``
+   （fragment 不會送進 HTTP 請求 —— 配對碼不會出現在 access log）。
+3. 手機開啟後由 ItemTrace 自己的前端從 fragment 讀出 `id` + `code`，
+   把它們 POST 回 ``/api/pairing/claim``（放在 body，不落在請求行）。
 4. 伺服器驗證（存在、未過期、未使用、嘗試次數內、碼正確）後，發給手機一組
    高熵裝置權杖；伺服器只存 **SHA-256 雜湊**，原文只在配對回應出現一次。
 5. 手機把權杖存進 localStorage（`fetch` 自動帶 `Authorization: Bearer`），
@@ -116,8 +118,13 @@ def local_ipv4_addresses() -> list[str]:
 
 
 def build_pairing_url(host: str, port: int, session_id: str, code: str) -> str:
-    """QR Code 內含的配對網址：手機瀏覽器可直接開啟。"""
-    return f"http://{host}:{port}/pair?id={session_id}&code={code}"
+    """QR Code 內含的配對網址：手機瀏覽器可直接開啟。
+
+    配對碼與工作階段 id 放在 **URL fragment**（``#id=…&code=…``）：
+    瀏覽器不會把 fragment 送進 HTTP 請求，所以 Uvicorn 的 access log
+    不會記到配對碼；配對碼只在手機的配對頁以 POST body 送進 claim API。
+    """
+    return f"http://{host}:{port}/pair#id={session_id}&code={code}"
 
 
 def render_qr_svg(data: str) -> bytes:
