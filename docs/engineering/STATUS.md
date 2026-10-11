@@ -15,7 +15,7 @@
 - ✓ AI 失敗優雅降級（存照片、無建議仍可用）
 
 **測試涵蓋** ✓：
-- ✓ 1049 個自動化測試全數通過
+- ✓ 1073 個自動化測試全數通過
 - ✓ 手機視口測試：尺寸 375×812，流程完整
 - ✓ 搜尋功能驗證：模糊匹配正常
 - ✓ 錯誤處理：上傳失敗、重試、部分失敗場景
@@ -70,7 +70,7 @@ Commit：`de4922d` feat: phase-3 trash lifecycle（已推送）
 ### SR-2 資源上限、資訊衛生與列印安全（前序；已完成）
 
 完成時間：2026-10-10  
-Commit：`feat: sr-2 resource limits, caching hygiene, and print pipeline hardening`（本地，未 push）
+Commit：`547a522` feat: sr-2 resource limits, caching hygiene, and print pipeline hardening（已推送）
 報告：`docs/engineering/SECURITY-AUDIT.md`（新增「SR-2 修復狀態」節）
 
 完成內容：
@@ -84,7 +84,7 @@ Commit：`feat: sr-2 resource limits, caching hygiene, and print pipeline harden
 ### SR-1 安全修復（前序；已完成）
 
 完成時間：2026-10-10  
-Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media hardening`（本地，未 push）
+Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media hardening（已推送）
 報告：`docs/engineering/SECURITY-AUDIT.md`（新增「SR-1 修復狀態」節）
 
 完成內容：
@@ -181,17 +181,17 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 **測試框架**：pytest（可選 pytest-cov 補充覆蓋率）
 
 **主要測試分類**：
-- API 端點：test_api.py (82), test_phase8a_api.py (35), test_settings_api.py (43) 等
+- API 端點：test_api.py (88), test_phase8a_api.py (35), test_settings_api.py (43) 等
 - 資料庫 & Repo：test_repo_*.py (13-23 each), test_db_transactions.py (8)
 - AI & 分析：test_ai_*.py (15-78), test_analyze_item.py (78)
 - 前端與 UI：test_capture_ui.py (6), test_inbox_ui.py (35)
 - 列印：test_print.py (31), test_print_settings_api.py (20)
-- **V3 核心驗收**：test_v3_core_slice.py (15) —— 原始 5 情境 + Phase 1B-A 5 項 + Phase 2A 1 項 + Phase 2B 2 項 + Phase 2C-B 1 項 + Phase 2C-D 1 項
+- **V3 核心驗收**：test_v3_core_slice.py (20) —— 原始 5 情境 + 各階段驗收（1B-A／2A／2B／2C-B／2C-D／Phase 2 編輯介面／Phase 3）
 - **評測 harness**：test_evaluate_models.py (7)、test_validate_autonomy_live.py (2) —— 離線守門（不碰網路）
 - **安全（SR-1）**：test_security.py (17) —— Host／Origin／自訂標頭、key 不轉送（canary＋接收器）、綁定 opt-in、媒體標頭、CSP/escaping 靜態守門
 - **安全（SR-2）**：test_security_sr2.py (30) —— body／單檔／檔數／像素／列印尺寸上限、AI 節流、docs 開關、快取政策、錯誤訊息去路徑化、註解／實體 mXSS、render-time 驗證、sandbox 命令、raster MIME、真實 Chromium canary PDF
 
-**最近運行**：2026-10-10，`pytest -q` → collected=1049（逐檔加總），failures=0，exit=0
+**最近運行**：2026-10-11，`pytest -q` → collected=1073（逐檔加總），failures=0，exit=0
 
 ---
 
@@ -202,9 +202,9 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 | 狀態 | 定義 | 範例 |
 |---|---|---|
 | **Implemented** | 程式碼存在且功能可用 | SQLite schema, FastAPI endpoints, V3 前端已實作 |
-| **Tested** | 實作已驗證，測試通過 | 994 個 pytest 全通過，V3 core slice test 驗收 |
+| **Tested** | 實作已驗證，測試通過 | 1073 個 pytest 全通過，V3 core slice test 驗收 |
 | **Committed** | 變更已進入版本控制 | main branch 上的所有程式碼 |
-| **Pushed** | 變更已推送到遠端 | origin/main 的最新狀態（多個本地 commit 未 push；見下方同步狀態） |
+| **Pushed** | 變更已推送到遠端 | origin/main 的最新狀態（本地與遠端同步） |
 
 ### 核心產品體驗
 - ✓ 手機隨手拍照 (Capture) — **Implemented, Tested, Committed, Pushed**
@@ -213,16 +213,16 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 - ✓ 紀錄詳細檢視與大圖展示 — **Implemented, Tested, Committed, Pushed**
 - ✓ 即時文字 & 序號搜尋 — **Implemented, Tested, Committed, Pushed**
 - ✓ 隨手追加照片與筆記 — **Implemented, Tested, Committed, Pushed**
-- ✓ V3 前端（Capture/Home/Detail/Settings 完整實作） — **Implemented, Tested, Committed（2879904）, Not Pushed**
-- ✓ 首頁最新紀錄置頂與保存後回首頁（Phase 1B-A） — **Implemented, Tested, Committed（98edc0c）, Not Pushed**
-- ✓ AI 建議生命週期與部分失敗語意（Phase 2A） — **Implemented, Tested, Committed（15f2e9b）, Not Pushed**
-- ✓ 證據累積與情境式重新理解（Phase 2B） — **Implemented, Tested, Committed（22b0c22）, Not Pushed**
-- ✓ AI 評測 harness 與自主性政策（Phase 2C-A；工具＋文件，未改產品行為） — **Implemented, Tested, Committed（dda8b61）, Not Pushed**
-- ✓ 可回復的 AI 自動更新（Phase 2C-B：選擇策略、自動套用、undo、衝突升級） — **Implemented, Tested, Committed（7927faf）, Not Pushed**
-- ✓ 自主性驗證與殘餘缺口（Phase 2C-C：Live 實測、報告、fixture／錄製） — **Evaluated, Committed（5a4c792）, Not Pushed**
-- ✓ 撤銷安全、描述性理解與衝突處理（Phase 2C-D） — **Implemented, Tested, Committed（79eaecc）, Not Pushed**
-- ✓ 桌面應用安全稽核（Security Audit 1；唯讀） — **Audited, Committed（3e002d2）, Not Pushed**（F1–F8 見 SECURITY-AUDIT.md）
-- ✓ SR-1 安全修復（Host/Origin＋標頭、key 不轉送、LAN opt-in、媒體硬化、前端 escaping） — **Implemented, Tested, Committed（本階段）, Not Pushed**
+- ✓ V3 前端（Capture/Home/Detail/Settings 完整實作） — **Implemented, Tested, Committed（2879904）, Pushed**
+- ✓ 首頁最新紀錄置頂與保存後回首頁（Phase 1B-A） — **Implemented, Tested, Committed（98edc0c）, Pushed**
+- ✓ AI 建議生命週期與部分失敗語意（Phase 2A） — **Implemented, Tested, Committed（15f2e9b）, Pushed**
+- ✓ 證據累積與情境式重新理解（Phase 2B） — **Implemented, Tested, Committed（22b0c22）, Pushed**
+- ✓ AI 評測 harness 與自主性政策（Phase 2C-A；工具＋文件，未改產品行為） — **Implemented, Tested, Committed（dda8b61）, Pushed**
+- ✓ 可回復的 AI 自動更新（Phase 2C-B：選擇策略、自動套用、undo、衝突升級） — **Implemented, Tested, Committed（7927faf）, Pushed**
+- ✓ 自主性驗證與殘餘缺口（Phase 2C-C：Live 實測、報告、fixture／錄製） — **Evaluated, Committed（5a4c792）, Pushed**
+- ✓ 撤銷安全、描述性理解與衝突處理（Phase 2C-D） — **Implemented, Tested, Committed（79eaecc）, Pushed**
+- ✓ 桌面應用安全稽核（Security Audit 1；唯讀） — **Audited, Committed（3e002d2）, Pushed**（F1–F8 見 SECURITY-AUDIT.md）
+- ✓ SR-1 安全修復（Host/Origin＋標頭、key 不轉送、LAN opt-in、媒體硬化、前端 escaping） — **Implemented, Tested, Committed（24d1909）, Pushed**
 - ✓ 垃圾桶與刪除（Phase 3：移至垃圾桶／還原／永久刪除、預設列表排除、檔案與事件全清、無自動清理） — **Implemented, Tested, Committed, Pushed**
 
 ### 後端基礎
@@ -466,7 +466,7 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 
 ---
 
-## SR-2 變更清單（本階段 commit）
+## SR-2 變更清單（commit `547a522`）
 
 | 檔案 | 變更 |
 |---|---|
@@ -551,5 +551,4 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 - **2026-10-10**：SR-1 完成——Host／Origin／`X-Requested-With` 守門（F1/F3）、已存 key 只送 preset＋自訂 URL 需臨時 key（F2）、LAN opt-in＋綁定實測 loopback（F5）、escaping＋CSP／nosniff＋媒體附件化＋移除 inline 處理器（F6）；修復後重演原攻擊全數攔下；測試基線 994 → 1013
 - **2026-10-10**：SR-2 完成——資源上限（body／單檔／檔數／像素／列印光柵；413/400；先前成功檔案保留）＋AI 節流（429＋Retry-After）；`/docs` 預設關閉、API `no-store`／照片 `private`、錯誤訊息去路徑化；列印管線重新序列化並實測修復兩個 mXSS（`<!-->` 註解、實體編碼標記）＋sandbox 預設保留；測試基線 1013 → 1049（+36）
 - **2026-10-11**：Phase 3 垃圾桶與刪除完成——移至垃圾桶（沿用 void、零 migration）＋首頁／搜尋預設排除＋垃圾桶頁（還原至移入前 active／archived，歷史不可靠時安全預設 active）；永久刪除（僅限垃圾桶、單一交易清 DB 與事件、可逆改名後清檔案、刪檔失敗 500 列出路徑不假裝成功、路徑守衛、編號不回收）；無自動清理、備份機制未動；`/trash` UI＋繁英 i18n；測試基線 1052 → 1073（+21；另更新 1 個既有契約測試）
--   * * 2 0 2 6 - 1 0 - 1 1 * * �U X   Kb_j*QHQ�Ote�[b  ����yd�nm�R�_��0!|S  h e r o   s e c t i o n �s��`��yd��rKajd|0͑D}  D O M ��e�X  i 1 8 n   k e y s   @SR }�xe�gqGrxe�6e�e  i n l i n e   s t y l e s   0R  C S S   c l a s s e s �-��[��[te  i 1 8 n   S�A G E N T S . m d �A G E N T _ G U I D E . m d   �f�e�pj�n�N�NAmz�,nf��W�}�}c  1 0 7 3 �c o m m i t   \ e 8 6 f 6 e e \   �]�c��  o r i g i n / m a i n  
- 
+- **2026-10-11**：UX 手機優先修整完成——首頁移除浮動快門、簡化 hero section；詳情頁移除狀態標籤、重組 DOM；新增 i18n keys 區分紀錄數／照片數；收斂 inline styles 到 CSS classes；設定頁完整 i18n 化；AGENTS.md＋AGENT_GUIDE.md 更新為標準交付流程；測試基線維持 1073；commit `e86f6ee` 已推送至 origin/main
