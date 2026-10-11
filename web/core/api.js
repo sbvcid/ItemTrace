@@ -252,6 +252,14 @@ export const api = {
     });
   },
 
+  // 移除識別碼（capture 的重試流程：已套用但使用者後來改掉／移除的值
+  // 必須真的刪除，不能只停止重新套用）
+  async deleteIdentifier(identifierId) {
+    return request(`/api/identifiers/${identifierId}`, {
+      method: 'DELETE',
+    });
+  },
+
   // Settings
   async getAiSettings() {
     return request('/api/settings/ai');

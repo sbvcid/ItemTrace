@@ -272,3 +272,186 @@ def test_prompt_covers_generic_scenes_and_keeps_protection_policy():
     # 既有拒絕／撤回政策原樣保留（不可因通用化被移除）
     assert "可以再次提出" in PROMPT
     assert "不會自動套用被拒絕或撤回過的值" in PROMPT
+
+
+# ----------------------------------------------------------------------
+# 保存一致性：以使用者最後確認的內容為準。
+# AI 原值只留在建議紀錄裡（reject／accept 的歷史與來源追溯），
+# 使用者的修改一律經 PATCH／addIdentifier 落地，不冒充 AI 判讀。
+# 這些測試對應 capture.js 存檔流程實際使用的 API 順序。
+# ----------------------------------------------------------------------
+
+
+def _new_item(client):
+    staged, _entries = upload_staged(client, ["save.jpg"])
+    done = client.post(
+        "/api/inbox/intake", json={"files": staged, "kind": "intake"}
+    ).json()
+    return done["item_id"]
+
+
+def _create_suggestion(client, item_id, field, value, *, confidence=0.9):
+    response = client.post(
+        f"/api/items/{item_id}/suggestions",
+        json={
+            "field": field,
+            "value": value,
+            "confidence": confidence,
+            "source": "external",
+            "model_name": "test/model:free",
+            "actor": "external",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def test_cleared_field_keeps_raw_ai_value_only_in_rejected_suggestion(client):
+    """使用者清空欄位：原始 AI 建議不得仍被接受寫入正式紀錄。"""
+    item_id = _new_item(client)
+    suggestion_id = _create_suggestion(client, item_id, "brand", "SONY")
+
+    assert client.post(
+        f"/api/suggestions/{suggestion_id}/reject"
+    ).status_code == 200
+
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert detail["item"]["brand"] == ""
+    assert [s["status"] for s in detail["suggestions"]] == ["rejected"]
+    assert detail["suggestions"][0]["value"] == "SONY"  # AI 原值保留（追溯）
+    assert detail["suggestions"][0]["model_name"] == "test/model:free"
+    # 未確認的猜測不進搜尋
+    assert client.get("/api/items?q=SONY").json() == []
+
+
+def test_edited_field_is_user_patch_and_suggestion_keeps_raw_value(client):
+    """使用者修改欄位：正式值＝使用者輸入；建議維持 AI 原值（不冒充）。"""
+    item_id = _new_item(client)
+    suggestion_id = _create_suggestion(client, item_id, "brand", "SONY")
+
+    assert client.post(
+        f"/api/suggestions/{suggestion_id}/reject"
+    ).status_code == 200
+    patch = client.patch(
+        f"/api/items/{item_id}", json={"brand": "Sony", "actor": "user"}
+    )
+    assert patch.status_code == 200
+
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert detail["item"]["brand"] == "Sony"
+    assert detail["suggestions"][0]["status"] == "rejected"
+    assert detail["suggestions"][0]["value"] == "SONY"  # 沒有被改成 "Sony"
+    assert [i["id"] for i in client.get("/api/items?q=Sony").json()] == [item_id]
+
+
+def test_removed_attribute_is_not_saved(client):
+    item_id = _new_item(client)
+    suggestion_id = _create_suggestion(
+        client, item_id, "attribute:weather", "多雲"
+    )
+
+    assert client.post(
+        f"/api/suggestions/{suggestion_id}/reject"
+    ).status_code == 200
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert detail["item"]["attributes"] == {}
+    assert client.get("/api/items?q=多雲").json() == []
+
+
+def test_removed_after_accept_is_actually_removed_from_record(client):
+    """重試情境：已接受的屬性被使用者移除 ⇒ 真的從紀錄刪除。
+
+    已接受的建議本身保留在歷史（追溯不破壞），但正式 attributes 不再有
+    該鍵 —— 不是只停止重新套用、假裝已移除。
+    """
+    item_id = _new_item(client)
+    suggestion_id = _create_suggestion(
+        client, item_id, "attribute:description", "舊描述"
+    )
+    assert client.post(
+        f"/api/suggestions/{suggestion_id}/accept"
+    ).status_code == 200
+    assert client.get(f"/api/items/{item_id}").json()["item"]["attributes"] == {
+        "description": "舊描述"
+    }
+
+    # capture.js 的移除：GET 現值 → 刪除該鍵 → PATCH 寫回（差異併回）
+    current = client.get(f"/api/items/{item_id}").json()["item"]["attributes"]
+    merged = dict(current)
+    del merged["description"]
+    assert client.patch(
+        f"/api/items/{item_id}", json={"attributes": merged}
+    ).status_code == 200
+
+    assert client.get(f"/api/items/{item_id}").json()["item"]["attributes"] == {}
+    statuses = [s["status"] for s in client.get(
+        f"/api/items/{item_id}").json()["suggestions"]]
+    assert statuses == ["accepted"]  # 建議歷史仍在
+
+
+def test_replaced_attribute_keeps_final_value_only(client):
+    """移除 AI 屬性後以同 key 新增自訂值：保存最終值，舊值不復活。"""
+    item_id = _new_item(client)
+    suggestion_id = _create_suggestion(
+        client, item_id, "attribute:weather", "多雲"
+    )
+    assert client.post(
+        f"/api/suggestions/{suggestion_id}/reject"
+    ).status_code == 200
+    # 已拒絕的建議不得被重新接受（待確認保護；後端回 400）
+    assert client.post(
+        f"/api/suggestions/{suggestion_id}/accept"
+    ).status_code == 400
+
+    assert client.patch(
+        f"/api/items/{item_id}", json={"attributes": {"weather": "晴朗"}}
+    ).status_code == 200
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert detail["item"]["attributes"] == {"weather": "晴朗"}
+    assert [i["id"] for i in client.get("/api/items?q=晴朗").json()] == [item_id]
+
+
+def test_cleared_identifiers_are_not_saved(client):
+    item_id = _new_item(client)
+    serial = _create_suggestion(client, item_id, "identifier:serial", "SN-1")
+    imei = _create_suggestion(
+        client, item_id, "identifier:imei", "123456789012345"
+    )
+    assert client.post(f"/api/suggestions/{serial}/reject").status_code == 200
+    assert client.post(f"/api/suggestions/{imei}/reject").status_code == 200
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert detail["identifiers"] == []
+
+
+def test_edited_identifier_is_saved_as_user_value_only(client):
+    item_id = _new_item(client)
+    barcode = _create_suggestion(
+        client, item_id, "identifier:barcode", "4901234567894"
+    )
+    assert client.post(f"/api/suggestions/{barcode}/reject").status_code == 200
+    added = client.post(
+        f"/api/items/{item_id}/identifiers",
+        json={"kind": "barcode", "value": "4901234567895"},
+    )
+    assert added.status_code == 201
+
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert [(i["kind"], i["value"]) for i in detail["identifiers"]] == [
+        ("barcode", "4901234567895")
+    ]
+    # 建議保留 AI 原值，不會被改成使用者修正後的值
+    assert detail["suggestions"][0]["value"] == "4901234567894"
+
+
+def test_removed_after_accept_identifier_is_really_deleted(client):
+    item_id = _new_item(client)
+    serial = _create_suggestion(client, item_id, "identifier:serial", "SN-7")
+    assert client.post(f"/api/suggestions/{serial}/accept").status_code == 200
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert len(detail["identifiers"]) == 1
+
+    deleted = client.delete(
+        f"/api/identifiers/{detail['identifiers'][0]['id']}"
+    )
+    assert deleted.status_code == 204
+    assert client.get(f"/api/items/{item_id}").json()["identifiers"] == []

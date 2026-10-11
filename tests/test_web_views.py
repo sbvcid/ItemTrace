@@ -80,7 +80,7 @@ def test_detail_error_keys_exist_in_both_locales():
 
 
 def test_capture_review_surfaces_all_generated_suggestions():
-    """審閱畫面必須呈現並可編輯動態屬性（含描述），才能按「存起來」。
+    """審閱畫面必須呈現並可編輯動態屬性（含描述）與識別碼，才能按「存起來」。
 
     迴歸目標：舊版只渲染固定欄位 —— attribute:* 建議會被存檔流程
     靜默套用，使用者看不到、改不到、也刪不掉。
@@ -90,8 +90,31 @@ def test_capture_review_surfaces_all_generated_suggestions():
     assert "edit-description" in source, "描述必須有可編輯輸入"
     assert "edit-attributes-list" in source, "動態屬性必須有編輯列"
     assert "btn-add-attribute" in source, "使用者必須能自行新增屬性"
+    assert "edit-identifiers-list" in source, "識別碼必須有可編輯列"
     assert "btn-toggle-edit" in source, "修改入口必須存在"
     assert "draft-actions" in source, "操作區必須存在（存起來／修改／取消）"
+
+
+def test_capture_validates_before_intake():
+    """名稱為必填、屬性 key 驗證（規則／重複／缺名）必須在第一次
+    api.intake 之前完成 —— 驗證失敗不留半套正式紀錄。"""
+    source = (ROOT / "web" / "views" / "capture.js").read_text(encoding="utf-8")
+    assert "validateDraftForSave" in source
+    assert "ATTRIBUTE_KEY_RE" in source
+    # 驗證的呼叫必須出現在 api.intake 之前
+    assert source.index("validateDraftForSave()") < source.index("api.intake(")
+    # 不合法 key 不得進入正式資料（驗證不通過直接 return，尚未 intake）
+    assert "return;" in source
+
+    for name in ("zh-TW.js", "en.js"):
+        text = (WEB / "i18n" / name).read_text(encoding="utf-8")
+        for key in (
+            "nameRequired",
+            "attributeKeyInvalid",
+            "attributeKeyDuplicate",
+            "attributeKeyMissing",
+        ):
+            assert re.search(rf"\b{key}\s*:", text), f"{name} 缺少 {key}"
 
 
 def test_detail_view_renders_description_as_reading_entry():

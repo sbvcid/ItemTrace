@@ -453,10 +453,13 @@ def test_phase2a_capture_partial_failure_static_checks(client):
 
     accept 失敗不再被靜默吞掉；已套用的操作會被記住，
     讓重試不會重複套用；部分失敗有專屬訊息而非假裝全部成功。
+    保存一致性（後續強化）：被拒絕的建議與需要真刪除的識別碼
+    都有追蹤狀態，重試時不會把使用者移除的值留下或復活。
     """
     capture_js = client.get("/views/capture.js").text
     assert "appliedSuggestionIds" in capture_js
-    assert "appliedSerialValue" in capture_js
+    assert "rejectedSuggestionIds" in capture_js
+    assert "identifierDeletes" in capture_js
     assert "savePartial" in capture_js
     assert "failures.push" in capture_js
 
@@ -732,8 +735,9 @@ def test_capture_serial_inspect_uses_backend_photo_id_mapping(client):
     assert "photoUrlById" in capture_js
     assert "photoUrlById = new Map(capturedFiles.map((c, i) => [i, c.url]))" in capture_js
 
-    # 序號查閱：以草稿索引查對應；退回第一張只是 fallback
-    assert "photoUrlById.get(sourcePhotos.serial)" in capture_js
+    # 序號查閱：以草稿索引（識別碼列自己的 sourcePhotoIndex）查對應；
+    # 退回第一張只是 fallback
+    assert "photoUrlById.get(row.sourcePhotoIndex)" in capture_js
     assert "capturedFiles[0]?.url" in capture_js
 
     # 存檔：以 intake 的 archived（PhotoOut：id + orig_name）建立正式來源對應
