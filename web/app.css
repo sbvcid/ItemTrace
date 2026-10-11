@@ -881,6 +881,28 @@ body {
   gap: 4px;
 }
 
+/* 使用者改過／自行新增的值（自訂 badge；與「看見／推測」區分） */
+.badge-custom {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 補充屬性等欄位群組的小標題 */
+.ai-field-section-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
 .ai-field-value {
   font-size: 1.05rem;
   font-weight: 600;
@@ -1037,6 +1059,15 @@ body {
   line-height: 1.3;
   margin-bottom: 8px;
   letter-spacing: -0.02em;
+}
+
+/* 通用紀錄的描述：標題後的主要閱讀入口（attribute:description） */
+.detail-description {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  line-height: 1.65;
+  margin-bottom: 8px;
+  white-space: pre-wrap;
 }
 
 .detail-specs-grid {

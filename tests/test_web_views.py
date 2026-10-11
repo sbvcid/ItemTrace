@@ -77,3 +77,25 @@ def test_detail_error_keys_exist_in_both_locales():
         text = (WEB / "i18n" / name).read_text(encoding="utf-8")
         for key in keys:
             assert re.search(rf"\b{key}\s*:", text), f"{name} 缺少 {key}"
+
+
+def test_capture_review_surfaces_all_generated_suggestions():
+    """審閱畫面必須呈現並可編輯動態屬性（含描述），才能按「存起來」。
+
+    迴歸目標：舊版只渲染固定欄位 —— attribute:* 建議會被存檔流程
+    靜默套用，使用者看不到、改不到、也刪不掉。
+    """
+    source = (ROOT / "web" / "views" / "capture.js").read_text(encoding="utf-8")
+    assert "attribute:" in source, "審閱必須認得 attribute:<key> 建議"
+    assert "edit-description" in source, "描述必須有可編輯輸入"
+    assert "edit-attributes-list" in source, "動態屬性必須有編輯列"
+    assert "btn-add-attribute" in source, "使用者必須能自行新增屬性"
+    assert "btn-toggle-edit" in source, "修改入口必須存在"
+    assert "draft-actions" in source, "操作區必須存在（存起來／修改／取消）"
+
+
+def test_detail_view_renders_description_as_reading_entry():
+    """詳情頁以標題＋描述為主要閱讀入口；描述不重複列在補充資訊。"""
+    source = (ROOT / "web" / "views" / "record-detail.js").read_text(encoding="utf-8")
+    assert "detail-description" in source
+    assert "key !== 'description'" in source

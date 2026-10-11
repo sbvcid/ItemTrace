@@ -81,9 +81,6 @@ export async function createCaptureView(params, router) {
               <span>✨</span>
               <span>${t('capture.reviewTitle')}</span>
             </div>
-            <button type="button" class="icon-btn" id="btn-toggle-edit" title="${t('capture.btnEdit')}">
-              <span style="font-size: 0.9rem;">✎ ${t('capture.btnEdit')}</span>
-            </button>
           </div>
 
           <!-- 照片橫條 -->
@@ -124,13 +121,25 @@ export async function createCaptureView(params, router) {
               <label class="ai-field-label">${t('detail.fieldCondition')}</label>
               <input type="text" class="ai-edit-input" id="edit-condition" placeholder="${t('capture.conditionPlaceholder')}" />
             </div>
+            <div class="ai-field-row">
+              <label class="ai-field-label">${t('capture.descriptionLabel')}</label>
+              <textarea class="ai-edit-input" id="edit-description" rows="2" style="resize: vertical;" placeholder="${t('capture.descriptionPlaceholder')}"></textarea>
+            </div>
+            <div class="ai-field-row">
+              <label class="ai-field-label">${t('capture.attributesSection')}</label>
+              <div id="edit-attributes-list"></div>
+              <button type="button" class="btn-secondary" id="btn-add-attribute" style="width: auto; margin-top: 8px; font-size: 0.82rem;">${t('capture.addAttribute')}</button>
+            </div>
           </div>
 
-          <!-- 核心操作按鈕 -->
+          <!-- 核心操作：存起來／修改／取消（修改入口放在閱讀完的操作區） -->
           <div class="draft-actions">
             <button type="button" class="btn-primary" id="btn-save-confirm">
               <span>✓</span>
               <span>${t('capture.btnSaveDirect')}</span>
+            </button>
+            <button type="button" class="btn-secondary" id="btn-toggle-edit">
+              <span id="btn-toggle-edit-text">✎ ${t('capture.btnEdit')}</span>
             </button>
             <button type="button" class="btn-secondary" id="btn-cancel-draft">
               <span>${t('app.cancel')}</span>
@@ -165,6 +174,26 @@ export async function createCaptureView(params, router) {
   let currentSuggestions = [];  // 草稿建議（無 id；index 對應上傳順序）
   let isEditMode = false;
 
+  // 動態屬性（AI 的 attribute:<key> ＋ 使用者新增）：審閱畫面與存檔都以
+  // 這份清單為準。draftIndex 指向 currentSuggestions 的索引；null 表示
+  // 使用者自己新增（存檔時以 PATCH attributes 合併）。original 用來標示
+  // 使用者是否改過該值（「自訂」badge）。
+  let attributeRows = [];
+  // serial 以外的識別碼（imei／barcode）—— 顯示用；存檔沿用草稿建議流程。
+  let identifierRows = [];
+
+  // 本輪草稿的固定欄位原始 AI 值與信心（閱讀模式標示「自訂／看見／推測」用）。
+  let extracted = {
+    name: '',
+    brand: '',
+    model: '',
+    category: '',
+    serial: '',
+    condition: '',
+  };
+  let confidences = {};
+  let sourcePhotos = {};
+
   // 草稿的 source_photo_index → 本機 blob URL（審閱時照片還沒有後端 ID）。
   let photoUrlById = new Map();
   // 存檔 intake 之後 orig_name → photos.id（把草稿的來源照片對應到正式紀錄）。
@@ -198,8 +227,11 @@ export async function createCaptureView(params, router) {
   const fieldsEditContainer = el.querySelector('#fields-edit-container');
   const reviewPhotosBar = el.querySelector('#review-photos-bar');
   const btnToggleEdit = el.querySelector('#btn-toggle-edit');
+  const btnToggleEditText = el.querySelector('#btn-toggle-edit-text');
   const btnSaveConfirm = el.querySelector('#btn-save-confirm');
   const btnCancelDraft = el.querySelector('#btn-cancel-draft');
+  const editAttributesList = el.querySelector('#edit-attributes-list');
+  const btnAddAttribute = el.querySelector('#btn-add-attribute');
 
   const editName = el.querySelector('#edit-name');
   const editBrand = el.querySelector('#edit-brand');
@@ -207,6 +239,7 @@ export async function createCaptureView(params, router) {
   const editCategory = el.querySelector('#edit-category');
   const editSerial = el.querySelector('#edit-serial');
   const editCondition = el.querySelector('#edit-condition');
+  const editDescription = el.querySelector('#edit-description');
 
   const inspectorModal = el.querySelector('#inspector-modal');
   const inspectorImg = el.querySelector('#inspector-img');
@@ -377,8 +410,8 @@ export async function createCaptureView(params, router) {
       reviewPhotosBar.appendChild(photoThumb);
     });
 
-    // Extract values from AI suggestions
-    const extracted = {
+    // 固定欄位：沿用原本的萃取（最後一筆同欄位建議勝出，與存檔順序一致）。
+    extracted = {
       name: '',
       brand: '',
       model: '',
@@ -386,11 +419,33 @@ export async function createCaptureView(params, router) {
       serial: '',
       condition: '',
     };
-    const confidences = {};
-    const sourcePhotos = {};
+    confidences = {};
+    sourcePhotos = {};
 
-    for (const s of currentSuggestions) {
-      if (s.field === 'name') {
+    // 動態屬性（attribute:<key>，含 attribute:description）全部收進
+    // attributeRows；serial 以外的識別碼（imei／barcode）另外收起來顯示。
+    // 舊版只認固定欄位，這些已經產生的建議會在使用者看不到的情況下被
+    // 存檔流程默默套用 —— 現在全部先呈現再保存。
+    attributeRows = [];
+    identifierRows = [];
+
+    currentSuggestions.forEach((s, index) => {
+      if (s.field.startsWith('attribute:')) {
+        attributeRows.push({
+          key: s.field.slice('attribute:'.length),
+          value: s.value,
+          original: s.value,
+          confidence: s.confidence,
+          sourcePhotoIndex: s.source_photo_index,
+          draftIndex: index,
+        });
+      } else if (s.field.startsWith('identifier:') && s.field !== 'identifier:serial') {
+        identifierRows.push({
+          key: s.field.slice('identifier:'.length),
+          value: s.value,
+          confidence: s.confidence,
+        });
+      } else if (s.field === 'name') {
         extracted.name = s.value;
         confidences.name = s.confidence;
       } else if (s.field === 'brand') {
@@ -412,7 +467,7 @@ export async function createCaptureView(params, router) {
         // photoUrlById 以同樣的索引對應到本機 blob URL。
         sourcePhotos.serial = s.source_photo_index;
       }
-    }
+    });
 
     // Set initial edit inputs
     editName.value = extracted.name || '';
@@ -421,51 +476,85 @@ export async function createCaptureView(params, router) {
     editCategory.value = extracted.category || '';
     editSerial.value = extracted.serial || '';
     editCondition.value = extracted.condition || '';
+    syncDescriptionInput();
 
-    // Render Display Fields (區分「看見」與「推測」)
+    renderAttributeEditRows();
+    renderDisplayFields();
+  }
+
+  // 目前編輯輸入框的固定欄位值（閱讀模式顯示與存檔都以此為準）。
+  function currentReviewValues() {
+    return {
+      name: editName.value.trim(),
+      brand: editBrand.value.trim(),
+      model: editModel.value.trim(),
+      category: editCategory.value.trim(),
+      condition: editCondition.value.trim(),
+      serial: editSerial.value.trim(),
+    };
+  }
+
+  // 閱讀模式：以標題與描述為主要入口，列出所有有值的內容（空值不佔位）。
+  function renderDisplayFields() {
     fieldsDisplayContainer.innerHTML = '';
+    const values = currentReviewValues();
 
-    const hasAnyField = extracted.name || extracted.brand || extracted.model || extracted.serial;
-
-    if (!hasAnyField) {
-      // General photo / pet / landscape / no AI key case (Scenario C)
+    const hasAny = Object.values(values).some(Boolean)
+      || attributeRows.some(r => r.value.trim());
+    if (!hasAny) {
+      // 沒有 AI 欄位（沒有 key／AI 失敗／純風景）：仍可修改或直接存。
       fieldsDisplayContainer.innerHTML = `
         <div style="background: var(--bg-subtle); padding: 14px; border-radius: var(--radius-md); font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">
           ${t('capture.noFieldAlert')}
         </div>
-        <div class="ai-field-row" style="margin-top: 12px;">
-          <label class="ai-field-label">${t('detail.fieldName')}</label>
-          <input type="text" class="ai-edit-input" id="fallback-name" placeholder="${t('capture.namePlaceholder')}" value="${escapeHtml(editName.value)}" />
-        </div>
       `;
-
-      const fallbackNameInput = fieldsDisplayContainer.querySelector('#fallback-name');
-      fallbackNameInput.addEventListener('input', () => {
-        editName.value = fallbackNameInput.value;
-      });
       return;
     }
 
-    // 1. Name
-    if (extracted.name) {
-      fieldsDisplayContainer.appendChild(createFieldRow(t('detail.fieldName'), extracted.name, confidences.name));
+    // 使用者改過的值標「自訂」；沒改的照原信心水準標「看見／推測」。
+    const fixedBadge = (value, aiValue, confidence) => ({
+      confidence,
+      custom: Boolean(value) && value !== (aiValue || ''),
+    });
+
+    // 1. 標題
+    if (values.name) {
+      fieldsDisplayContainer.appendChild(createFieldRow(
+        t('detail.fieldName'), values.name,
+        fixedBadge(values.name, extracted.name, confidences.name)));
     }
 
-    // 2. Brand & Model
-    if (extracted.brand || extracted.model) {
-      const bmVal = [extracted.brand, extracted.model].filter(Boolean).join(' · ');
+    // 2. 描述（閱讀主入口）
+    const descriptionRow = attributeRows.find(r => r.key === 'description' && r.value.trim());
+    if (descriptionRow) {
+      fieldsDisplayContainer.appendChild(createFieldRow(
+        t('capture.descriptionLabel'), descriptionRow.value.trim(),
+        { confidence: descriptionRow.confidence, custom: isRowCustom(descriptionRow), paragraph: true }));
+    }
+
+    // 3. 品牌 / 型號
+    if (values.brand || values.model) {
+      const bmVal = [values.brand, values.model].filter(Boolean).join(' · ');
       const bmConf = Math.min(confidences.brand ?? 1, confidences.model ?? 1);
-      fieldsDisplayContainer.appendChild(createFieldRow(`${t('detail.fieldBrand')} / ${t('detail.fieldModel')}`, bmVal, bmConf));
+      const bmCustom = (values.brand && values.brand !== (extracted.brand || ''))
+        || (values.model && values.model !== (extracted.model || ''));
+      fieldsDisplayContainer.appendChild(createFieldRow(
+        `${t('detail.fieldBrand')} / ${t('detail.fieldModel')}`, bmVal,
+        { confidence: bmConf, custom: Boolean(bmCustom) }));
     }
 
-    // 3. Category
-    if (extracted.category) {
-      fieldsDisplayContainer.appendChild(createFieldRow(t('detail.fieldCategory'), extracted.category, confidences.category));
+    // 4. 分類
+    if (values.category) {
+      fieldsDisplayContainer.appendChild(createFieldRow(
+        t('detail.fieldCategory'), values.category,
+        fixedBadge(values.category, extracted.category, confidences.category)));
     }
 
-    // 4. Serial Number (with Magnifier context pill)
-    if (extracted.serial) {
-      const serialRow = createFieldRow(t('detail.serialBadge'), extracted.serial, confidences.serial, true);
+    // 5. 序號（含查閱來源照片）
+    if (values.serial) {
+      const serialRow = createFieldRow(
+        t('detail.serialBadge'), values.serial,
+        { confidence: confidences.serial, mono: true, custom: values.serial !== (extracted.serial || '') });
       const labelGroup = serialRow.querySelector('.ai-field-label-group');
 
       const inspectBtn = document.createElement('button');
@@ -491,40 +580,172 @@ export async function createCaptureView(params, router) {
       fieldsDisplayContainer.appendChild(serialRow);
     }
 
-    // 5. Condition
-    if (extracted.condition) {
-      fieldsDisplayContainer.appendChild(createFieldRow(t('detail.fieldCondition'), extracted.condition, confidences.condition));
+    // 6. 其他識別碼（imei／barcode）
+    identifierRows.forEach(row => {
+      if (!row.value.trim()) return;
+      fieldsDisplayContainer.appendChild(createFieldRow(
+        row.key.toUpperCase(), row.value,
+        { confidence: row.confidence, mono: true }));
+    });
+
+    // 7. 外觀備註
+    if (values.condition) {
+      fieldsDisplayContainer.appendChild(createFieldRow(
+        t('detail.fieldCondition'), values.condition,
+        fixedBadge(values.condition, extracted.condition, confidences.condition)));
+    }
+
+    // 8. 其他動態屬性（補充屬性）
+    const extraAttributes = attributeRows.filter(
+      r => r.key !== 'description' && r.value.trim());
+    if (extraAttributes.length > 0) {
+      const section = document.createElement('div');
+      section.className = 'ai-field-section-label';
+      section.textContent = t('capture.attributesSection');
+      fieldsDisplayContainer.appendChild(section);
+
+      extraAttributes.forEach(row => {
+        fieldsDisplayContainer.appendChild(createFieldRow(
+          row.key, row.value.trim(),
+          { confidence: row.confidence, custom: isRowCustom(row) }));
+      });
     }
   }
 
-  function createFieldRow(label, value, confidence, isMono = false) {
+  function isRowCustom(row) {
+    if (!row.value.trim()) return false;
+    return row.draftIndex === null || row.value.trim() !== (row.original || '');
+  }
+
+  function syncDescriptionInput() {
+    const row = attributeRows.find(r => r.key === 'description');
+    editDescription.value = row ? row.value : '';
+  }
+
+  // 編輯模式：動態屬性的可編輯列（description 有專屬輸入框，不重複列出）。
+  function renderAttributeEditRows() {
+    editAttributesList.innerHTML = '';
+    attributeRows
+      .filter(row => row.key !== 'description')
+      .forEach(row => editAttributesList.appendChild(createAttributeEditRow(row)));
+  }
+
+  function createAttributeEditRow(row) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display: flex; gap: 8px; align-items: center; margin-bottom: 8px;';
+
+    if (row.draftIndex === null) {
+      // 使用者新增的屬性：key 可編輯。
+      const keyInput = document.createElement('input');
+      keyInput.type = 'text';
+      keyInput.className = 'ai-edit-input';
+      keyInput.style.flex = '0 0 36%';
+      keyInput.placeholder = t('capture.attributeKeyPlaceholder');
+      keyInput.value = row.key;
+      keyInput.addEventListener('input', () => { row.key = keyInput.value; });
+      wrap.appendChild(keyInput);
+    } else {
+      const label = document.createElement('span');
+      label.className = 'ai-field-label';
+      label.style.flex = '0 0 36%';
+      label.style.overflow = 'hidden';
+      label.style.textOverflow = 'ellipsis';
+      label.textContent = row.key;
+      wrap.appendChild(label);
+    }
+
+    const valueInput = document.createElement('input');
+    valueInput.type = 'text';
+    valueInput.className = 'ai-edit-input';
+    valueInput.style.flex = '1';
+    valueInput.placeholder = t('capture.attributeValuePlaceholder');
+    valueInput.value = row.value;
+    valueInput.addEventListener('input', () => { row.value = valueInput.value; });
+    wrap.appendChild(valueInput);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'icon-btn';
+    removeBtn.title = t('capture.removeAttribute');
+    removeBtn.innerHTML = '✕';
+    removeBtn.addEventListener('click', () => {
+      attributeRows = attributeRows.filter(entry => entry !== row);
+      renderAttributeEditRows();
+    });
+    wrap.appendChild(removeBtn);
+    return wrap;
+  }
+
+  // 描述輸入框：直接寫回對應的屬性列；沒有 AI 描述時才建立使用者列。
+  editDescription.addEventListener('input', () => {
+    const value = editDescription.value;
+    let row = attributeRows.find(r => r.key === 'description');
+    if (!row) {
+      row = {
+        key: 'description',
+        value: '',
+        original: '',
+        confidence: null,
+        sourcePhotoIndex: null,
+        draftIndex: null,
+      };
+      attributeRows.push(row);
+    }
+    row.value = value;
+  });
+
+  btnAddAttribute.addEventListener('click', () => {
+    attributeRows.push({
+      key: '',
+      value: '',
+      original: '',
+      confidence: null,
+      sourcePhotoIndex: null,
+      draftIndex: null,
+    });
+    renderAttributeEditRows();
+  });
+
+  function createFieldRow(label, value, { confidence = null, mono = false, custom = false, paragraph = false } = {}) {
     const row = document.createElement('div');
     row.className = 'ai-field-row';
 
-    // 規則：區分看見 (>= 0.85) 與推測 (< 0.85)
+    // 規則：區分看見 (>= 0.85) 與推測 (< 0.85)；使用者改過的值標「自訂」。
     const isCertain = confidence !== undefined && confidence !== null && confidence >= 0.85;
-    const badgeHtml = isCertain
-      ? `<span class="badge-seen">✓ ${t('capture.badgeSeen')}</span>`
-      : `<span class="badge-guess">~ ${t('capture.badgeInferred')}</span>`;
+    const badgeHtml = custom
+      ? `<span class="badge-custom">✎ ${t('capture.badgeCustom')}</span>`
+      : isCertain
+        ? `<span class="badge-seen">✓ ${t('capture.badgeSeen')}</span>`
+        : `<span class="badge-guess">~ ${t('capture.badgeInferred')}</span>`;
 
+    const valueStyle = paragraph
+      ? 'font-weight: normal; font-size: 0.95rem; line-height: 1.6; white-space: pre-wrap;'
+      : '';
     row.innerHTML = `
       <div class="ai-field-label-group">
         <span class="ai-field-label">${escapeHtml(label)}</span>
         ${badgeHtml}
       </div>
-      <div class="ai-field-value ${isMono ? 'mono' : ''}">${escapeHtml(value)}</div>
+      <div class="ai-field-value ${mono ? 'mono' : ''}" style="${valueStyle}">${escapeHtml(value)}</div>
     `;
     return row;
   }
 
-  // Toggle Edit Mode
+  // Toggle Edit Mode（閱讀↔修改；修改入口在內容下方操作區）
   btnToggleEdit.addEventListener('click', () => {
     isEditMode = !isEditMode;
     fieldsEditContainer.style.display = isEditMode ? 'flex' : 'none';
     fieldsDisplayContainer.style.display = isEditMode ? 'none' : 'flex';
-    btnToggleEdit.innerHTML = isEditMode
-      ? `<span style="font-size: 0.9rem; color: var(--color-primary); font-weight: 700;">✓ ${t('app.confirm')}</span>`
-      : `<span style="font-size: 0.9rem;">✎ ${t('capture.btnEdit')}</span>`;
+    if (isEditMode) {
+      syncDescriptionInput();
+      renderAttributeEditRows();
+    } else {
+      // 回到閱讀模式：顯示目前（可能已修改）的內容，而不是舊的 AI 值。
+      renderDisplayFields();
+    }
+    btnToggleEditText.textContent = isEditMode
+      ? `✓ ${t('app.confirm')}`
+      : `✎ ${t('capture.btnEdit')}`;
   });
 
   // Close inspector
@@ -568,18 +789,25 @@ export async function createCaptureView(params, router) {
       }
 
       // 1. 把 AI 草稿落成正式建議並逐筆接受；來源照片對應到正式 photos.id。
+      //    動態屬性以審閱列為準：使用者移除的列不建立；改過的值用改過的。
       for (let index = 0; index < currentSuggestions.length; index++) {
         if (appliedSuggestionIds.has(index)) continue;
+        const draft = currentSuggestions[index];
+        let value = draft.value;
+        if (draft.field.startsWith('attribute:')) {
+          const row = attributeRows.find(r => r.draftIndex === index);
+          if (!row || !row.value.trim()) continue;  // 已移除或清空
+          value = row.value.trim();
+        }
         try {
           let suggestionId = createdSuggestionIds.get(index);
           if (!suggestionId) {
-            const draft = currentSuggestions[index];
             const sourcePhotoId = archivedIdByOrigName.get(
               capturedFiles[draft.source_photo_index]?.file.name
             ) || null;
             const created = await api.createSuggestion(currentItemId, {
               field: draft.field,
-              value: draft.value,
+              value: value,
               confidence: draft.confidence ?? null,
               source: 'external',
               model_name: draftModel,
@@ -593,7 +821,7 @@ export async function createCaptureView(params, router) {
           appliedSuggestionIds.add(index);
         } catch (err) {
           console.warn(`Could not apply suggestion #${index}:`, err);
-          failures.push({ what: currentSuggestions[index].field, error: err });
+          failures.push({ what: draft.field, error: err });
         }
       }
 
@@ -634,6 +862,25 @@ export async function createCaptureView(params, router) {
             console.warn('Identifier add failed:', err.message);
             failures.push({ what: 'identifier:serial', error: err });
           }
+        }
+      }
+
+      // 3.5 使用者自行新增的動態屬性（沒有 AI 草稿）：PATCH attributes
+      //     單向合併。以「目前值 ＋ 新增列」組出完整字典（PATCH 是整包
+      //     取代語意），同一字典重送是 no-op，重試不會重複套用。
+      const userAdded = attributeRows.filter(
+        r => r.draftIndex === null && r.key.trim() && r.value.trim());
+      if (userAdded.length > 0) {
+        try {
+          const current = await api.getItem(currentItemId);
+          const merged = { ...(current.item.attributes || {}) };
+          for (const row of userAdded) {
+            merged[row.key.trim()] = row.value.trim();
+          }
+          await api.patchItem(currentItemId, { attributes: merged });
+        } catch (err) {
+          console.warn('User attribute save failed:', err.message);
+          failures.push({ what: t('capture.attributesSection'), error: err });
         }
       }
 

@@ -632,10 +632,16 @@ export async function createRecordDetailView(params, router) {
           </div>
         `).join('');
 
-    // 補充資訊：AI（或使用者）整理出的 attributes（Phase 2B）
-    const attributeEntries = Object.entries(item.attributes || {})
-      .filter(([, value]) =>
-        value !== null && value !== undefined && String(value).trim() !== '');
+    // 補充資訊：AI（或使用者）整理出的 attributes（Phase 2B）。
+    // attribute:description 另外抽出來，作為標題後的描述主入口。
+    const attributes = item.attributes || {};
+    const description = typeof attributes.description === 'string'
+      ? attributes.description.trim()
+      : '';
+    const attributeEntries = Object.entries(attributes)
+      .filter(([key, value]) =>
+        key !== 'description'
+        && value !== null && value !== undefined && String(value).trim() !== '');
     const attributesHtml = attributeEntries.length > 0
       ? `
           <div class="spec-item" style="grid-column: 1 / -1;">
@@ -657,6 +663,7 @@ export async function createRecordDetailView(params, router) {
 
       <div class="detail-card" style="margin-top: 18px;">
         <div class="detail-title">${title}</div>
+        ${description ? `<div class="detail-description">${escapeHtml(description)}</div>` : ''}
 
         <div class="detail-specs-grid">
           ${item.brand ? `
