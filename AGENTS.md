@@ -26,7 +26,7 @@
 **技術棧**：
 - 後端：Python + FastAPI + SQLite (WAL mode)
 - 前端：零建置 ESM 純 JavaScript SPA
-- 測試：pytest (1089 tests)
+- 測試：pytest (1096 tests)
 - 部署：local-first, 無外部依賴
 
 **當前階段**：Phase 3 垃圾桶完成、capture 建檔流程修正完成、AI 重新分析流程改善完成；下一個候選：Phase 4 分類系統與 AI 自動分類（啟動前需確認範圍）

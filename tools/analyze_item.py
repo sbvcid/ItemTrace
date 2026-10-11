@@ -44,11 +44,13 @@ from shop.ai_client import (  # noqa: E402
     PROMPT,
     TIMEOUT,
     AnalyzerError,
+    build_analysis_context,
     build_request_body,
     call_ai_provider,
     extract_text,
     parse_suggestions,
     photo_data_url,
+    select_photos_for_analysis,
     strip_code_fence,
 )
 from shop.ai_config import (  # noqa: E402
@@ -86,6 +88,7 @@ __all__ = [
     "PROMPT",
     "TIMEOUT",
     "analyze",
+    "build_analysis_context",
     "build_request_body",
     "call_ai_provider",
     "config_path",
@@ -98,6 +101,7 @@ __all__ = [
     "read_settings",
     "redact",
     "save_settings",
+    "select_photos_for_analysis",
     "strip_code_fence",
 ]
 
@@ -201,8 +205,15 @@ def analyze(item_client: ItemTraceClient, api_key: str, item_id: str, *,
 
     detail = item_client.get_item(item_id)
     item = detail["item"]
-    photos = [p for p in detail.get("photos", []) if p.get("role") == "original"]
-    photos = photos[:max_photos]
+    all_original_photos = [
+        p for p in detail.get("photos", []) if p.get("role") == "original"
+    ]
+    photos = select_photos_for_analysis(
+        all_original_photos,
+        identifiers=detail.get("identifiers", []),
+        observations=detail.get("observations", []),
+        max_photos=max_photos,
+    )
 
     if not photos:
         raise AnalyzerError(
@@ -210,32 +221,32 @@ def analyze(item_client: ItemTraceClient, api_key: str, item_id: str, *,
             " 先用 Inbox 建檔並上傳照片。"
         )
 
-    echo(f"ItemTrace：{item_id}「{item['name'] or '(未填品名)'}」，original 照片 {len(photos)} 張")
+    echo(
+        f"ItemTrace：{item_id}「{item['name'] or '(未填品名)'}」，"
+        f"original 照片 {len(all_original_photos)} 張（本次選取 {len(photos)} 張）"
+    )
 
     data_urls = []
     for photo in photos:
         raw = item_client.get_photo_bytes(photo["filename"])
-        data_urls.append(photo_data_url(raw, photo.get("orig_name") or photo["filename"]))
-        echo(f"  已讀取 {photo['orig_name']}")
+        data_urls.append(
+            photo_data_url(raw, photo.get("orig_name") or photo["filename"])
+        )
+        echo(f"  已讀取 {photo.get('orig_name') or photo['filename']}")
 
     echo(f"AI 服務：{provider_name} / {model}（{len(data_urls)} 張）")
-    context_lines = []
-    if item:
-        context_lines.append("### 【目前紀錄狀態】")
-        for k in ("name", "brand", "model", "category", "condition", "notes"):
-            v = item.get(k)
-            context_lines.append(f"- {k}: {v}" if v else f"- {k}: （未填寫）")
-        if item.get("attributes"):
-            context_lines.append("- attributes: " + json.dumps(item["attributes"], ensure_ascii=False, sort_keys=True))
-    if detail.get("identifiers"):
-        context_lines.append("\n### 【已登記識別碼】")
-        for ident in detail["identifiers"]:
-            context_lines.append(f"- {ident.get('kind')}: {ident.get('value')}")
-    if detail.get("suggestions"):
-        context_lines.append("\n### 【先前 AI 建議】")
-        for s in detail["suggestions"]:
-            context_lines.append(f"- [{s.get('status')}] {s.get('field')} = {s.get('value')!r}")
-    context = "\n".join(context_lines)
+
+    # 外部 adapter 刻意不讀取 events（受限於 ItemTraceClient 最小權限邊界）；
+    # build_analysis_context 會清楚標記限制「無手動修改記錄或未取得歷史」。
+    context = build_analysis_context(
+        item,
+        photos=photos,
+        all_photos=all_original_photos,
+        observations=detail.get("observations", []),
+        identifiers=detail.get("identifiers", []),
+        suggestions=detail.get("suggestions", []),
+        events=None,
+    )
 
     provider_kwargs = {"provider": provider_name, "base_url": base_url}
     try:

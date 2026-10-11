@@ -1749,3 +1749,217 @@ def test_large_number_of_photos_preserves_identifiers_and_newest_evidence_with_a
     # vendor 指向 newest（最新追加的照片）
     assert body["attribute:vendor"]["source_photo_id"] == newest["id"]
 
+
+def test_analysis_context_distinguishes_auto_applied_user_accepted_and_undo(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """驗證上下文精確區分：系統先前自動套用、使用者已採納、使用者撤回（Undo）與使用者明確拒絕。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+
+    # 1. 系統自動套用（source=auto, status=accepted）
+    _apply_auto(client, fake_provider, item.id, [
+        {"field": "attribute:color", "value": "太空灰", "confidence": 0.9, "source_photo_index": 0}
+    ])
+
+    # 2. 使用者手動採納（status=accepted）
+    sugg_model = repo.add_suggestion(item.id, "model", "Pro Max")
+    client.post(f"/api/suggestions/{sugg_model.id}/accept")
+
+    # 3. 系統自動套用後被使用者撤回（Undo）
+    _apply_auto(client, fake_provider, item.id, [
+        {"field": "brand", "value": "OldBrand", "confidence": 0.95, "source_photo_index": 0}
+    ])
+    sugg_brand = client.get(f"/api/items/{item.id}/suggestions").json()[-1]
+    client.post(f"/api/suggestions/{sugg_brand['id']}/undo")
+
+    # 4. 使用者明確拒絕 pending 建議
+    sugg_cat = repo.add_suggestion(item.id, "category", "工具")
+    client.post(f"/api/suggestions/{sugg_cat.id}/reject")
+
+    # 追加新照片並重讀
+    add_evidence_photo(client, item.id, filename="check.jpg", tag=99)
+    calls = fake_provider(provider_response([
+        {"field": "attribute:color", "value": "太空灰", "confidence": 0.9, "source_photo_index": 1}
+    ]))
+
+    client.post(f"/api/items/{item.id}/ai/analyze?auto=1")
+    ctx = calls[-1]["context"]
+
+    # 驗證標籤精準無誤
+    assert "⚙️ 系統先前自動套用：attribute:color = '太空灰'" in ctx
+    assert "✓ 使用者已採納：model = 'Pro Max'" in ctx
+    assert "↩️ 使用者先前撤回（Undo）：brand = 'OldBrand'" in ctx
+    assert "⚠️ 使用者明確拒絕：category = '工具'" in ctx
+
+    # 不得將自動套用混充為使用者採納
+    assert "使用者已採納：attribute:color" not in ctx
+    # 不得將 Undo 混充為明確拒絕
+    assert "使用者明確拒絕：brand" not in ctx
+
+
+def test_user_edited_brand_with_decisive_new_evidence_auto_applies(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """使用者手動改正品牌後，追加具備充分依據（confidence >= 0.90）的新照片，系統依政策自動修訂並可復原。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    # 使用者手動設定 brand 為 Sony
+    client.patch(f"/api/items/{item.id}", json={"brand": "Sony"})
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "Sony"
+
+    # 使用者追加了拍攝到新銘牌的照片
+    add_evidence_photo(client, item.id, filename="nameplate_clear.jpg", tag=31)
+
+    # 模型提出不同品牌 Audio-Technica，自報信心度高（0.95）
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Audio-Technica", "confidence": 0.95, "source_photo_index": 1}
+    ]))
+
+    res = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    by_field = {s["field"]: s for s in res}
+
+    # 充分依據支持下自動套用
+    assert by_field["brand"]["status"] == "accepted"
+    assert by_field["brand"]["source"] == "auto"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "Audio-Technica"
+
+    # 可由使用者復原回 Sony
+    undone = client.post(f"/api/suggestions/{by_field['brand']['id']}/undo")
+    assert undone.status_code == 200
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "Sony"
+
+
+def test_user_edited_brand_with_insufficient_new_evidence_stays_pending(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """新照片存在，但模型提出缺乏足夠證據（confidence < 0.90）的不同值時，不得覆寫使用者修正。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    # 使用者手動設定 brand 為 Sony
+    client.patch(f"/api/items/{item.id}", json={"brand": "Sony"})
+
+    # 追加新照片
+    add_evidence_photo(client, item.id, filename="blurry_angle.jpg", tag=32)
+
+    # 模型提出不同品牌 Bose，但信心度不足（0.70）
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Bose", "confidence": 0.70, "source_photo_index": 1}
+    ]))
+
+    res = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    by_field = {s["field"]: s for s in res}
+
+    # 證據不足：維持 pending，不得自動覆寫
+    assert by_field["brand"]["status"] == "pending"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "Sony"
+
+
+def test_auto_applied_field_reanalysis_on_old_photos_auto_revises(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """已由 AI 自動套用的欄位（state='auto'），在重新分析舊照片時提出不同值：依政策自動修訂且可復原。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+
+    # 第一次分析 Photo 0：自動套用 BrandA
+    fake_provider(provider_response([
+        {"field": "brand", "value": "BrandA", "confidence": 0.95, "source_photo_index": 0}
+    ]))
+    res1 = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert res1[0]["status"] == "accepted"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "BrandA"
+
+    # 第二次分析同一張 Photo 0（無新照片）：模型修正為 BrandB
+    fake_provider(provider_response([
+        {"field": "brand", "value": "BrandB", "confidence": 0.95, "source_photo_index": 0}
+    ]))
+    res2 = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    by_field = {s["field"]: s for s in res2}
+
+    # 由於原欄位來源是 auto，系統允許自行動態修訂
+    assert by_field["brand"]["status"] == "accepted"
+    assert by_field["brand"]["source"] == "auto"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "BrandB"
+
+    # 可復原回到 BrandA
+    undone = client.post(f"/api/suggestions/{by_field['brand']['id']}/undo")
+    assert undone.status_code == 200
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "BrandA"
+
+
+def test_select_photos_preserves_multiple_identifiers_across_photos_and_maps_indices(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """多個識別碼分散在不同照片時（Photo 2, 4, 7），均能被完整保留且 source_photo_index 精準映射。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=11)
+    # 登記 3 個識別碼在不同照片
+    repo.add_identifier(item.id, "SN-002", kind="serial", source_photo_id=photos[2].id)
+    repo.add_identifier(item.id, "IMEI-004", kind="imei", source_photo_id=photos[4].id)
+    repo.add_identifier(item.id, "BAR-007", kind="barcode", source_photo_id=photos[7].id)
+
+    # 追加第 12 張照片
+    newest = add_evidence_photo(client, item.id, filename="final_label.jpg", tag=79)
+
+    # 12 張中選取 8 張：
+    # 必須保留 Photo 0, Photo 1
+    # 必須保留 Photo 10, Photo 11 (newest)
+    # 優先保留 Photo 2, Photo 4, Photo 7 (3 個識別碼，名額 <= 4)
+    # 補滿第 8 張：Photo 9
+    # 排序後切片：[0, 1, 2, 4, 7, 9, 10, 11]
+    # 對應切片索引：Photo 2 是 index 2, Photo 4 是 index 3, Photo 7 是 index 4, newest (Photo 11) 是 index 7
+    calls = fake_provider(provider_response([
+        {"field": "identifier:serial", "value": "SN-002", "confidence": 0.99, "source_photo_index": 2},
+        {"field": "identifier:imei", "value": "IMEI-004", "confidence": 0.99, "source_photo_index": 3},
+        {"field": "identifier:barcode", "value": "BAR-007", "confidence": 0.99, "source_photo_index": 4},
+        {"field": "attribute:seller", "value": "PChome", "confidence": 0.95, "source_photo_index": 7},
+    ]))
+
+    res = client.post(f"/api/items/{item.id}/ai/analyze?auto=1")
+    assert res.status_code == 201
+
+    call = calls[0]
+    assert len(call["data_urls"]) == 8
+
+    body = {s["field"]: s for s in res.json()}
+    assert body["identifier:serial"]["source_photo_id"] == photos[2].id
+    assert body["identifier:imei"]["source_photo_id"] == photos[4].id
+    assert body["identifier:barcode"]["source_photo_id"] == photos[7].id
+    assert body["attribute:seller"]["source_photo_id"] == newest["id"]
+
+
+def test_select_photos_handles_more_than_five_identifiers_deterministically():
+    """識別碼照片超出名額時（> 5 張），確定性保留 Photo 0、最新照片與最新的 5 張識別碼照片。"""
+    from shop.ai_client import select_photos_for_analysis
+    from shop.models import Identifier, Photo
+
+    # 建立 12 張假照片
+    dummy_photos = [
+        Photo(
+            id=f"P{i}", item_id="ITM-1", observation_id="", role="original",
+            filename=f"p{i}.jpg", orig_name=f"p{i}.jpg", sha256=f"{i}", bytes=10,
+            width=100, height=100, captured_at=f"2026-10-10T10:{i:02d}:00",
+            angle="", source="upload", created_at=f"2026-10-10T10:{i:02d}:00",
+        )
+        for i in range(12)
+    ]
+
+    # 在 P1, P2, P3, P4, P5, P6, P7 建立 7 個識別碼
+    dummy_idents = [
+        Identifier(
+            id=f"ID{i}", item_id="ITM-1", kind="serial", value=f"SN-{i}",
+            normalized=f"SN{i}", source_photo_id=f"P{i}",
+        )
+        for i in range(1, 8)
+    ]
+
+    selected = select_photos_for_analysis(dummy_photos, identifiers=dummy_idents)
+    selected_ids = [p.id for p in selected]
+
+    assert len(selected) == 8
+    # 必須保留 Photo 0
+    assert "P0" in selected_ids
+    # 必須保留最新照片（P10, P11）
+    assert "P10" in selected_ids
+    assert "P11" in selected_ids
+    # 優先保留最新 5 張識別碼照片（P3, P4, P5, P6, P7）
+    for p_id in ("P3", "P4", "P5", "P6", "P7"):
+        assert p_id in selected_ids
+
+

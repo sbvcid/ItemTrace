@@ -1933,6 +1933,21 @@ def _is_new_evidence(
     return False
 
 
+def _has_sufficient_evidence_for_revision(entry: Mapping[str, Any]) -> bool:
+    """判定新照片提案是否具備足以覆寫人工編輯的充分依據。
+
+    依據產品政策：AI 不得僅因照片較新就以微弱猜測覆寫使用者修正。
+    要求：自報信心度必須具備明確把握（confidence >= 0.90）。
+    """
+    conf = entry.get("confidence")
+    if conf is None:
+        return False
+    try:
+        return float(conf) >= 0.90
+    except (TypeError, ValueError):
+        return False
+
+
 def _auto_decision(
     entry: Mapping[str, Any],
     *,
@@ -1945,7 +1960,7 @@ def _auto_decision(
 ) -> str:
     """回傳 "auto" | "pending" | "conflict"。
 
-    規則（全部決定性、不看模型自報信心）：
+    規則（全部決定性）：
       - 沒有來源照片 → 證據支持不足，不自動。
       - 同一欄位這輪有矛盾值 → conflict。
       - identifier:* → 永遠 pending（T0）。
@@ -1955,14 +1970,15 @@ def _auto_decision(
         - 空值且非使用者清空 → auto。
         - 來源是 auto（AI 先前自動填入）→ auto（可修訂）。
         - 使用者編輯或確認過的（user）：若本次提案有「在使用者修改之後追加的
-          新照片證據」，且未被拒絕，視為新證據支持的合理修訂 → auto；
-          若僅為修改前的舊照片，則保留使用者意圖 → pending。
+          新照片證據」，且「具備充分依據（confidence >= 0.90）」，未被拒絕，
+          視為新證據支持的合理修訂 → auto；若為修改前的舊照片或新照片證據不足，
+          則保留使用者意圖 → pending。品名（name）非空時維持 pending。
       - 購買資訊（vendor/amount/…）：只在現值為空、使用者沒動過、且
         「同一張照片也提供了身分等級資訊」時自動；否則 conflict。
       - 其他描述性 attribute：
         - 空值且非使用者設定 → auto。
         - auto 來源可修訂 → auto。
-        - 使用者編輯過的：新照片證據支持 → auto；舊照片 → pending。
+        - 使用者編輯過的：新照片且充分依據支持 → auto；舊照片或弱證據 → pending。
     """
     field = entry["field"]
     photo_id = entry.get("source_photo_id")
@@ -1996,6 +2012,7 @@ def _auto_decision(
     new_evidence = _is_new_evidence(
         photo_id, user_edit_at, user_edit_event_id, photo_map, history_events
     )
+    sufficient_evidence = _has_sufficient_evidence_for_revision(entry)
 
     if field in IDENTITY_FIELDS:
         current = _current_value(item, field)
@@ -2008,7 +2025,7 @@ def _auto_decision(
         if field == "name":
             # 使用者手動設定之品名（命名偏好）：非空時新證據仍留待確認，不自動覆蓋
             return "pending"
-        return "auto" if new_evidence else "pending"
+        return "auto" if (new_evidence and sufficient_evidence) else "pending"
 
     key = attribute_key(field)
     if key is not None:
@@ -2023,7 +2040,7 @@ def _auto_decision(
             return "auto"
         if state == "auto":
             return "auto"
-        return "auto" if new_evidence else "pending"
+        return "auto" if (new_evidence and sufficient_evidence) else "pending"
 
     return "pending"
 

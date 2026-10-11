@@ -16,6 +16,7 @@ import base64
 import io
 import json
 import mimetypes
+from typing import Any
 import urllib.error
 import urllib.request
 
@@ -619,3 +620,281 @@ def parse_suggestions(text: str, photos: list[dict]) -> list[dict]:
             }
         )
     return validated
+
+
+def _obj_get(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def build_analysis_context(
+    item: Any,
+    *,
+    photos: list[Any] | None = None,
+    all_photos: list[Any] | None = None,
+    observations: list[Any] | None = None,
+    identifiers: list[Any] | None = None,
+    suggestions: list[Any] | None = None,
+    events: list[Any] | None = None,
+) -> str:
+    """組裝供 Vision 模型重新理解整筆紀錄的結構化 Markdown 上下文。
+
+    兩條管線（核心 API 與 tools/analyze_item.py）共用此函式，保證語意與結構一致。
+    支援傳入 dict 或 dataclass 物件。
+    """
+    lines = ["## 【紀錄完整上下文（供重新理解與修訂）】"]
+
+    # 1. 目前紀錄狀態
+    lines.append("### 【目前紀錄狀態】")
+    for k in ("name", "brand", "model", "category", "condition", "notes"):
+        v = _obj_get(item, k)
+        if v:
+            lines.append(f"- {k}: {v}")
+        else:
+            lines.append(f"- {k}: （未填寫）")
+    attrs = _obj_get(item, "attributes")
+    if attrs:
+        if isinstance(attrs, dict):
+            lines.append(
+                "- attributes: "
+                + json.dumps(attrs, ensure_ascii=False, sort_keys=True)
+            )
+        else:
+            lines.append(f"- attributes: {attrs}")
+
+    # 2. 已登記識別碼
+    ident_list = identifiers or []
+    lines.append(f"\n### 【已登記識別碼（共 {len(ident_list)} 筆）】")
+    if ident_list:
+        for ident in ident_list:
+            k = _obj_get(ident, "kind")
+            val = _obj_get(ident, "value")
+            src_photo = _obj_get(ident, "source_photo_id")
+            extra = f"（來源照片: {src_photo}）" if src_photo else ""
+            lines.append(f"- {k}: {val} {extra}".rstrip())
+    else:
+        lines.append("- （目前無已登記識別碼）")
+
+    # 3. 本次分析照片與觀測
+    all_p = all_photos if all_photos is not None else (photos or [])
+    target_p = photos if photos is not None else all_p
+    lines.append(f"\n### 【本次分析照片與觀測（共 {len(target_p)} 張）】")
+    if len(all_p) > len(target_p):
+        lines.append(
+            f"（注意：商品總共有 {len(all_p)} 張原始照片，本次選取了 {len(target_p)} 張關鍵照片，"
+            "包含早期建檔、關聯識別碼與最新追加照片）"
+        )
+
+    obs_list = observations or []
+    obs_map = {_obj_get(o, "id"): o for o in obs_list if _obj_get(o, "id")}
+    ident_photo_ids = {
+        _obj_get(ident, "source_photo_id")
+        for ident in ident_list
+        if _obj_get(ident, "source_photo_id")
+    }
+
+    for idx, photo in enumerate(target_p):
+        obs_id = _obj_get(photo, "observation_id")
+        obs = obs_map.get(obs_id) if obs_id else None
+        obs_desc = f"，觀測: {_obj_get(obs, 'kind')}" if obs else ""
+        obs_note = _obj_get(obs, "note") if obs else None
+        if obs_note:
+            obs_desc += f"（{obs_note}）"
+        time_desc = (
+            _obj_get(photo, "captured_at")
+            or _obj_get(photo, "created_at")
+            or "未知時間"
+        )
+        photo_id = _obj_get(photo, "id")
+        p_orig = _obj_get(photo, "orig_name") or _obj_get(photo, "filename") or ""
+
+        tags = []
+        if all_p and photo_id == _obj_get(all_p[0], "id"):
+            tags.append("初始建檔照片")
+        else:
+            tags.append("後續追加照片")
+        if photo_id in ident_photo_ids:
+            tags.append("含識別碼證據")
+        tag_str = f" [{', '.join(tags)}]" if tags else ""
+        lines.append(
+            f"- [Photo {idx}] {p_orig}（時間: {time_desc}{obs_desc}）{tag_str}"
+        )
+
+    # 4. 重要歷史修改
+    lines.append("\n### 【重要歷史修改】")
+    hist_lines = []
+    undone_ids = set()
+    seen_edits = set()
+    if events:
+        for ev in events:
+            ev_type = _obj_get(ev, "type")
+            ev_actor = _obj_get(ev, "actor")
+            ev_field = _obj_get(ev, "field")
+            ev_created_at = _obj_get(ev, "created_at")
+            ev_prev = _obj_get(ev, "prev_value")
+            ev_next = _obj_get(ev, "next_value")
+            ev_entity_id = _obj_get(ev, "entity_id")
+
+            if ev_type == "suggestion.undone":
+                if ev_entity_id:
+                    undone_ids.add(ev_entity_id)
+                hist_lines.append(
+                    f"- {ev_created_at} 使用者先前撤回（Undo）了 {ev_field} 的自動套用（恢復為 {ev_next!r}）"
+                )
+            elif ev_type == "field.changed" and ev_actor == "user":
+                key = (ev_field, str(ev_next))
+                if key not in seen_edits:
+                    seen_edits.add(key)
+                    hist_lines.append(
+                        f"- {ev_created_at} 使用者手動修改 {ev_field}: {ev_prev!r} -> {ev_next!r}"
+                    )
+            elif ev_type == "suggestion.auto_applied":
+                hist_lines.append(
+                    f"- {ev_created_at} 系統依據先前照片自動套用 {ev_field} = {ev_next!r}"
+                )
+            if len(hist_lines) >= 12:
+                break
+
+    if hist_lines:
+        lines.extend(hist_lines)
+    else:
+        lines.append("- （無手動修改記錄或未取得歷史）")
+
+    # 5. 歷次 AI 判讀與結果
+    sugg_list = suggestions or []
+    lines.append("\n### 【歷次 AI 判讀與結果】")
+    sugg_lines = []
+
+    rejected_suggs = [
+        s for s in sugg_list if _obj_get(s, "status") == "rejected"
+    ]
+    accepted_suggs = [
+        s for s in sugg_list if _obj_get(s, "status") == "accepted"
+    ]
+    superseded_suggs = [
+        s for s in sugg_list if _obj_get(s, "status") == "superseded"
+    ]
+
+    for s in rejected_suggs[:8]:
+        s_id = _obj_get(s, "id")
+        s_src = _obj_get(s, "source")
+        s_field = _obj_get(s, "field")
+        s_val = _obj_get(s, "value")
+        if s_id in undone_ids or s_src == "auto":
+            sugg_lines.append(
+                f"- ↩️ 使用者先前撤回（Undo）：{s_field} = {s_val!r}（切勿無新證據盲目重複！）"
+            )
+        else:
+            sugg_lines.append(
+                f"- ⚠️ 使用者明確拒絕：{s_field} = {s_val!r}（切勿無新證據盲目重複！）"
+            )
+
+    for s in accepted_suggs[:8]:
+        s_src = _obj_get(s, "source")
+        s_field = _obj_get(s, "field")
+        s_val = _obj_get(s, "value")
+        if s_src == "auto":
+            sugg_lines.append(f"- ⚙️ 系統先前自動套用：{s_field} = {s_val!r}")
+        else:
+            sugg_lines.append(f"- ✓ 使用者已採納：{s_field} = {s_val!r}")
+
+    for s in superseded_suggs[:4]:
+        s_field = _obj_get(s, "field")
+        s_val = _obj_get(s, "value")
+        sugg_lines.append(
+            f"- ⚪ 先前曾提議但已由後續分析取代：{s_field} = {s_val!r}"
+        )
+
+    if sugg_lines:
+        lines.extend(sugg_lines)
+    else:
+        lines.append("- （無先前 AI 判讀記錄）")
+
+    # 6. 重新理解指引
+    lines.append("\n### 【重新理解指引】")
+    lines.append("- 結合新追加照片證據、既有照片與修改歷史，重新理解整筆紀錄。")
+    lines.append(
+        "- 使用者的手動修改與歷史修正代表已知事實；若新照片提供更明確、更清晰的實物證據（如銘牌、型號標籤、收據），請提出修正後的建議。"
+    )
+    lines.append(
+        "- 若新照片證據不足或模糊，請維持現狀，切勿以粗略猜測隨意覆蓋。"
+    )
+    lines.append(
+        "- 曾遭使用者明確拒絕或撤回（Undo）的值，切勿重新提議；該等值不是既定事實。"
+    )
+    lines.append(
+        "- 識別碼（serial / imei / barcode）必須精確照抄照片可見字元，並指向對應照片索引。"
+    )
+
+    return "\n".join(lines)
+
+
+def select_photos_for_analysis(
+    photos: list[Any],
+    *,
+    identifiers: list[Any] | None = None,
+    observations: list[Any] | None = None,
+    max_photos: int = MAX_PHOTOS,
+) -> list[Any]:
+    """全域照片精選政策（上限 max_photos，預設 8 張）。
+
+    ≤8 全送；>8 時精選：
+    1. 必須保留：Photo 0（初始建檔外觀基線）。
+    2. 必須保留：最新追加照片（至少 2 張，確保能獲取新證據）。
+    3. 優先保留：包含已登記識別碼（serial/imei/barcode）證據的照片。
+       - 在 8 張預算中，扣除 Photo 0 與最新 2 張後，最多提供 5 個名額給識別碼照片。
+       - 若識別碼照片 <= 5 張：全數保留。
+       - 若識別碼照片 > 5 張：優先保留最新的 5 張識別碼照片（貼近最新狀態）。
+    4. 餘額補齊：若識別碼照片少於 5 張，由最新照片往前依序補滿 8 張。若無識別碼照片，
+       維持預設之「最早 2 張＋最新 6 張」。
+    5. 保持時間遞增順序，確保 source_photo_index 映射至切片精準無誤。
+    """
+    if max_photos < 2:
+        return photos[:max_photos]
+    if len(photos) <= max_photos:
+        return photos
+
+    ident_list = identifiers or []
+    referenced_ids = {
+        _obj_get(ident, "source_photo_id")
+        for ident in ident_list
+        if _obj_get(ident, "source_photo_id")
+    }
+
+    ident_indices = [
+        i for i, p in enumerate(photos) if _obj_get(p, "id") in referenced_ids
+    ]
+
+    if not ident_indices:
+        return photos[:2] + photos[-(max_photos - 2):]
+
+    selected: set[int] = {0}
+    if len(photos) > 1:
+        selected.add(1)
+    selected.add(len(photos) - 1)
+    if len(photos) > 2:
+        selected.add(len(photos) - 2)
+
+    ident_candidates = [i for i in ident_indices if i not in selected]
+    avail = max_photos - len(selected)
+    if len(ident_candidates) > avail and 1 in selected:
+        # 識別碼候選超過名額時，讓出 Photo 1 給更多識別碼證據
+        selected.remove(1)
+        avail += 1
+
+    if len(ident_candidates) <= avail:
+        selected.update(ident_candidates)
+    else:
+        selected.update(ident_candidates[-avail:])
+
+    for i in range(len(photos) - 1, -1, -1):
+        if len(selected) >= max_photos:
+            break
+        selected.add(i)
+
+    if len(selected) < max_photos and len(photos) > 1:
+        selected.add(1)
+
+    return [photos[i] for i in sorted(selected)]
+

@@ -741,3 +741,49 @@ def test_default_model_is_free():
 
 def test_default_model_is_free_and_vision():
     assert analyzer.DEFAULT_MODEL == "qwen/qwen3.8-27b:free"
+
+
+def test_analyze_passes_rich_context_with_observations_and_identifiers():
+    client = FakeItemTrace()
+    client.item["name"] = "經典相機"
+    client.item["brand"] = "Canon"
+    client.item["attributes"] = {"color": "黑色"}
+
+    # 自訂 get_item 回傳識別碼與觀測
+    def custom_get_item(item_id):
+        client.calls.append(("GET", f"/api/items/{item_id}"))
+        return {
+            "item": dict(client.item),
+            "photos": [
+                {"id": "PHOTO1", "role": "original", "filename": "files/ITM-0001/original/a.jpg",
+                 "orig_name": "a.jpg", "observation_id": "OBS1"},
+            ],
+            "observations": [
+                {"id": "OBS1", "kind": "overview", "note": "正面特寫"}
+            ],
+            "identifiers": [
+                {"kind": "serial", "value": "SN-CANON-123", "source_photo_id": "PHOTO1"}
+            ],
+            "suggestions": [
+                {"id": "S1", "field": "brand", "value": "Canon", "status": "accepted", "source": "user"}
+            ],
+            "suggestion_counts": {},
+        }
+
+    client.get_item = custom_get_item
+    seen_context = []
+
+    def provider(api_key, model, data_urls, context=None, **kwargs):
+        seen_context.append(context)
+        return model_json([])
+
+    analyzer.analyze(client, SECRET, "ITM-0001", provider=provider)
+    assert len(seen_context) == 1
+    ctx = seen_context[0]
+    assert "經典相機" in ctx
+    assert "SN-CANON-123" in ctx
+    assert "正面特寫" in ctx
+    assert "含識別碼證據" in ctx
+    assert "✓ 使用者已採納：brand = 'Canon'" in ctx
+    assert "（無手動修改記錄或未取得歷史）" in ctx
+

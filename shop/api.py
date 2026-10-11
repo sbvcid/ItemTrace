@@ -18,7 +18,6 @@ DATA_ROOT 底下還有 catalog.db 與 config.json，不能一併端出去。
 
 from __future__ import annotations
 
-import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -762,13 +761,13 @@ def analyze_item_photos(
     /api/suggestions/{id}/accept）才會寫進商品（推論與事實分離，
     SPEC-v1 §1）。capture 的審閱流程與外部 adapter 都走這條。
 
-    **auto=true（Phase 2C-B，詳情頁補證據後的重讀）**：依決定性的
-    自主性政策（不看模型自報信心）把合格項目直接套用 ——
-    描述性屬性、空的身分欄位、以及先前由系統自動填入的身分值；
-    使用者編輯或確認過的欄位、識別碼、category/condition/notes
-    一律留待確認；購買資訊只在「現值為空且同一張照片也提供身分
-    資訊」時自動，否則升級為衝突確認。自動套用產生
-    status='accepted'、source='auto' 的建議（可用
+    **auto=true（詳情頁補證據後的重讀）**：依自主性政策把合格項目直接套用 ——
+    描述性屬性、空的身分欄位、先前由系統自動填入的身分值（可自動修訂）；
+    使用者手動編輯過的 brand / model / 屬性，在有修改後追加的新照片證據且
+    依據充分（confidence >= 0.90）時可自動套用修訂（可復原），無新證據或證據
+    不足時留待確認；使用者自訂品名（非空）留待確認；識別碼、
+    category/condition/notes 永遠留待確認；曾被拒絕或撤回的值不自動套用。
+    自動套用產生 status='accepted'、source='auto' 的建議（可用
     POST /api/suggestions/{id}/undo 復原）。
 
     Phase 2B：照片會連同「目前的已知資訊」一起送出 —— 後補的證據
@@ -927,7 +926,8 @@ def undo_suggestion(suggestion_id: str, repo: Repo) -> SuggestionOut:
     """復原一次「自動套用」（Phase 2C-B）：值回到前一個狀態。
 
     只允許 source='auto' 且 status='accepted' 的建議；復原本身記為
-    使用者動作（寫回 actor=user），之後同一欄位不再被自動覆蓋。
+    使用者動作（寫回 actor=user），撤回的值會被記錄並禁止再次自動套用，
+    舊照片不會再次自動覆蓋。
     """
     return to_out(repo.undo_auto_suggestion(suggestion_id))
 
@@ -1464,140 +1464,25 @@ def _analysis_context(
     repo: Repo | None = None,
     photos: list[Photo] | None = None,
 ) -> str:
-    """把紀錄目前的已知資訊、識別碼、照片與觀測、歷史修改與歷次 AI 判讀壓成給 AI 的完整上下文。
-
-    這是紀錄的演進脈絡：以照片為準，但使用者手動輸入與歷史修正代表關鍵意圖。
-    """
-    lines = ["### 【目前紀錄狀態】"]
-    for label, value in (
-        ("name", item.name),
-        ("brand", item.brand),
-        ("model", item.model),
-        ("category", item.category),
-        ("condition", item.condition),
-        ("notes（使用者自己的備註）", item.notes),
-    ):
-        if value:
-            lines.append(f"- {label}: {value}")
-        else:
-            lines.append(f"- {label}: （未填寫）")
-    if item.attributes:
-        lines.append(
-            "- attributes: "
-            + json.dumps(item.attributes, ensure_ascii=False, sort_keys=True)
-        )
-
+    """委派至 ai_client.build_analysis_context 組裝完整紀錄上下文。"""
     if repo is None:
-        return "\n".join(lines)
+        return ai_client.build_analysis_context(item, photos=photos)
 
-    # 1. 識別碼
-    identifiers = repo.list_identifiers(item_id=item.id)
-    lines.append("\n### 【已登記識別碼】")
-    if identifiers:
-        for ident in identifiers:
-            source_desc = "使用者建立" if ident.source == "human" else "已採納建議"
-            photo_ref = f"，關聯照片: {ident.source_photo_id}" if ident.source_photo_id else ""
-            lines.append(
-                f"- {ident.kind}: {ident.value}（正規化: {ident.normalized}，來源: {source_desc}{photo_ref}）"
-            )
-    else:
-        lines.append("- （無已登記識別碼）")
-
-    # 2. 照片與拍攝觀測
     all_photos = repo.list_photos(item_id=item.id, role="original", limit=500)
-    observations = repo.list_observations(item_id=item.id, limit=500)
-    obs_map = {o.id: o for o in observations}
-    target_photos = photos if photos is not None else all_photos
-
-    lines.append(f"\n### 【本次分析照片與觀測（共 {len(target_photos)} 張）】")
-    if len(all_photos) > len(target_photos):
-        lines.append(
-            f"（注意：商品總共有 {len(all_photos)} 張原始照片，本次選取了 {len(target_photos)} 張關鍵照片，"
-            "包含早期建檔、關聯識別碼與最新追加照片）"
-        )
-
-    ident_photo_ids = {ident.source_photo_id for ident in identifiers if ident.source_photo_id}
-
-    for idx, photo in enumerate(target_photos):
-        obs = obs_map.get(photo.observation_id) if photo.observation_id else None
-        obs_desc = f"，觀測: {obs.kind}" if obs else ""
-        if obs and obs.note:
-            obs_desc += f"（{obs.note}）"
-        time_desc = photo.captured_at or photo.created_at or "未知時間"
-        tags = []
-        if all_photos and photo.id == all_photos[0].id:
-            tags.append("初始建檔照片")
-        else:
-            tags.append("後續追加照片")
-        if photo.id in ident_photo_ids:
-            tags.append("含識別碼證據")
-        tag_str = f" [{', '.join(tags)}]" if tags else ""
-        lines.append(
-            f"- [Photo {idx}] {photo.orig_name or photo.filename}（時間: {time_desc}{obs_desc}）{tag_str}"
-        )
-
-    # 3. 重要歷史修改
-    history = repo.item_history(item.id, limit=200)
-    lines.append("\n### 【重要歷史修改】")
-    hist_lines = []
-    seen_edits = set()
-    for ev in history:
-        if ev.type == "field.changed" and ev.actor == "user":
-            key = (ev.field, str(ev.next_value))
-            if key not in seen_edits:
-                seen_edits.add(key)
-                hist_lines.append(
-                    f"- {ev.created_at} 使用者手動修改 {ev.field}: {ev.prev_value!r} -> {ev.next_value!r}"
-                )
-        elif ev.type == "suggestion.auto_applied":
-            hist_lines.append(
-                f"- {ev.created_at} 系統依據先前照片自動套用 {ev.field} = {ev.next_value!r}"
-            )
-        elif ev.type == "suggestion.undone":
-            hist_lines.append(
-                f"- {ev.created_at} 使用者撤回（復原）了 {ev.field} 的自動套用（恢復為 {ev.next_value!r}）"
-            )
-        if len(hist_lines) >= 12:
-            break
-    if hist_lines:
-        lines.extend(hist_lines)
-    else:
-        lines.append("- （無手動修改記錄）")
-
-    # 4. 歷次 AI 判讀與結果
+    observations = repo.list_observations(item.id, limit=500)
+    identifiers = repo.list_identifiers(item_id=item.id)
     suggestions = repo.list_suggestions(item_id=item.id, limit=500)
-    lines.append("\n### 【歷次 AI 判讀與結果】")
-    rejected_suggs = [s for s in suggestions if s.status == "rejected"]
-    accepted_suggs = [s for s in suggestions if s.status == "accepted"]
-    superseded_suggs = [s for s in suggestions if s.status == "superseded"]
+    events = repo.item_history(item.id, limit=200)
 
-    sugg_lines = []
-    for s in rejected_suggs[:8]:
-        sugg_lines.append(
-            f"- ⚠️ 遭使用者明確拒絕：{s.field} = {s.value!r}（切勿無新證據盲目重複！）"
-        )
-    for s in accepted_suggs[:8]:
-        sugg_lines.append(f"- ✓ 使用者已採納：{s.field} = {s.value!r}")
-    for s in superseded_suggs[:4]:
-        sugg_lines.append(f"- ⚪ 先前曾提議但已由後續分析取代：{s.field} = {s.value!r}")
-
-    if sugg_lines:
-        lines.extend(sugg_lines)
-    else:
-        lines.append("- （無先前 AI 判讀記錄）")
-
-    # 5. 重新理解指引
-    lines.append("\n### 【重新理解指引】")
-    lines.append("- 結合新追加照片證據、既有照片與修改歷史，重新理解整筆紀錄。")
-    lines.append(
-        "- 使用者的手動修改與歷史修正代表已知事實；若新照片提供更明確、更清晰的實物證據（如銘牌、型號標籤、收據），請提出修正後的建議。"
+    return ai_client.build_analysis_context(
+        item,
+        photos=photos,
+        all_photos=all_photos,
+        observations=observations,
+        identifiers=identifiers,
+        suggestions=suggestions,
+        events=events,
     )
-    lines.append(
-        "- 若新照片證據不足或模糊，請維持現狀，切勿以粗略猜測隨意覆蓋；切勿重複提出已遭使用者拒絕（rejected）的值。"
-    )
-    lines.append("- 識別碼（serial / imei / barcode）必須精確照抄照片可見字元，並指向對應照片索引。")
-
-    return "\n".join(lines)
 
 
 def _select_photos_for_analysis(
@@ -1606,40 +1491,10 @@ def _select_photos_for_analysis(
     identifiers: list[Identifier] | None = None,
     observations: list[Observation] | None = None,
 ) -> list[Photo]:
-    """Phase 2C-B & 完整重新理解之證據選擇策略。
-
-    ≤8 全送；>8 時精選最多 8 張：
-    1. 早期原始建檔照片（通常為外觀/初始銘牌）：保留最早照片（index 0）。
-    2. 被既有識別碼引用的照片（serial/imei/barcode 的證據）：優先保留。
-    3. 最新追加的照片（新證據）：保留最新的一批照片。
-    維持時間順序，確保 source_photo_index 語意精準且不丟失關鍵證據。
-    """
-    if len(photos) <= ai_client.MAX_PHOTOS:
-        return photos
-    if not identifiers:
-        return photos[:2] + photos[-(ai_client.MAX_PHOTOS - 2):]
-
-    referenced_ids = {
-        ident.source_photo_id for ident in identifiers if ident.source_photo_id
-    }
-    ident_indices = [
-        i for i, p in enumerate(photos) if getattr(p, "id", None) in referenced_ids
-    ]
-    if not ident_indices:
-        return photos[:2] + photos[-(ai_client.MAX_PHOTOS - 2):]
-
-    selected_indices: set[int] = {0}
-    for idx in ident_indices[:2]:
-        selected_indices.add(idx)
-    if len(selected_indices) < ai_client.MAX_PHOTOS and 1 not in selected_indices:
-        selected_indices.add(1)
-
-    for i in range(len(photos) - 1, -1, -1):
-        if len(selected_indices) >= ai_client.MAX_PHOTOS:
-            break
-        selected_indices.add(i)
-
-    return [photos[i] for i in sorted(selected_indices)]
+    """委派至 ai_client.select_photos_for_analysis 執行照片選擇策略。"""
+    return ai_client.select_photos_for_analysis(
+        photos, identifiers=identifiers, observations=observations
+    )
 
 
 def _select_draft_photo_indices(paths: list[Path]) -> list[int]:
