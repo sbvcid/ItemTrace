@@ -1,9 +1,9 @@
 # ItemTrace Engineering Status
 
 最後更新：2026-10-11  
-**當前狀態：Phase 3 垃圾桶與刪除完成，UX 手機優先修整完成，工程文件清理完成**  
+**當前狀態：Phase 3 垃圾桶與刪除完成，UX 手機優先修整完成，工程文件清理完成，capture 建檔流程修正完成**  
 遠端狀態：`main` 與 `origin/main` 同步（含本階段 commit）  
-測試驗證：`pytest` 完全通過，全 **1073 測試**無失敗、無跳過
+測試驗證：`pytest` 完全通過，全 **1083 測試**無失敗、無跳過
 
 ## 📱 MVP 交付檢查清單
 
@@ -15,7 +15,7 @@
 - ✓ AI 失敗優雅降級（存照片、無建議仍可用）
 
 **測試涵蓋** ✓：
-- ✓ 1073 個自動化測試全數通過
+- ✓ 1083 個自動化測試全數通過
 - ✓ 手機視口測試：尺寸 375×812，流程完整
 - ✓ 搜尋功能驗證：模糊匹配正常
 - ✓ 錯誤處理：上傳失敗、重試、部分失敗場景
@@ -33,6 +33,23 @@
 ---
 
 ## 當前階段
+
+### capture 建檔流程修正：確認儲存才建立正式紀錄 ← **COMPLETED**
+
+完成時間：2026-10-11  
+基準：`36684a8`（工程文件清理後）
+
+修正內容：
+- ✓ **問題**：capture 在 AI 分析前就呼叫 `api.intake()`（`/api/inbox/intake` 會建立正式紀錄並歸檔照片），取消操作只清前端圖片網址——使用者未確認儲存就留下正式紀錄
+- ✓ **草稿分析**：新增 `POST /api/inbox/analyze`——對 inbox 暫存照片跑同一條 AI 管線（節流、設定、>8 張取「最早 2＋最新 6」），**不建立任何紀錄**；`source_photo_index` 對應請求順序
+- ✓ **存起來才建檔**：第一次按「✓ 存起來」才呼叫 intake 建立正式 Item／photos；AI 草稿此時落成正式建議（`POST /api/items/{id}/suggestions`，帶 model／confidence／來源照片追溯）再逐筆接受
+- ✓ **取消清理**：新增 `POST /api/inbox/discard`（只清 inbox/ 子樹、冪等、不碰資料庫）；已建檔後放棄走既有 void＋purge 清乾淨；離開頁面也清掉未消化的暫存
+- ✓ **上傳回應帶 `staged`**：標記本次實際落盤的檔案，清理只針對自己的暫存（`InboxUploadListing`）
+- ✓ **重試防重複**：intake 只跑一次；已建立的建議以 `createdSuggestionIds` 追蹤；已套用草稿以 index 追蹤；重複 intake 因暫存已消化而 404（不重複建檔）
+- ✓ **AI 失敗不擋儲存**：草稿分析失敗（無 key／provider 錯誤）回 400，審閱照常、手動填寫照樣存檔
+- ✓ **規劃清理**：相機記憶卡大量照片匯入（`/unsorted`）自 ROADMAP 與產品文件移除（非已確認需求；多張選取／拍照／上傳／追加照片功能不受影響）
+- ✓ 測試 +10（test_capture_ui.py 9＋test_v3_core_slice.py 1）：草稿不建紀錄、選擇政策與索引映射、路徑守衛、discard 冪等、取消端到端零殘留、延遲建檔端到端（含來源照片追溯）、重複 intake 防護、靜態接線檢查
+- ✓ 全 1083 測試通過；`node --check` 全 web JS 通過
 
 ### UX 手機優先修整 ← **COMPLETED**
 
@@ -172,8 +189,8 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 | 項目 | 數值 | 備註 |
 |---|---|---|
 | 測試檔案數 | 40 | conftest＋38 個 test_*.py＋__init__（本階段未新增檔案） |
-| 總測試數 | 1073 | 5896562 基線 1052；Phase 3 +21 |
-| 通過 | 1073 ✓ | 100% pass rate |
+| 總測試數 | 1083 | 5896562 基線 1052；Phase 3 +21；capture 建檔流程修正 +10 |
+| 通過 | 1083 ✓ | 100% pass rate |
 | 失敗 | 0 | 零失敗 |
 | 跳過 | 0 | 無跳過（本機有 Chromium／PyMuPDF，列印與 canary 測試皆實跑） |
 | 覆蓋率 | 未測 | 建議後續補充 |
@@ -191,7 +208,7 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 - **安全（SR-1）**：test_security.py (17) —— Host／Origin／自訂標頭、key 不轉送（canary＋接收器）、綁定 opt-in、媒體標頭、CSP/escaping 靜態守門
 - **安全（SR-2）**：test_security_sr2.py (30) —— body／單檔／檔數／像素／列印尺寸上限、AI 節流、docs 開關、快取政策、錯誤訊息去路徑化、註解／實體 mXSS、render-time 驗證、sandbox 命令、raster MIME、真實 Chromium canary PDF
 
-**最近運行**：2026-10-11，`pytest -q` → collected=1073（逐檔加總），failures=0，exit=0
+**最近運行**：2026-10-11，`pytest -q` → collected=1083（逐檔加總），failures=0，exit=0
 
 ---
 
@@ -202,7 +219,7 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 | 狀態 | 定義 | 範例 |
 |---|---|---|
 | **Implemented** | 程式碼存在且功能可用 | SQLite schema, FastAPI endpoints, V3 前端已實作 |
-| **Tested** | 實作已驗證，測試通過 | 1073 個 pytest 全通過，V3 core slice test 驗收 |
+| **Tested** | 實作已驗證，測試通過 | 1083 個 pytest 全通過，V3 core slice test 驗收 |
 | **Committed** | 變更已進入版本控制 | main branch 上的所有程式碼 |
 | **Pushed** | 變更已推送到遠端 | origin/main 的最新狀態（本地與遠端同步） |
 
@@ -268,10 +285,11 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 
 ### 中期（Phase 4–6）
 - 分類系統與 AI 自動分類（Phase 4）
-- SQLite FTS5 全文搜尋、繁簡互搜（Phase 5）
-- 外觀比對器（Compare）、批次匯入 & 重複識別（Phase 6）
+- SQLite FTS5 全文搜尋、繁簡互搜（Phase 5；未採納未排程，現行 LIKE）
+- 外觀比對器（Compare）完善（Phase 6）
 
 ### 長期（Phase 7）
+- 同一物品匹配（重複紀錄識別）
 - Windows / Microsoft Store 發行準備
 
 ---
@@ -553,3 +571,4 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 - **2026-10-11**：Phase 3 垃圾桶與刪除完成——移至垃圾桶（沿用 void、零 migration）＋首頁／搜尋預設排除＋垃圾桶頁（還原至移入前 active／archived，歷史不可靠時安全預設 active）；永久刪除（僅限垃圾桶、單一交易清 DB 與事件、可逆改名後清檔案、刪檔失敗 500 列出路徑不假裝成功、路徑守衛、編號不回收）；無自動清理、備份機制未動；`/trash` UI＋繁英 i18n；測試基線 1052 → 1073（+21；另更新 1 個既有契約測試）
 - **2026-10-11**：UX 手機優先修整完成——首頁移除浮動快門、簡化 hero section；詳情頁移除狀態標籤、重組 DOM；新增 i18n keys 區分紀錄數／照片數；收斂 inline styles 到 CSS classes；設定頁完整 i18n 化；AGENTS.md＋AGENT_GUIDE.md 更新為標準交付流程；測試基線維持 1073；commit `e86f6ee` 已推送至 origin/main
 - **2026-10-11**：工程文件清理完成——修復本檔 UTF-8 編碼損壞（UTF-16 尾端併回 UTF-8）；AGENTS／AGENT_GUIDE 移除停工式規則（同步門檻／整 Phase 才可提交／額外工作即停工等待指示／文件任務強制完整回歸），改為風險導向測試與「調查→修復→驗證→繼續」；ROADMAP 合併重複的兩代 Phase 規劃，垃圾桶與資料生命週期標記完成（`status='void'`＋還原＋使用者明示永久刪除，無自動過期）；DECISIONS 校準 D2/D3/D4/D5、O1/O5 結案、新增 D11（文件效力範圍與已取消 UI 清單）；SPEC-v1 標記為歷史規格；product-v3 定位為參考文件（README），已取消 UI 註記於相關文件；測試基線維持 1073（本輪純文件變更，僅執行文件／編碼檢查）
+- **2026-10-11**：capture 建檔流程修正——「確認儲存才建立正式紀錄」：審閱階段改用新端點 `POST /api/inbox/analyze`（草稿分析，零持久化），「存起來」才 intake 建立 Item／photos 並把 AI 草稿落成正式建議（create→accept，保留 model／來源照片追溯）；取消／離開以新端點 `POST /api/inbox/discard` 清理本次暫存（冪等、只限 inbox/ 子樹），已建檔後放棄走 void＋purge；重試與重複點擊不重複建檔（intake 單次＋建議追蹤＋暫存消化後 404）；AI 失敗不擋手動儲存；`/unsorted` 記憶卡大量匯入自規劃移除；測試基線 1073 → 1083（+10）

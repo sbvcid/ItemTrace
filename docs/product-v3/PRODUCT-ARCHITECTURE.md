@@ -64,7 +64,6 @@ graph TD
         A1["標籤貼紙列印 (含 QR Code)"]
         A2["外觀/狀態前後快照比對"]
         A3["一鍵匯出紀錄封存包 ZIP"]
-        A4["相機大批照片智慧批次匯入"]
     end
 
     subgraph Layer4["4. Infrastructure (底層資產 - 默默守護，無感知)"]
