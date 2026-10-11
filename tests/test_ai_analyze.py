@@ -2082,6 +2082,62 @@ def test_recent_rejection_survives_the_suggestion_fetch_window(
     assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == ""
 
 
+def test_rejection_outside_the_history_window_still_blocks_auto_apply(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """拒絕之後才累積超過載入上限的紀錄：值不在模型上下文，仍不得自動套用。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    rejected = repo.add_suggestion(item.id, "brand", "DeWalt")
+    assert client.post(f"/api/suggestions/{rejected.id}/reject").status_code == 200
+
+    # 拒絕之後才寫入的紀錄：把 rejected 列與事件推出任何載入窗口
+    for index in range(501):
+        repo.add_suggestion(item.id, "attribute:filler", f"filler-{index:04d}")
+    assert repo.rejected_values(item.id)["brand"] == {"DeWalt"}  # 完整、無窗口
+
+    calls = fake_provider(provider_response([
+        {"field": "brand", "value": "DeWalt", "confidence": 0.99,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+
+    assert len(body) == 1
+    assert body[0]["field"] == "brand"
+    assert body[0]["status"] == "pending"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == ""
+    # 防護不依賴模型上下文：值不在給模型的視窗裡，仍然被擋下
+    assert "DeWalt" not in calls[-1]["context"]
+
+
+def test_undo_outside_the_history_window_still_blocks_auto_apply(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """Undo 之後才累積超過載入上限的紀錄：被撤回的值即使有新證據也不得自動套用。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    applied = _apply_auto(client, fake_provider, item.id, [_brand_entry("DeWalt")])
+    undo = client.post(f"/api/suggestions/{applied[0]['id']}/undo")
+    assert undo.status_code == 200
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == ""
+
+    # Undo 之後才寫入的紀錄：把 rejected 列與 undone 事件推出載入窗口
+    for index in range(501):
+        repo.add_suggestion(item.id, "attribute:filler", f"filler-{index:04d}")
+
+    # 新證據（新照片）重新支持被撤回的值：可以再次提出，但只能 pending
+    add_evidence_photo(client, item.id, filename="new_plate.jpg", tag=72)
+    calls = fake_provider(provider_response([
+        {"field": "brand", "value": "DeWalt", "confidence": 0.99,
+         "source_photo_index": 1},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+
+    assert len(body) == 1
+    assert body[0]["status"] == "pending"
+    assert body[0]["source"] == "external"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == ""
+    assert "DeWalt" not in calls[-1]["context"]
+
+
 def test_rejected_value_may_be_reproposed_but_is_never_auto_applied(
     repo, config, client, ai_config_file, fake_provider
 ):

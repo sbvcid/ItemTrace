@@ -413,3 +413,35 @@ def test_sufficient_evidence_helper_is_a_confidence_only_gate():
     assert not _has_sufficient_evidence_for_revision({"confidence": None})
     assert not _has_sufficient_evidence_for_revision({})
     assert not _has_sufficient_evidence_for_revision({"confidence": "很高"})
+
+
+# ----------------------------------------------------------------------
+# 針對性修正：拒絕／Undo 完整歷史防護（不依賴載入窗口）
+# ----------------------------------------------------------------------
+
+
+def test_rejected_values_after_undo_keep_the_undone_value_not_the_old_value(
+    repo, item
+):
+    """Undo 的 rejected 語義：保護被撤銷的自動套用值，不是復原後的使用者原值。"""
+    photo = repo.add_photo(item.id, f"files/{item.id}/original/a.jpg")
+    repo.commit_analysis(
+        item.id,
+        [{"field": "brand", "value": "BrandA", "confidence": 0.9,
+          "source_photo_id": photo.id}],
+        auto=True, source="external", actor="external",
+    )
+    second, _, _ = repo.commit_analysis(
+        item.id,
+        [{"field": "brand", "value": "DeWalt", "confidence": 0.99,
+          "source_photo_id": photo.id}],
+        auto=True, source="external", actor="external",
+    )
+    assert repo.get_item(item.id).brand == "DeWalt"
+
+    repo.undo_auto_suggestion(second[0].id)
+    assert repo.get_item(item.id).brand == "BrandA"      # 復原回使用者原值
+
+    rejected = repo.rejected_values(item.id)
+    assert rejected["brand"] == {"DeWalt"}               # 被撤銷的套用值
+    assert "BrandA" not in rejected.get("brand", set())  # 原值不是被拒絕的值

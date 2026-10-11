@@ -922,8 +922,9 @@ class Repository:
         """列出建議。預設舊 → 新（既有呼叫端的顯示順序不變）。
 
         `newest_first=True` 時改取「最新的 N 筆」——當總數超過 limit 時，
-        舊 → 新排序會丟掉最新的紀錄；歷史防護（拒絕／撤回值）與重新分析
-        上下文必須以最近的紀錄為優先，不能漏掉新的拒絕。
+        舊 → 新排序會丟掉最新的紀錄；這是給模型閱讀的有限上下文用的，
+        讓最近的拒絕／撤回紀錄優先出現。自動套用防護**不**依賴這個窗口，
+        它查核完整拒絕歷史（見 `rejected_values`）。
         """
         where, params = _where({"item_id": item_id, "status": status})
         limit, offset = _paging(limit, offset)
@@ -934,6 +935,30 @@ class Repository:
             (*params, limit, offset),
         ).fetchall()
         return [Suggestion.from_row(row) for row in rows]
+
+    def rejected_values(self, item_id: str) -> dict[str, set[str]]:
+        """該商品所有曾被拒絕或撤回（Undo）的欄位值，無載入上限。
+
+        資料語義（實作即規格，勿憑事件欄位猜測）：
+        - 明確拒絕（`reject_suggestion`）：suggestions.status='rejected'，
+          `value` 是使用者拒絕的提案值；事件 suggestion.rejected 的
+          prev/next 都等於這個值。
+        - 撤回（`undo_auto_suggestion`）：同一列轉 status='rejected'，
+          `value` 是被撤銷的自動套用值（事件 suggestion.undone 的 prev_value）。
+          復原後的使用者原值只出現在該事件的 next_value／item field.changed
+          事件，**不**屬於被拒絕的值。
+        兩者都不得再被靜默自動套用；自動套用決策必須查核完整歷史，
+        不能依賴最近 N 筆的載入窗口。回傳 field → {value}，供來源判定使用。
+        """
+        rows = self.conn.execute(
+            "SELECT field, value FROM suggestions"
+            " WHERE item_id = ? AND status = 'rejected'",
+            (item_id,),
+        ).fetchall()
+        result: dict[str, set[str]] = {}
+        for row in rows:
+            result.setdefault(row["field"], set()).add(row["value"])
+        return result
 
     def update_suggestion(
         self, suggestion_id: str, changes: Mapping[str, Any], *, actor: str = "user"
@@ -1191,28 +1216,19 @@ class Repository:
         *,
         history_events: list[Event] | None = None,
     ) -> dict[str, FieldProvenance]:
-        """完整追蹤欄位來源、最後修改時序與曾遭拒絕的值。
+        """完整追蹤欄位來源、最後修改時序與曾遭拒絕或撤回的值。
 
-        拒絕值防護必須看到「最近」的拒絕：建議數超過取用上限時，舊 →
-        新排序會只拿到最舊的一批，新的拒絕會漏掉、防護失效；因此這裡
-        明確取最新的紀錄（newest_first=True）。
+        拒絕／撤回值防護必須查核**完整**歷史：`rejected_values()` 直接
+        查 suggestions 的 rejected 列（拒絕與 Undo 的最終語義都落在該列），
+        不受最近 N 筆 suggestion 或事件載入窗口影響。
+        `history_events`（有界窗口）只用於欄位來源與最後人工修改時間。
         """
         events_list = (
             history_events
             if history_events is not None
             else self.list_events("item", item.id, limit=500)
         )
-        suggestions = self.list_suggestions(
-            item_id=item.id, limit=500, newest_first=True
-        )
-        rejected_by_field: dict[str, set[str]] = {}
-        for s in suggestions:
-            if s.status == "rejected":
-                rejected_by_field.setdefault(s.field, set()).add(s.value)
-        for ev in events_list:
-            if ev.type == "suggestion.undone" and ev.field:
-                if ev.prev_value is not None:
-                    rejected_by_field.setdefault(ev.field, set()).add(str(ev.prev_value))
+        rejected_by_field = self.rejected_values(item.id)
 
         identity_needed = {f for f in fields if f in IDENTITY_FIELDS}
         attribute_needed = {
