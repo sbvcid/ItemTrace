@@ -3,6 +3,11 @@
 > local-first 商品證據與歸檔工具
 > 個人賣家自用，非 ERP、非 SaaS、非退貨管理平台
 
+> **文件狀態：歷史 v1 規格（已封存，僅供參考）**
+> 本文件記錄 ItemTrace v1（無 AI 階段）的規格與當時決策，供資料模型、技術原則與歷史脈絡參考。
+> 產品已演進為 v3（內建 AI 整理、V3 SPA；見 `docs/product-v3/` 與 `docs/engineering/STATUS.md`），部分內容已被後續實作取代（例如：AI 已內建、永久刪除 API/UI 已於 Phase 3 落地）。
+> 本文件不構成現行限制：實作以目前的明確指示、已確認決策與現行程式碼／測試為準（見 `docs/engineering/DECISIONS.md` D11）。
+
 ---
 
 ## 0. 定位
@@ -188,8 +193,7 @@ Item 及其所有相關資料與檔案。這是例外，不是預設行為：
 | events | 稽核紀錄原則上保留；若要一併清除必須另行明示 |
 | 不做的事 | 不做「滿一年自動清掉」之類的時間軸清理 |
 
-永久刪除的 API 與 UI 目前尚未實作（v1 停在規格層）。日常操作一律走
-`void`，不要把永久刪除做成預設或半自動行為。
+永久刪除的 API 與 UI 已於 Phase 3 實作（`DELETE /api/items/{id}`，僅限垃圾桶紀錄；細節見 `docs/engineering/STATUS.md` Phase 3 紀錄與 DECISIONS D5）。日常操作仍一律走 `void`（垃圾桶），永久刪除維持使用者明示的例外路徑，不做預設或半自動行為。
 
 **`items.status` 只有三個值：`active` / `archived` / `void`**
 沒有 `draft`。Item 一建立就是 `active`，欄位可以暫時為空。
@@ -578,7 +582,7 @@ python shopctl.py verify     # 完整性檢查
 
 這條路徑跑通即為 v1。API 的完整端點清單、復原功能、統計等是沿路補齊的，不是獨立目標。
 
-**從此凍結規格，不再增加抽象層。**
+（v1 當時曾寫「從此凍結規格，不再增加抽象層」——該收斂原則已隨 v3 演進失效，不再作為現行限制；後續需求由使用者明確提出。）
 
 ---
 
@@ -621,19 +625,8 @@ python shopctl.py verify     # 完整性檢查
 
 ---
 
-## 15. 給 coding agent 的工作方式
+## 15. 給 coding agent 的工作方式（歷史紀錄）
 
-實作時建議逐階段提交，每階段可獨立驗證。預期指令範例：
+> 本節為 v1 當時的工作方式紀錄，**已不適用**。現行流程見 `AGENTS.md` 與 `docs/engineering/AGENT_GUIDE.md`。
 
-> 「實作 SPEC-v1 階段 1（骨架）。不要擴充範圍。」
-
-之後 AI 功能一律寫成外部腳本消費 API，核心不動：
-
-```python
-# tools/analyze_inbox.py — 外部腳本，不在產品內
-import httpx
-resp = httpx.post(f"{BASE}/api/items/{item_id}/suggestions", json={
-    "field": "model", "value": "ROG STRIX B650E-F", "confidence": 0.82,
-    "model_name": "claude-opus-4", "source_photo_id": photo_id,
-})
-```
+v1 階段建議逐階段提交、每階段獨立驗證；AI 功能當時設計為外部腳本消費 API（`POST /api/items/{id}/suggestions`，見 §13），核心不動。v3 起已內建 AI 整理（`shop/ai_client.py`），外部腳本接入仍然可用，但不再是主要路徑。

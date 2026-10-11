@@ -3,6 +3,8 @@
 本文件定義 ItemTrace V3 的未來實作分期計畫與里程碑驗收標準。
 我們的策略是：**「優先把『拍照 → AI 整理 → 一鍵確認』的核心靈魂體驗做到極致，進階能力後置。」**
 
+> **文件狀態（2026-10-11）**：V3 當時的分期計畫（歷史規劃）。實際分期與完成狀態見 `docs/engineering/STATUS.md` 與 `docs/engineering/ROADMAP.md`；已取消項目（狀態切換 UI、`⋯` 選單、浮動快門）不得依本文件重新導入。
+
 ---
 
 ## 1. 施工階段劃分（Implementation Phases）
@@ -38,6 +40,7 @@ Phase 4: 進階能力與輸出 (Labels, Compare, Archive Package Export & Polish
   2. 實作原生輕量路由器 `core/router.js`、狀態 `core/store.js`、API 封裝 `core/api.js`。
   3. 建立繁中與英文雙語字典（`web/i18n/`）與自動化字典鍵值比對測試 `tests/test_v3_i18n.py`。
   4. 實作手機端底部導覽列（含大快門鈕）與桌面端頂部全域搜尋外框。
+     （註：現行實作為頁首＋首頁主按鈕，無底部導覽列與浮動快門。）
 * **驗收標準**：
   - 瀏覽器開啟即載入現代清爽外框，語系切換無刷新生效，無任何報錯。
 
@@ -63,7 +66,7 @@ Phase 4: 進階能力與輸出 (Labels, Compare, Archive Package Export & Polish
 * **任務**：
   1. **追加照片與生活筆記**：在紀錄詳細頁隨手追加照片或新備忘。
   2. **生活備忘維護**：支援購買日期、保固到期日、存放位置具名欄位。
-  3. **狀態管理**：在手上 / 已離手狀態切換。
+  3. **狀態管理**：在手上 / 已離手狀態切換。（已取消——狀態以 `active`/`archived`/`void` 保存，作廢走垃圾桶 `/trash`，不做切換 UI）
   4. **手機直連引導**：首頁與設定頁展示手機直連專屬 QR Code。
 * **驗收標準**：
   - 使用者能隨手修改存放位置，或將賣掉的物品標記為已離手。
@@ -73,6 +76,7 @@ Phase 4: 進階能力與輸出 (Labels, Compare, Archive Package Export & Polish
 ### Phase 4：進階能力與輸出交付（Advanced Capabilities & Polish）
 * **任務**：
   1. **標籤列印與 QR 實體綁定**：在紀錄頁 `⋯` 呼出列印對話框，預覽含 QR 之標籤並送印。
+     （註：`⋯` 選單已移除，列印入口依現行 UI。）
   2. **外觀前後比對器（`/i/:id/compare`）**：雙視窗同步縮放比對。
   3. **一鍵匯出紀錄封存包 ZIP**：包含 `report.pdf`、原始照片與 `manifest.json`。
   4. **相機大批照片匯入（`/unsorted`）**。

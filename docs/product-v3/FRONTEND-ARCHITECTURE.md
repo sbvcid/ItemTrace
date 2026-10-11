@@ -16,7 +16,7 @@ ItemTrace 是為開源社群與個人自用打造的軟體。我們選擇**完�
 
 ## 2. 目錄組織規劃（`web/` Directory Structure）
 
-未來實作階段，前端程式碼將座落於乾淨的 `web/` 目錄：
+前端程式碼座落於乾淨的 `web/` 目錄。下列為**早期規劃的檔案結構**；**實際結構以 `git ls-files web/` 為準**——現行為 `core/{api,router,dom}.js`、`i18n/{index,zh-TW,en}.js`、`views/{home,capture,record-detail,trash,settings}.js`，無 `components/`、`store.js`、`idb.js`（舉例：大快門按鈕已隨 UX 修整移除，拍照入口為首頁主按鈕與 `/capture` 頁內快門）：
 
 ```text
 web/

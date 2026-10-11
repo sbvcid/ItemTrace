@@ -1,7 +1,7 @@
 # ItemTrace Engineering Status
 
 最後更新：2026-10-11  
-**當前狀態：Phase 3 垃圾桶與刪除完成，UX 手機優先修整完成**  
+**當前狀態：Phase 3 垃圾桶與刪除完成，UX 手機優先修整完成，工程文件清理完成**  
 遠端狀態：`main` 與 `origin/main` 同步（含本階段 commit）  
 測試驗證：`pytest` 完全通過，全 **1073 測試**無失敗、無跳過
 
@@ -552,3 +552,4 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 - **2026-10-10**：SR-2 完成——資源上限（body／單檔／檔數／像素／列印光柵；413/400；先前成功檔案保留）＋AI 節流（429＋Retry-After）；`/docs` 預設關閉、API `no-store`／照片 `private`、錯誤訊息去路徑化；列印管線重新序列化並實測修復兩個 mXSS（`<!-->` 註解、實體編碼標記）＋sandbox 預設保留；測試基線 1013 → 1049（+36）
 - **2026-10-11**：Phase 3 垃圾桶與刪除完成——移至垃圾桶（沿用 void、零 migration）＋首頁／搜尋預設排除＋垃圾桶頁（還原至移入前 active／archived，歷史不可靠時安全預設 active）；永久刪除（僅限垃圾桶、單一交易清 DB 與事件、可逆改名後清檔案、刪檔失敗 500 列出路徑不假裝成功、路徑守衛、編號不回收）；無自動清理、備份機制未動；`/trash` UI＋繁英 i18n；測試基線 1052 → 1073（+21；另更新 1 個既有契約測試）
 - **2026-10-11**：UX 手機優先修整完成——首頁移除浮動快門、簡化 hero section；詳情頁移除狀態標籤、重組 DOM；新增 i18n keys 區分紀錄數／照片數；收斂 inline styles 到 CSS classes；設定頁完整 i18n 化；AGENTS.md＋AGENT_GUIDE.md 更新為標準交付流程；測試基線維持 1073；commit `e86f6ee` 已推送至 origin/main
+- **2026-10-11**：工程文件清理完成——修復本檔 UTF-8 編碼損壞（UTF-16 尾端併回 UTF-8）；AGENTS／AGENT_GUIDE 移除停工式規則（同步門檻／整 Phase 才可提交／額外工作即停工等待指示／文件任務強制完整回歸），改為風險導向測試與「調查→修復→驗證→繼續」；ROADMAP 合併重複的兩代 Phase 規劃，垃圾桶與資料生命週期標記完成（`status='void'`＋還原＋使用者明示永久刪除，無自動過期）；DECISIONS 校準 D2/D3/D4/D5、O1/O5 結案、新增 D11（文件效力範圍與已取消 UI 清單）；SPEC-v1 標記為歷史規格；product-v3 定位為參考文件（README），已取消 UI 註記於相關文件；測試基線維持 1073（本輪純文件變更，僅執行文件／編碼檢查）
