@@ -318,6 +318,29 @@ def save_to_inbox(config: Config, filename: str, data: bytes) -> Path:
     return target
 
 
+def discard_staged(config: Config, relatives: list[str]) -> list[str]:
+    """刪掉 inbox 裡的暫存檔（capture 取消建檔時的清理）。
+
+    與 resolve_inbox_paths 同一條 containment 規則：只接受 inbox/ 子樹
+    內的相對路徑。檔案已經不在（重複清理、已被 intake 歸檔）不算錯誤
+    —— 清理必須冪等。回傳實際刪除的相對路徑。
+    """
+    if not relatives:
+        raise ValidationError("沒有指定要清理的檔案")
+    inbox_root = config.inbox_dir.resolve()
+    removed: list[str] = []
+    for raw in relatives:
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValidationError("檔名必須是非空字串")
+        candidate = (config.data_root / raw).resolve()
+        if not candidate.is_relative_to(inbox_root):
+            raise ValidationError(f"只能清理 inbox/ 底下的檔案：{raw}")
+        if candidate.is_file():
+            candidate.unlink()
+            removed.append(raw)
+    return removed
+
+
 def archive_bytes(
     config: Config,
     repo: Repository,

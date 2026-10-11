@@ -395,6 +395,47 @@ class InboxIntakeOut(BaseModel):
     skipped: list[SkippedFile] = Field(default_factory=list)
 
 
+class InboxUploadListing(InboxListing):
+    """POST /api/inbox/photos 的回應。
+
+    scan 回的是整個 inbox；`staged` 是**這次上傳**實際落盤的檔案 ——
+    capture 取消時只能清理自己的暫存，不能動到別人放在 inbox 的檔案。
+    """
+
+    staged: list[str] = Field(default_factory=list)
+
+
+class InboxDiscardRequest(BaseModel):
+    """取消建檔時要清理的暫存檔（inbox/ 底下的相對路徑）。"""
+
+    files: list[str] = Field(min_length=1)
+
+
+class InboxDiscardOut(BaseModel):
+    discarded: list[str]
+    count: int
+
+
+class InboxAnalyzeRequest(BaseModel):
+    """草稿分析輸入：inbox 暫存檔的相對路徑（本輪上傳的 staged）。"""
+
+    files: list[str] = Field(min_length=1)
+
+
+class DraftSuggestionOut(BaseModel):
+    """未持久化的草稿建議：source_photo_index 對應請求 files 的順序。"""
+
+    field: str
+    value: str
+    confidence: float | None = None
+    source_photo_index: int | None = None
+
+
+class InboxAnalyzeOut(BaseModel):
+    model: str
+    suggestions: list[DraftSuggestionOut]
+
+
 class AiSettingsOut(BaseModel):
     """GET /api/settings/ai 的回應。
 

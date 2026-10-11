@@ -58,17 +58,23 @@ from .models import Item, Photo
 from .repo import Repository
 from .settings import router as settings_router
 from .schemas import (
+    DraftSuggestionOut,
     EventOut,
     HealthOut,
     IdentifierCreate,
     IdentifierLookupOut,
     IdentifierOut,
     IdentifierPatch,
+    InboxAnalyzeOut,
+    InboxAnalyzeRequest,
+    InboxDiscardOut,
+    InboxDiscardRequest,
     InboxEntryOut,
     InboxGroupOut,
     InboxIntakeOut,
     InboxIntakeRequest,
     InboxListing,
+    InboxUploadListing,
     ItemCreate,
     ItemDetail,
     ItemListOut,
@@ -826,6 +832,70 @@ def analyze_item_photos(
 
 
 @router.post(
+    "/api/inbox/analyze",
+    response_model=InboxAnalyzeOut,
+    tags=["inbox"],
+)
+def analyze_inbox_draft(
+    body: InboxAnalyzeRequest,
+    cfg: Annotated[Config, Depends(get_config)],
+    request: Request,
+) -> InboxAnalyzeOut:
+    """草稿分析：對 inbox 暫存照片跑同一條 AI 管線，**不建立任何紀錄**。
+
+    capture「確認儲存才建檔」的關鍵：審閱階段的辨識結果只是草稿
+    （未持久化）—— 正式 Item、photos 與 suggestions 一律等使用者按
+    「存起來」，才由 intake ＋ POST /api/items/{id}/suggestions ＋
+    accept 建立。AI 失敗（沒有 key、provider 錯誤、格式不如預期）回
+    400，前端照樣允許手動填寫後存檔。
+
+    節流與照片選擇政策和 analyze_item_photos 相同（>8 張取「最早 2＋
+    最新 6」）；`source_photo_index` 對應請求 files 的順序，存檔時才
+    對應到正式 photos.id。
+    """
+    paths = inbox_mod.resolve_inbox_paths(cfg, body.files)
+    security.enforce_ai_quota(request)
+
+    try:
+        ai = ai_config.load_config()
+    except AiConfigError as exc:
+        raise ValidationError(ai_config.redact(str(exc))) from None
+
+    selected = _select_draft_photo_indices(paths)
+    data_urls = [
+        ai_client.photo_data_url(paths[index].read_bytes(), paths[index].name)
+        for index in selected
+    ]
+
+    try:
+        response = ai_client.call_ai_provider(
+            ai.api_key, ai.model, data_urls,
+            provider=ai.provider, base_url=ai.base_url,
+        )
+        text = ai_client.extract_text(response, ai.api_key)
+        parsed = ai_client.parse_suggestions(
+            text, [{"id": str(index)} for index in selected]
+        )
+    except ai_client.AnalyzerError as exc:
+        raise ValidationError(ai_config.redact(str(exc), ai.api_key)) from None
+
+    suggestions = [
+        DraftSuggestionOut(
+            field=entry["field"],
+            value=entry["value"],
+            confidence=entry["confidence"],
+            source_photo_index=(
+                int(entry["source_photo_id"])
+                if entry["source_photo_id"] is not None
+                else None
+            ),
+        )
+        for entry in parsed
+    ]
+    return InboxAnalyzeOut(model=ai.model, suggestions=suggestions)
+
+
+@router.post(
     "/api/suggestions/{suggestion_id}/accept",
     response_model=SuggestionOut,
     tags=["suggestions"],
@@ -944,16 +1014,18 @@ def list_inbox(
     )
 
 
-@router.post("/api/inbox/photos", response_model=InboxListing, status_code=201,
+@router.post("/api/inbox/photos", response_model=InboxUploadListing, status_code=201,
              tags=["inbox"])
 async def upload_to_inbox(
     cfg: Annotated[Config, Depends(get_config)],
     files: Annotated[list[UploadFile], File()] = None,
-) -> InboxListing:
+) -> InboxUploadListing:
     """手機上傳 → 落盤 inbox/。不寫資料庫，等按「處理」。
 
     SR-2（F4）：檔數、單檔大小與像素上限與 observations 上傳同一組政策；
     超限回 400/413，成功落盤的檔案保留（不因後面的檔案失敗而回滾）。
+    `staged` 列出**這次上傳**實際落盤的相對路徑（scan 回的是整個
+    inbox）—— capture 取消時靠它只清理自己的暫存檔。
     """
     if not files:
         raise ValidationError("沒有收到檔案（multipart 欄位名要是 files）")
@@ -961,13 +1033,14 @@ async def upload_to_inbox(
         raise ValidationError(
             f"一次最多 {cfg.max_upload_files} 個檔案（收到 {len(files)} 個）"
         )
+    staged: list[str] = []
     for upload in files:
         data = await limits.read_upload_limited(upload, cfg.max_upload_bytes)
         name = upload.filename or "photo.jpg"
         limits.check_image_pixels(data, name, max_pixels=cfg.max_image_pixels)
-        inbox_mod.save_to_inbox(cfg, name, data)
+        staged.append(cfg.relative(inbox_mod.save_to_inbox(cfg, name, data)))
     entries = inbox_mod.scan_inbox(cfg)
-    return InboxListing(
+    return InboxUploadListing(
         entries=[
             InboxEntryOut(
                 relative=entry.relative,
@@ -978,7 +1051,22 @@ async def upload_to_inbox(
             for entry in entries
         ],
         count=len(entries),
+        staged=staged,
     )
+
+
+@router.post("/api/inbox/discard", response_model=InboxDiscardOut, tags=["inbox"])
+def discard_inbox_files(
+    body: InboxDiscardRequest, cfg: Annotated[Config, Depends(get_config)]
+) -> InboxDiscardOut:
+    """清掉 inbox 裡的暫存檔（capture 取消／放棄建檔時的清理）。
+
+    只能清 inbox/ 底下的相對路徑（路徑逃逸回 400）；檔案已不在（重複
+    清理、已被 intake 歸檔）不算錯誤 —— 清理必須冪等。不碰資料庫：
+    inbox 檔案本來就沒有 DB 紀錄。
+    """
+    discarded = inbox_mod.discard_staged(cfg, body.files)
+    return InboxDiscardOut(discarded=discarded, count=len(discarded))
 
 
 @router.post(
@@ -1404,6 +1492,23 @@ def _select_photos_for_analysis(photos: list[Photo]) -> list[Photo]:
     if len(photos) <= ai_client.MAX_PHOTOS:
         return photos
     return photos[:2] + photos[-(ai_client.MAX_PHOTOS - 2):]
+
+
+def _select_draft_photo_indices(paths: list[Path]) -> list[int]:
+    """草稿分析的照片選擇（與 _select_photos_for_analysis 同政策）。
+
+    輸入是 inbox 檔案路徑（還沒有 DB 紀錄），回傳「請求 files 順序」
+    的索引，讓 source_photo_index 能對回前端的照片順序；沒有拍攝時間
+    的檔案排最後。
+    """
+    if len(paths) <= ai_client.MAX_PHOTOS:
+        return list(range(len(paths)))
+    times = [photos_mod.read_captured_at(path)[0] for path in paths]
+    ordered = sorted(
+        range(len(paths)), key=lambda i: (times[i] is None, times[i] or "")
+    )
+    keep = set(ordered[:2]) | set(ordered[-(ai_client.MAX_PHOTOS - 2):])
+    return sorted(keep)
 
 
 def _minutes_between(earlier: str, later: str) -> float:

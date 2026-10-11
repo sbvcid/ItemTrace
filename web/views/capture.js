@@ -5,7 +5,7 @@
  * 📷 拍照 → AI 理解/整理 → 看見 vs 推測 → ✓ 存起來 → 回首頁看見最新紀錄
  */
 
-import { api, getPhotoUrl } from '../core/api.js';
+import { api } from '../core/api.js';
 import { escapeHtml } from '../core/dom.js';
 import { showToast } from '../core/router.js';
 import { t } from '../i18n/index.js';
@@ -151,18 +151,31 @@ export async function createCaptureView(params, router) {
 
   // Internal state for this capture session
   let capturedFiles = [];
+
+  // 「確認儲存才建檔」：審閱階段只有 inbox 暫存檔與未持久化的草稿建議，
+  // 正式 Item／photos／suggestions 一律等使用者按「存起來」才建立。
+  let pendingInboxFiles = [];   // 本輪上傳落在 inbox 的相對路徑（暫存）
+  let stagedConsumed = false;   // 暫存檔已被 intake 歸檔（或已清理）
+  let draftModel = '';          // 草稿分析用的模型名（存檔時寫入建議追溯）
+  let organizeBusy = false;
+  let saveBusy = false;
+  let saveCompleted = false;
+
   let currentItemId = null;
-  let currentSuggestions = [];
+  let currentSuggestions = [];  // 草稿建議（無 id；index 對應上傳順序）
   let isEditMode = false;
 
-  // Phase 2C-D 修正：suggestions 的 source_photo_id 是後端 photos.id 的
-  // 外鍵（不是合成格式）。intake 回傳的 archived（PhotoOut：id + filename，
-  // 順序同上傳）就是在這裡建立「照片 ID → 後端圖檔 URL」對應的依據。
+  // 草稿的 source_photo_index → 本機 blob URL（審閱時照片還沒有後端 ID）。
   let photoUrlById = new Map();
+  // 存檔 intake 之後 orig_name → photos.id（把草稿的來源照片對應到正式紀錄）。
+  let archivedIdByOrigName = new Map();
 
   // Phase 2A：記住本次 session 已成功套用的操作，重試時跳過，
   // 確保「再按一次存起來」不會重複套用同一個變更。
+  // 以草稿 index 為鍵；createdSuggestionIds 記住已建立的正式建議 id，
+  // 讓「create 成功但 accept 失敗」的重試不會重複建立建議。
   const appliedSuggestionIds = new Set();
+  const createdSuggestionIds = new Map();
   let appliedSerialValue = null;
 
   // Elements
@@ -284,41 +297,62 @@ export async function createCaptureView(params, router) {
     renderTray();
   });
 
+  // 清理本次上傳的 inbox 暫存檔。冪等：已不在（重複清理、已被 intake
+  // 歸檔）不算錯誤；失敗只警告，不假裝清乾淨。
+  async function discardStagedFiles() {
+    if (stagedConsumed || pendingInboxFiles.length === 0) return;
+    try {
+      await api.discardInboxFiles(pendingInboxFiles);
+      pendingInboxFiles = [];
+    } catch (err) {
+      console.warn('Discard staged inbox files failed:', err);
+      showToast(t('capture.discardFailed'));
+    }
+  }
+
   // Start Organize Flow
   btnStartOrganize.addEventListener('click', async () => {
-    if (capturedFiles.length === 0) return;
+    if (capturedFiles.length === 0 || organizeBusy) return;
+
+    organizeBusy = true;
+    btnStartOrganize.disabled = true;
 
     // Switch to Loading View
     stepCamera.style.display = 'none';
     stepLoading.style.display = 'block';
 
     try {
-      // Step 1: Upload photos to Inbox
+      // 上一次嘗試若停在中途（上傳成功但分析失敗），先清掉暫存檔再重傳，
+      // 避免 inbox 累積重複檔案。
+      await discardStagedFiles();
+
+      // Step 1: Upload photos to Inbox（只落盤，不建任何紀錄）
       const rawFiles = capturedFiles.map(c => c.file);
       const uploadRes = await api.uploadInboxPhotos(rawFiles);
-      const relativeFiles = uploadRes.entries.map(e => e.relative);
+      pendingInboxFiles = (Array.isArray(uploadRes.staged) && uploadRes.staged.length)
+        ? uploadRes.staged
+        : uploadRes.entries.map(e => e.relative);
 
-      // Step 2: Intake into Item
-      const intakeRes = await api.intake(relativeFiles, 'intake');
-      currentItemId = intakeRes.item_id;
-      photoUrlById = new Map(
-        (intakeRes.archived || [])
-          .filter(p => p && p.id && p.filename)
-          .map(p => [p.id, getPhotoUrl(p.filename)])
-      );
-
-      // Step 3: Call AI vision analysis
-      let suggestions = [];
+      // Step 2: Draft analysis（不建立任何紀錄）
+      let draft = { model: '', suggestions: [] };
       try {
-        suggestions = await api.analyzeItem(currentItemId);
+        draft = await api.analyzeDraft(pendingInboxFiles);
       } catch (aiErr) {
-        console.warn('AI analysis returned non-200 or no key:', aiErr);
-        // Non-fatal: photos are safely stored!
+        console.warn('AI draft analysis failed:', aiErr);
+        // Non-fatal：沒有 key／provider 故障 → 手動填寫後照樣可以存。
       }
+      draftModel = draft.model || '';
+      currentSuggestions = draft.suggestions || [];
+      currentItemId = null;
+      stagedConsumed = false;
+      saveCompleted = false;
+      createdSuggestionIds.clear();
+      appliedSuggestionIds.clear();
+      appliedSerialValue = null;
+      archivedIdByOrigName = new Map();
 
-      currentSuggestions = suggestions || [];
-
-      // Step 4: Show Review View
+      // Step 3: Show Review View（草稿的來源照片用本機 blob URL 對應）
+      photoUrlById = new Map(capturedFiles.map((c, i) => [i, c.url]));
       stepLoading.style.display = 'none';
       stepReview.style.display = 'block';
       renderReviewScreen();
@@ -327,6 +361,9 @@ export async function createCaptureView(params, router) {
       showToast(`${t('capture.uploadError')}: ${err.message}`);
       stepLoading.style.display = 'none';
       stepCamera.style.display = 'block';
+    } finally {
+      organizeBusy = false;
+      btnStartOrganize.disabled = false;
     }
   });
 
@@ -371,7 +408,9 @@ export async function createCaptureView(params, router) {
       } else if (s.field === 'identifier:serial') {
         extracted.serial = s.value;
         confidences.serial = s.confidence;
-        sourcePhotos.serial = s.source_photo_id;
+        // 草稿的來源照片是「上傳順序的索引」（還沒有後端照片 ID）；
+        // photoUrlById 以同樣的索引對應到本機 blob URL。
+        sourcePhotos.serial = s.source_photo_index;
       }
     }
 
@@ -438,8 +477,8 @@ export async function createCaptureView(params, router) {
       inspectBtn.style.color = 'var(--text-secondary)';
       inspectBtn.innerHTML = `🔍 ${t('capture.inspectPhoto')}`;
       inspectBtn.addEventListener('click', () => {
-        // source_photo_id 直接對應後端照片 ID：查得到就顯示真正的來源照片
-        // 內容（/files/ 直出原始檔），查不到才退回第一張。
+        // 草稿索引直接對應本機拍攝順序的照片（審閱階段還沒有後端 ID）；
+        // 查不到才退回第一張。
         const targetPhoto = photoUrlById.get(sourcePhotos.serial)
           || capturedFiles[0]?.url;
         if (targetPhoto) {
@@ -498,28 +537,63 @@ export async function createCaptureView(params, router) {
 
   // Confirm and Save (核心動作：✓ 存起來)
   //
-  // 儲存分兩層：主要紀錄在 intake 時就已建立；這裡的工作是把 AI 建議與
-  // 使用者編輯的值套用上去。任何一步失敗都要誠實回報（不得假裝全部成功），
-  // 且重試不得重複套用 —— 已套用的建議與序號以區域狀態追蹤，後端的
-  // pending 檢查與同值 no-op 則是第二道保險。
+  // 「確認儲存才建檔」：第一次按下存起來時才呼叫 intake —— 正式 Item、
+  // Observation、photos 在這一刻誕生。AI 草稿接著落成正式建議
+  // （create → accept，保留 model／confidence／來源照片追溯）並套用值。
+  // 任何一步失敗都要誠實回報（不得假裝全部成功），且重試不得重複套用：
+  // intake 只跑一次；已建立的建議與已套用的草稿以區域狀態追蹤；
+  // 後端的 pending 檢查與同值 no-op 則是第二道保險。
   btnSaveConfirm.addEventListener('click', async () => {
-    if (!currentItemId) return;
+    if (saveBusy || saveCompleted) return;
+    if (pendingInboxFiles.length === 0 && !currentItemId) return;
 
+    saveBusy = true;
     btnSaveConfirm.disabled = true;
     btnSaveConfirm.innerHTML = `<span>${t('app.loading')}</span>`;
 
     const failures = [];
 
     try {
-      // 1. Accept suggestions one by one; already-applied ones are skipped.
-      for (const suggestion of currentSuggestions) {
-        if (appliedSuggestionIds.has(suggestion.id)) continue;
+      // 0. 這一刻才建立正式紀錄（重試時跳過 —— intake 是全有全無，
+      //    已成功就不重跑，避免重複建檔）。
+      if (!currentItemId) {
+        const intakeRes = await api.intake(pendingInboxFiles, 'intake');
+        currentItemId = intakeRes.item_id;
+        stagedConsumed = true;
+        archivedIdByOrigName = new Map(
+          (intakeRes.archived || [])
+            .filter(p => p && p.id && p.orig_name)
+            .map(p => [p.orig_name, p.id])
+        );
+      }
+
+      // 1. 把 AI 草稿落成正式建議並逐筆接受；來源照片對應到正式 photos.id。
+      for (let index = 0; index < currentSuggestions.length; index++) {
+        if (appliedSuggestionIds.has(index)) continue;
         try {
-          await api.acceptSuggestion(suggestion.id);
-          appliedSuggestionIds.add(suggestion.id);
+          let suggestionId = createdSuggestionIds.get(index);
+          if (!suggestionId) {
+            const draft = currentSuggestions[index];
+            const sourcePhotoId = archivedIdByOrigName.get(
+              capturedFiles[draft.source_photo_index]?.file.name
+            ) || null;
+            const created = await api.createSuggestion(currentItemId, {
+              field: draft.field,
+              value: draft.value,
+              confidence: draft.confidence ?? null,
+              source: 'external',
+              model_name: draftModel,
+              source_photo_id: sourcePhotoId,
+              actor: 'external',
+            });
+            suggestionId = created.id;
+            createdSuggestionIds.set(index, suggestionId);
+          }
+          await api.acceptSuggestion(suggestionId);
+          appliedSuggestionIds.add(index);
         } catch (err) {
-          console.warn(`Could not accept suggestion ${suggestion.id}:`, err);
-          failures.push({ what: suggestion.field, error: err });
+          console.warn(`Could not apply suggestion #${index}:`, err);
+          failures.push({ what: currentSuggestions[index].field, error: err });
         }
       }
 
@@ -546,10 +620,11 @@ export async function createCaptureView(params, router) {
       //    already create the same identifier (avoids a guaranteed 409).
       const newSerial = editSerial.value.trim();
       if (newSerial && appliedSerialValue !== newSerial) {
-        const acceptedSerial = currentSuggestions.find(
-          s => s.field === 'identifier:serial' && appliedSuggestionIds.has(s.id)
+        const acceptedSerialIndex = currentSuggestions.findIndex(
+          (s, i) => s.field === 'identifier:serial' && appliedSuggestionIds.has(i)
         );
-        if (acceptedSerial && acceptedSerial.value.trim() === newSerial) {
+        if (acceptedSerialIndex !== -1
+            && currentSuggestions[acceptedSerialIndex].value.trim() === newSerial) {
           appliedSerialValue = newSerial;
         } else {
           try {
@@ -563,6 +638,7 @@ export async function createCaptureView(params, router) {
       }
 
       if (failures.length === 0) {
+        saveCompleted = true;
         showToast(t('capture.saveSuccess'));
 
         // 4. Back to Home: backend confirmed the save; the fresh record shows up
@@ -575,27 +651,61 @@ export async function createCaptureView(params, router) {
       // 留在原畫面讓使用者直接重試（已套用的部分不會重跑）。
       console.warn('Save completed with failures:', failures);
       showToast(t('capture.savePartial', { n: failures.length }));
+      saveBusy = false;
       btnSaveConfirm.disabled = false;
       btnSaveConfirm.innerHTML = `<span>✓ ${t('capture.btnSaveDirect')}</span>`;
     } catch (err) {
-      // 硬失敗（例如 PATCH 失敗）：編輯的值沒有落地，留在原畫面重試。
+      // 硬失敗（例如 intake 或 PATCH 失敗）：intake 失敗時沒有任何正式
+      // 紀錄，暫存檔仍在；PATCH 失敗時編輯的值沒有落地。留在原畫面重試。
       console.error('Failed to finalize item:', err);
       showToast(`${t('capture.saveError')}: ${err.message}`);
+      saveBusy = false;
       btnSaveConfirm.disabled = false;
       btnSaveConfirm.innerHTML = `<span>✓ ${t('capture.btnSaveDirect')}</span>`;
     }
   });
 
-  // Cancel
-  btnCancelDraft.addEventListener('click', () => {
-    capturedFiles.forEach(f => URL.revokeObjectURL(f.url));
-    capturedFiles = [];
-    router.navigate('/');
+  // 取消：不留下本次操作產生的任何正式資料。
+  //
+  // - 還沒按過存起來：只有 inbox 暫存檔 → 清掉即可（冪等）。
+  // - 已按過存起來（intake 已建立紀錄，例如部分失敗後放棄）：
+  //   紀錄完全是本次操作的產物 → void + purge 清乾淨（Phase 3 既有流程）。
+  //   清理失敗時誠實警告（紀錄已進垃圾桶，可從那裡永久刪除），不假裝成功。
+  let discardBusy = false;
+  btnCancelDraft.addEventListener('click', async () => {
+    if (discardBusy) return;
+    discardBusy = true;
+
+    try {
+      if (currentItemId && !saveCompleted) {
+        try {
+          await api.voidItem(currentItemId);
+          await api.purgeItem(currentItemId);
+          showToast(t('capture.discardDone'));
+        } catch (err) {
+          console.warn('Discard created record failed:', err);
+          showToast(t('capture.discardFailed'));
+        }
+        currentItemId = null;
+      } else {
+        await discardStagedFiles();
+      }
+    } finally {
+      capturedFiles.forEach(f => URL.revokeObjectURL(f.url));
+      capturedFiles = [];
+      router.navigate('/');
+    }
   });
 
   return {
     element: el,
     destroy() {
+      // 離開頁面：清掉還沒被 intake 消化的暫存檔。審閱階段沒有任何
+      // 正式紀錄；已按過「存起來」的紀錄（含部分失敗）不在此清理 ——
+      // 那是使用者按下儲存的意圖，明確取消才捨棄。
+      if (!saveBusy && !saveCompleted) {
+        discardStagedFiles();
+      }
       capturedFiles.forEach(f => URL.revokeObjectURL(f.url));
     },
   };

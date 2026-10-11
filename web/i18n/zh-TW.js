@@ -55,7 +55,7 @@ export default {
     btnSaveEdit: '儲存修改',
     btnCancelEdit: '取消修改',
     inspectPhoto: '查閱來源照片',
-    noFieldAlert: 'AI 未辨識出特定 3C 規格欄位。照片已安全歸檔，你可以直接存起來，或點擊下方輸入名稱。',
+    noFieldAlert: 'AI 未辨識出特定規格欄位。你可以手動輸入名稱，或直接存起來（照片會在存起來時歸檔）。',
     namePlaceholder: '例如：Sony WH-1000XM5 耳機',
     brandPlaceholder: '例如：Sony',
     modelPlaceholder: '例如：WH-1000XM5',
@@ -66,6 +66,8 @@ export default {
     savePartial: '紀錄已保存，但有 {n} 項未成功套用（已保留，可再按「存起來」重試）。',
     saveError: '儲存失敗，請重試',
     uploadError: '照片上傳失敗',
+    discardDone: '已捨棄本次拍攝的內容',
+    discardFailed: '清理未完成：請到垃圾桶確認是否殘留本次紀錄',
   },
   detail: {
     headerTitle: '紀錄明細',

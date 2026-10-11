@@ -721,23 +721,77 @@ def test_serial_source_photo_id_maps_to_real_photo_content(
 def test_capture_serial_inspect_uses_backend_photo_id_mapping(client):
     """回歸（序號來源照片對應）前端接線靜態檢查（非瀏覽器端對端測試）：
 
-    capture 的序號查閱視窗以 intake 回傳的 archived 照片建立
-    「照片 ID → 圖檔 URL」對應，並以 suggestion.source_photo_id 直接查表；
-    查不到才退回第一張。不得再自行解析合成 ID 格式。
+    審閱階段的序號查閱以草稿的 source_photo_index 對應本機拍攝順序
+    （photoUrlById：index → blob URL），查不到才退回第一張；
+    存檔時以 intake 回傳的 archived（orig_name → photos.id）把來源
+    照片寫進正式建議。不得再自行解析合成 ID 格式。
     """
     capture_js = client.get("/views/capture.js").text
 
-    # 以 intake 的 archived（PhotoOut：id + filename）建立對應
-    assert "intakeRes.archived" in capture_js
+    # 審閱：草稿索引 → 本機 blob URL 的對應
     assert "photoUrlById" in capture_js
+    assert "photoUrlById = new Map(capturedFiles.map((c, i) => [i, c.url]))" in capture_js
 
-    # 序號查閱：以真實照片 ID 查對應；退回第一張只是 fallback
+    # 序號查閱：以草稿索引查對應；退回第一張只是 fallback
     assert "photoUrlById.get(sourcePhotos.serial)" in capture_js
     assert "capturedFiles[0]?.url" in capture_js
+
+    # 存檔：以 intake 的 archived（PhotoOut：id + orig_name）建立正式來源對應
+    assert "intakeRes.archived" in capture_js
+    assert "archivedIdByOrigName" in capture_js
 
     # 舊的錯誤假設（合成格式 "observation:...:photo:N" 解析）必須消失
     assert "observation:" not in capture_js
     assert "match(/photo:" not in capture_js
+
+
+def test_capture_deferred_save_wiring_static_checks(client):
+    """回歸（確認儲存才建檔）前端接線靜態檢查（非瀏覽器端對端測試）：
+
+    capture 審閱階段只做草稿分析（POST /api/inbox/analyze，不建紀錄）；
+    正式 intake 只出現在「存起來」處理器，重試不重複 intake；
+    AI 草稿在存檔時落成正式建議（POST /api/items/{id}/suggestions）；
+    取消清理暫存（POST /api/inbox/discard），已建檔後放棄走 void + purge。
+    """
+    capture_js = client.get("/views/capture.js").text
+    api_js = client.get("/core/api.js").text
+
+    # 審閱階段：草稿分析；不得再對「還不存在的紀錄」呼叫 analyze
+    assert "api.analyzeDraft(" in capture_js
+    assert "api.analyzeItem(" not in capture_js
+    assert capture_js.index("api.analyzeDraft(") < capture_js.index(
+        "btnSaveConfirm.addEventListener")
+
+    # 「存起來」處理器才出現正式建檔與建議套用，且 intake 只跑一次
+    save_marker = capture_js.index("btnSaveConfirm.addEventListener")
+    assert capture_js.index("api.intake(") > save_marker
+    assert "if (!currentItemId) {" in capture_js
+    assert "api.createSuggestion(" in capture_js
+    assert "api.acceptSuggestion(" in capture_js
+    assert capture_js.index("api.createSuggestion(") > save_marker
+
+    # 取消：清暫存；已建檔後放棄走 void + purge（限本次建立的紀錄）
+    cancel_marker = capture_js.index("btnCancelDraft.addEventListener")
+    assert "discardStagedFiles()" in capture_js
+    assert "api.voidItem(" in capture_js
+    assert "api.purgeItem(" in capture_js
+    assert capture_js.index("api.purgeItem(") > cancel_marker
+
+    # 離開頁面也清掉未消化的暫存（最後一次呼叫在 destroy 內）
+    destroy_marker = capture_js.index("destroy() {")
+    assert capture_js.rindex("discardStagedFiles()") > destroy_marker
+
+    # api.js 具備三個新方法
+    assert "api/inbox/analyze" in api_js
+    assert "api/inbox/discard" in api_js
+    assert "/suggestions" in api_js
+
+    # 雙語鍵齊全
+    zh = client.get("/i18n/zh-TW.js").text
+    en = client.get("/i18n/en.js").text
+    for key in ("discardDone", "discardFailed"):
+        assert key in zh
+        assert key in en
 
 
 def test_record_detail_edit_save_cancel_semantics(client):

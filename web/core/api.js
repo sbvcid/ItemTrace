@@ -100,6 +100,25 @@ export const api = {
     });
   },
 
+  // 取消建檔：清掉這次上傳的 inbox 暫存檔（冪等；不碰資料庫）
+  async discardInboxFiles(relativeFiles) {
+    return request('/api/inbox/discard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files: relativeFiles }),
+    });
+  },
+
+  // 草稿分析（capture 審閱用）：不建立任何紀錄。
+  // 正式 Item／photos／suggestions 一律等「存起來」才建立。
+  async analyzeDraft(relativeFiles) {
+    return request('/api/inbox/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files: relativeFiles }),
+    });
+  },
+
   // AI Vision Analysis
   // auto: 依政策自動套用低風險項目（Phase 2C-B；可復原）
   async analyzeItem(itemId, { auto = false } = {}) {
@@ -137,6 +156,16 @@ export const api = {
   async acceptSuggestion(suggestionId) {
     return request(`/api/suggestions/${suggestionId}/accept`, {
       method: 'POST',
+    });
+  },
+
+  // 建立正式建議（外部工具路徑；capture 儲存時把 AI 草稿落成建議再接受，
+  // 保留 model／confidence／來源照片的完整追溯）
+  async createSuggestion(itemId, payload) {
+    return request(`/api/items/${itemId}/suggestions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
   },
 
