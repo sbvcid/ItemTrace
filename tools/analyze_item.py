@@ -219,8 +219,34 @@ def analyze(item_client: ItemTraceClient, api_key: str, item_id: str, *,
         echo(f"  已讀取 {photo['orig_name']}")
 
     echo(f"AI 服務：{provider_name} / {model}（{len(data_urls)} 張）")
-    response = provider(api_key, model, data_urls,
-                        provider=provider_name, base_url=base_url)
+    context_lines = []
+    if item:
+        context_lines.append("### 【目前紀錄狀態】")
+        for k in ("name", "brand", "model", "category", "condition", "notes"):
+            v = item.get(k)
+            context_lines.append(f"- {k}: {v}" if v else f"- {k}: （未填寫）")
+        if item.get("attributes"):
+            context_lines.append("- attributes: " + json.dumps(item["attributes"], ensure_ascii=False, sort_keys=True))
+    if detail.get("identifiers"):
+        context_lines.append("\n### 【已登記識別碼】")
+        for ident in detail["identifiers"]:
+            context_lines.append(f"- {ident.get('kind')}: {ident.get('value')}")
+    if detail.get("suggestions"):
+        context_lines.append("\n### 【先前 AI 建議】")
+        for s in detail["suggestions"]:
+            context_lines.append(f"- [{s.get('status')}] {s.get('field')} = {s.get('value')!r}")
+    context = "\n".join(context_lines)
+
+    provider_kwargs = {"provider": provider_name, "base_url": base_url}
+    try:
+        import inspect
+        sig = inspect.signature(provider)
+        if "context" in sig.parameters or any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+            provider_kwargs["context"] = context
+    except Exception:
+        pass
+
+    response = provider(api_key, model, data_urls, **provider_kwargs)
     text = extract_text(response, api_key)
     suggestions = parse_suggestions(text, photos)
 

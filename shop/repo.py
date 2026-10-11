@@ -54,6 +54,7 @@ from .models import (
     SUGGESTABLE_FIELDS,
     SUGGESTION_STATUSES,
     Event,
+    FieldProvenance,
     Identifier,
     Item,
     Observation,
@@ -1135,8 +1136,13 @@ class Repository:
                     or entry["field"].startswith(IDENTIFIER_FIELD_PREFIX)
                 )
             }
-            provenance = self._field_provenance(
-                item, {entry["field"] for entry in meaningful}
+            photos = self.list_photos(item_id=item_id, limit=500)
+            photo_map = {p.id: p for p in photos}
+            history_events = self.item_history(item_id, limit=500)
+            provenance = self._field_provenance_details(
+                item,
+                {entry["field"] for entry in meaningful},
+                history_events=history_events,
             )
 
             for entry in meaningful:
@@ -1146,6 +1152,8 @@ class Repository:
                     provenance=provenance,
                     identity_photos=identity_photos,
                     conflicting_fields=conflicts,
+                    photo_map=photo_map,
+                    history_events=history_events,
                 )
                 if mode == "auto":
                     applied.append(self._apply_auto(item_id, entry, model_name))
@@ -1168,30 +1176,48 @@ class Repository:
                     )
             return applied, pending, superseded
 
-    def _field_provenance(
-        self, item: Item, fields: set[str]
-    ) -> dict[str, str]:
-        """每個欄位目前的來源：none（空/無紀錄）| auto（系統自動套用）| user。
+    def _field_provenance_details(
+        self,
+        item: Item,
+        fields: set[str],
+        *,
+        history_events: list[Event] | None = None,
+    ) -> dict[str, FieldProvenance]:
+        """完整追蹤欄位來源、最後修改時序與曾遭拒絕的值。"""
+        events_list = (
+            history_events
+            if history_events is not None
+            else self.list_events("item", item.id, limit=500)
+        )
+        suggestions = self.list_suggestions(item_id=item.id, limit=500)
+        rejected_by_field: dict[str, set[str]] = {}
+        for s in suggestions:
+            if s.status == "rejected":
+                rejected_by_field.setdefault(s.field, set()).add(s.value)
+        for ev in events_list:
+            if ev.type == "suggestion.undone" and ev.field:
+                if ev.prev_value is not None:
+                    rejected_by_field.setdefault(ev.field, set()).add(str(ev.prev_value))
 
-        身分欄位：最新一筆 field.changed 事件的 actor（user → 使用者編輯或
-        確認過，受保護；system → AI 自動套用，可被新證據修訂）。
-        屬性鍵：attributes 的整包事件中，該鍵「最後一次被改動」的 actor。
-        事件查不到（例如更早的資料）時保守視為 none —— 非空值就不會被
-        自動覆蓋。
-        """
-        result: dict[str, str] = {}
         identity_needed = {f for f in fields if f in IDENTITY_FIELDS}
         attribute_needed = {
             f[len(ATTRIBUTE_FIELD_PREFIX):] for f in fields if attribute_key(f)
         }
+
+        actors: dict[str, str] = {}
+        last_user_edit_at: dict[str, str] = {}
+        last_user_edit_event_id: dict[str, str] = {}
+
         if identity_needed or attribute_needed:
-            for event in self.list_events("item", item.id, limit=500):
+            for event in events_list:
                 if event.type != "field.changed":
                     continue
-                if event.field in identity_needed and event.field not in result:
-                    result[event.field] = (
-                        "user" if event.actor == "user" else "auto"
-                    )
+                if event.field in identity_needed and event.field not in actors:
+                    actor = "user" if event.actor == "user" else "auto"
+                    actors[event.field] = actor
+                    if actor == "user":
+                        last_user_edit_at[event.field] = event.created_at
+                        last_user_edit_event_id[event.field] = event.id
                 elif event.field == "attributes" and attribute_needed:
                     before = (
                         event.prev_value if isinstance(event.prev_value, dict) else {}
@@ -1201,13 +1227,31 @@ class Repository:
                     )
                     for key in list(attribute_needed):
                         name = f"{ATTRIBUTE_FIELD_PREFIX}{key}"
-                        if name in result:
+                        if name in actors:
                             continue
                         if before.get(key) != after.get(key):
-                            result[name] = "user" if event.actor == "user" else "auto"
+                            actor = "user" if event.actor == "user" else "auto"
+                            actors[name] = actor
+                            if actor == "user":
+                                last_user_edit_at[name] = event.created_at
+                                last_user_edit_event_id[name] = event.id
+
+        result: dict[str, FieldProvenance] = {}
         for name in fields:
-            result.setdefault(name, "none")
+            result[name] = FieldProvenance(
+                actor=actors.get(name, "none"),
+                last_user_edit_at=last_user_edit_at.get(name),
+                last_user_edit_event_id=last_user_edit_event_id.get(name),
+                rejected_values=frozenset(rejected_by_field.get(name, set())),
+            )
         return result
+
+    def _field_provenance(
+        self, item: Item, fields: set[str]
+    ) -> dict[str, str]:
+        """每個欄位目前的來源：none（空/無紀錄）| auto（系統自動套用）| user。"""
+        details = self._field_provenance_details(item, fields)
+        return {f: details[f].actor for f in fields}
 
     def _apply_auto(
         self, item_id: str, entry: Mapping[str, Any], model_name: str
@@ -1857,56 +1901,129 @@ def _conflicting_fields(entries: list[Mapping[str, Any]]) -> set[str]:
     return conflicts
 
 
+def _is_new_evidence(
+    photo_id: str | None,
+    user_edit_at: str | None,
+    user_edit_event_id: str | None,
+    photo_map: Mapping[str, Photo] | None,
+    history_events: list[Event] | None,
+) -> bool:
+    """判斷給定的來源照片是否為使用者最後一次手動修改之後追加的新證據。"""
+    if not photo_id or not user_edit_at or not photo_map:
+        return False
+    photo = photo_map.get(photo_id)
+    if not photo:
+        return False
+    # 1. 時間戳比較
+    if photo.created_at and photo.created_at > user_edit_at:
+        return True
+    # 2. 事件歷史時序（ULID / 嚴格寫入順序，最新在前）
+    if history_events and user_edit_event_id:
+        user_idx = None
+        photo_idx = None
+        for idx, ev in enumerate(history_events):
+            if ev.id == user_edit_event_id and user_idx is None:
+                user_idx = idx
+            if ev.type == "photo.created" and ev.entity_id == photo_id and photo_idx is None:
+                photo_idx = idx
+        if user_idx is not None and photo_idx is not None:
+            # 歷史最新在前：photo_idx < user_idx 代表照片在使用者修改之後才建立
+            if photo_idx < user_idx:
+                return True
+    return False
+
+
 def _auto_decision(
     entry: Mapping[str, Any],
     *,
     item: Item,
-    provenance: dict[str, str],
+    provenance: Mapping[str, Any],
     identity_photos: set[str],
     conflicting_fields: set[str],
+    photo_map: Mapping[str, Photo] | None = None,
+    history_events: list[Event] | None = None,
 ) -> str:
     """回傳 "auto" | "pending" | "conflict"。
 
-    規則（AI-EVALUATION-REPORT.md §5，全部決定性、不看模型自報信心）：
+    規則（全部決定性、不看模型自報信心）：
       - 沒有來源照片 → 證據支持不足，不自動。
       - 同一欄位這輪有矛盾值 → conflict。
       - identifier:* → 永遠 pending（T0）。
       - category/condition/notes → pending（T2）。
-      - name/brand/model：空值自動填入；來源是 auto 的值可自動修訂；
-        使用者編輯或確認過的（user）→ pending。使用者清空（或復原）
-        過的欄位即使現在是空的，也不再自動填入（user 意圖優先）。
+      - 曾被使用者明確拒絕（rejected）或撤回（undone）的值 → pending。
+      - name/brand/model：
+        - 空值且非使用者清空 → auto。
+        - 來源是 auto（AI 先前自動填入）→ auto（可修訂）。
+        - 使用者編輯或確認過的（user）：若本次提案有「在使用者修改之後追加的
+          新照片證據」，且未被拒絕，視為新證據支持的合理修訂 → auto；
+          若僅為修改前的舊照片，則保留使用者意圖 → pending。
       - 購買資訊（vendor/amount/…）：只在現值為空、使用者沒動過、且
-        「同一張照片也提供了身分等級資訊」時自動；否則 conflict
-        （可能屬於別件物品）。
-      - 其他描述性 attribute：空值自動填入；auto 來源可修訂；user → pending。
+        「同一張照片也提供了身分等級資訊」時自動；否則 conflict。
+      - 其他描述性 attribute：
+        - 空值且非使用者設定 → auto。
+        - auto 來源可修訂 → auto。
+        - 使用者編輯過的：新照片證據支持 → auto；舊照片 → pending。
     """
     field = entry["field"]
-    photo = entry.get("source_photo_id")
+    photo_id = entry.get("source_photo_id")
     if field in conflicting_fields:
         return "conflict"
-    if photo is None:
+    if photo_id is None:
         return "pending"
     if field.startswith(IDENTIFIER_FIELD_PREFIX) or field in CONFIRM_ONLY_FIELDS:
         return "pending"
 
+    prov_item = provenance.get(field)
+    if isinstance(prov_item, FieldProvenance):
+        state = prov_item.actor
+        rejected = prov_item.rejected_values
+        user_edit_at = prov_item.last_user_edit_at
+        user_edit_event_id = prov_item.last_user_edit_event_id
+    elif isinstance(prov_item, str):
+        state = prov_item
+        rejected = frozenset()
+        user_edit_at = None
+        user_edit_event_id = None
+    else:
+        state = "none"
+        rejected = frozenset()
+        user_edit_at = None
+        user_edit_event_id = None
+
+    if str(entry.get("value")) in rejected:
+        return "pending"
+
+    new_evidence = _is_new_evidence(
+        photo_id, user_edit_at, user_edit_event_id, photo_map, history_events
+    )
+
     if field in IDENTITY_FIELDS:
         current = _current_value(item, field)
-        state = provenance.get(field, "none")
         if not current:
-            return "pending" if state == "user" else "auto"
-        return "auto" if state == "auto" else "pending"
+            if state == "user":
+                return "auto" if new_evidence else "pending"
+            return "auto"
+        if state == "auto":
+            return "auto"
+        if field == "name":
+            # 使用者手動設定之品名（命名偏好）：非空時新證據仍留待確認，不自動覆蓋
+            return "pending"
+        return "auto" if new_evidence else "pending"
 
     key = attribute_key(field)
     if key is not None:
         current = item.attributes.get(key)
-        state = provenance.get(field, "none")
         if key in PURCHASE_METADATA_KEYS:
             if current or state == "user":
                 return "pending"
-            return "auto" if photo in identity_photos else "conflict"
+            return "auto" if photo_id in identity_photos else "conflict"
         if not current:
-            return "pending" if state == "user" else "auto"
-        return "auto" if state == "auto" else "pending"
+            if state == "user":
+                return "auto" if new_evidence else "pending"
+            return "auto"
+        if state == "auto":
+            return "auto"
+        return "auto" if new_evidence else "pending"
 
     return "pending"
 

@@ -22,6 +22,7 @@ from .ids import OBSERVATION_KINDS
 
 __all__ = [
     "Event",
+    "FieldProvenance",
     "Identifier",
     "Item",
     "Observation",
@@ -341,3 +342,19 @@ class Template:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
+
+
+@dataclass(frozen=True, slots=True)
+class FieldProvenance:
+    """欄位歷史來源與修訂脈絡。
+
+    actor: none（未填寫/無記錄）| auto（AI 自動套用）| user（使用者編輯/確認）
+    last_user_edit_at: 使用者最後一次修改該欄位的時間戳
+    last_user_edit_event_id: 使用者最後一次修改該欄位的事件 ID
+    rejected_values: 該欄位曾被使用者明確拒絕或撤回的值集合
+    """
+
+    actor: str = "none"
+    last_user_edit_at: str | None = None
+    last_user_edit_event_id: str | None = None
+    rejected_values: frozenset[str] = frozenset()

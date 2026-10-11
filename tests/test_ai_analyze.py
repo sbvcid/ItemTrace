@@ -1523,3 +1523,229 @@ def test_clear_correction_of_prior_ai_guess_still_auto_revises(
     second = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
     assert second[0]["status"] == "accepted"
     assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "SONY"
+
+
+# ----------------------------------------------------------------------
+# H. 完整單筆紀錄重新分析與上下文重塑（AI Re-analysis Pipeline & Comprehensive Context）
+# ----------------------------------------------------------------------
+
+
+def test_reanalysis_context_includes_complete_history_identifiers_and_suggestions(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """驗證模型收到完整結構化上下文：包含目前欄位、識別碼、照片標籤、歷史修改與先前建議結果。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    # 建立識別碼
+    repo.add_identifier(
+        item.id, "SN-TEST-8888", kind="serial", source_photo_id=photos[0].id
+    )
+    # 使用者手動修改欄位
+    client.patch(f"/api/items/{item.id}", json={
+        "name": "舊款隨身喇叭",
+        "notes": "充電孔有些接觸不良",
+        "attributes": {"color": "曜石黑"},
+    })
+    # 先前有遭拒絕的建議
+    bad_sugg = repo.add_suggestion(item.id, "brand", "JBL")
+    client.post(f"/api/suggestions/{bad_sugg.id}/reject")
+
+    # 追加新照片
+    add_evidence_photo(client, item.id, filename="soundlink_label.jpg", tag=88)
+
+    calls = fake_provider(provider_response([
+        {"field": "brand", "value": "Bose", "confidence": 0.95, "source_photo_index": 1},
+        {"field": "model", "value": "SoundLink Mini II", "confidence": 0.95, "source_photo_index": 1},
+    ]))
+
+    res = client.post(f"/api/items/{item.id}/ai/analyze?auto=1")
+    assert res.status_code == 201
+
+    ctx = calls[0]["context"]
+    # 1. 目前狀態與欄位
+    assert "舊款隨身喇叭" in ctx
+    assert "充電孔有些接觸不良" in ctx
+    assert "曜石黑" in ctx
+    # 2. 已登記識別碼
+    assert "SN-TEST-8888" in ctx
+    assert "serial" in ctx
+    # 3. 照片與觀測標籤
+    assert "[Photo 0]" in ctx
+    assert "初始建檔照片" in ctx
+    assert "含識別碼證據" in ctx
+    assert "[Photo 1]" in ctx
+    assert "後續追加照片" in ctx
+    # 4. 重要歷史修改
+    assert "使用者手動修改" in ctx
+    # 5. 歷次 AI 判讀與拒絕結果
+    assert "遭使用者明確拒絕" in ctx
+    assert "JBL" in ctx
+
+
+def test_initial_ai_error_corrected_by_user_then_new_photo_utilizes_history(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """初次辨識錯誤後由使用者修正；追加新照片後 AI 應能利用修正歷史。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    # 初次 AI 誤判為 SOYN 並自動套用
+    _apply_auto(client, fake_provider, item.id, [_brand_entry("SOYN")])
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "SOYN"
+
+    # 使用者手動修正為 SONY
+    client.patch(f"/api/items/{item.id}", json={"brand": "SONY"})
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "SONY"
+
+    # 使用者追加了拍攝機身背面標籤的新照片
+    add_evidence_photo(client, item.id, filename="model_plate.jpg", tag=77)
+
+    # 重新分析：模型上下文中有使用者將 SOYN 改為 SONY 的紀錄
+    calls = fake_provider(provider_response([
+        {"field": "brand", "value": "SONY", "confidence": 0.99, "source_photo_index": 1},
+        {"field": "model", "value": "WH-1000XM4", "confidence": 0.95, "source_photo_index": 1},
+    ]))
+
+    res = client.post(f"/api/items/{item.id}/ai/analyze?auto=1")
+    assert res.status_code == 201
+    call = calls[-1]
+    assert "SOYN" in call["context"]
+    assert "SONY" in call["context"]
+    assert "使用者手動修改 brand" in call["context"]
+
+    # brand 與現值 SONY 相同被 drop_unchanged；新證據 model 成功自動套用
+    detail = client.get(f"/api/items/{item.id}").json()["item"]
+    assert detail["brand"] == "SONY"
+    assert detail["model"] == "WH-1000XM4"
+
+
+def test_new_evidence_supports_changing_previous_interpretation(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """新證據支持改變舊判讀：新照片具備確鑿來源，自動更新並保留復原能力。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    # 先前猜測為 Bosch / PS31
+    _apply_auto(client, fake_provider, item.id, [
+        {"field": "brand", "value": "Bosch", "confidence": 0.8, "source_photo_index": 0},
+        {"field": "model", "value": "PS31", "confidence": 0.8, "source_photo_index": 0},
+        {"field": "attribute:color", "value": "深藍色", "confidence": 0.8, "source_photo_index": 0},
+    ])
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "Bosch"
+
+    # 追加清晰銘牌照片
+    add_evidence_photo(client, item.id, filename="makita_nameplate.jpg", tag=65)
+
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Makita", "confidence": 0.98, "source_photo_index": 1},
+        {"field": "model", "value": "DHP484", "confidence": 0.98, "source_photo_index": 1},
+        {"field": "attribute:color", "value": "青綠色", "confidence": 0.95, "source_photo_index": 1},
+    ]))
+
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    by_field = {s["field"]: s for s in body}
+    assert by_field["brand"]["status"] == "accepted"
+    assert by_field["model"]["status"] == "accepted"
+    assert by_field["attribute:color"]["status"] == "accepted"
+
+    detail = client.get(f"/api/items/{item.id}").json()["item"]
+    assert detail["brand"] == "Makita"
+    assert detail["model"] == "DHP484"
+    assert detail["attributes"]["color"] == "青綠色"
+
+    # 可復原（Undo）：復原 brand 回到 Bosch
+    brand_sugg = by_field["brand"]
+    undone = client.post(f"/api/suggestions/{brand_sugg['id']}/undo")
+    assert undone.status_code == 200
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "Bosch"
+
+
+def test_insufficient_or_weak_new_evidence_preserves_existing_valid_data(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """新證據不足或舊照片重跑時保留合理的既有內容，不隨意覆蓋。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    client.patch(f"/api/items/{item.id}", json={
+        "brand": "Makita",
+        "model": "DHP484",
+        "attributes": {"color": "青綠色"},
+    })
+
+    # 在沒有新照片的情況下重跑舊照片（Photo 0）
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Makita Tool", "confidence": 0.6, "source_photo_index": 0},
+        {"field": "model", "value": "DHP-Unknown", "confidence": 0.5, "source_photo_index": 0},
+        {"field": "attribute:color", "value": "藍綠", "confidence": 0.6, "source_photo_index": 0},
+    ]))
+
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    for s in body:
+        assert s["status"] == "pending", f"{s['field']} 舊照片不得自動覆蓋使用者資料"
+
+    # 主表維持原值
+    detail = client.get(f"/api/items/{item.id}").json()["item"]
+    assert detail["brand"] == "Makita"
+    assert detail["model"] == "DHP484"
+    assert detail["attributes"]["color"] == "青綠色"
+
+
+def test_conflicting_history_and_rejected_suggestions_safeguards(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """歷史中被拒絕過的值不可自動套用；同輪多張照片互相矛盾升級為 conflict。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    # 建立一筆曾被使用者明確拒絕的建議
+    bad_sugg = repo.add_suggestion(item.id, "brand", "DeWalt")
+    client.post(f"/api/suggestions/{bad_sugg.id}/reject")
+
+    # 追加新照片
+    add_evidence_photo(client, item.id, filename="new_evidence.jpg", tag=55)
+
+    # 1. 模型再次提出被拒絕的 DeWalt -> 即使有新照片也不得 auto
+    fake_provider(provider_response([
+        {"field": "brand", "value": "DeWalt", "confidence": 0.99, "source_photo_index": 1},
+    ]))
+    body1 = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert body1[0]["status"] == "pending"
+
+    # 2. 在同一輪中對同一欄位出現矛盾值 -> 升級為 conflict
+    add_evidence_photo(client, item.id, filename="another_angle.jpg", tag=56)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "Makita", "confidence": 0.9, "source_photo_index": 1},
+        {"field": "brand", "value": "Milwaukee", "confidence": 0.9, "source_photo_index": 2},
+    ]))
+    body2 = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert len(body2) == 2
+    assert all(s["status"] == "pending" for s in body2)
+    assert all(s["source"] == "external_conflict" for s in body2)
+
+
+def test_large_number_of_photos_preserves_identifiers_and_newest_evidence_with_accurate_source_mapping(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """大量照片下仍保留早期建檔、關聯識別碼照片與最新追加照片，且來源映射精確。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=10)
+    # 將 photo 3 綁定到識別碼
+    repo.add_identifier(
+        item.id, "SN-CHIP-9900", kind="serial", source_photo_id=photos[3].id
+    )
+    # 追加第 11 張照片（新證據）
+    newest = add_evidence_photo(client, item.id, filename="receipt_final.jpg", tag=81)
+
+    calls = fake_provider(provider_response([
+        # 標籤識別碼指向 Photo 3 在選取後清單中的索引（選取 [0, 1, 3, 6, 7, 8, 9, 10]，Photo 3 為索引 2）
+        {"field": "identifier:serial", "value": "SN-CHIP-9900", "confidence": 0.99, "source_photo_index": 2},
+        # 新證據指向最後一張照片（索引 7）
+        {"field": "attribute:vendor", "value": "燦坤3C", "confidence": 0.95, "source_photo_index": 7},
+    ]))
+
+    res = client.post(f"/api/items/{item.id}/ai/analyze?auto=1")
+    assert res.status_code == 201
+
+    # 驗證傳送給 provider 的照片數量為 8（MAX_PHOTOS 上限）
+    call = calls[0]
+    assert len(call["data_urls"]) == 8
+
+    # 檢查返回的 suggestions 對應到的 source_photo_id
+    body = {s["field"]: s for s in res.json()}
+    # identifier 指向 photos[3]（被識別碼引用的早期照片）
+    assert body["identifier:serial"]["source_photo_id"] == photos[3].id
+    # vendor 指向 newest（最新追加的照片）
+    assert body["attribute:vendor"]["source_photo_id"] == newest["id"]
+
