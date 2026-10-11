@@ -220,33 +220,69 @@ feat: phase-1a integrate V3 frontend and core validation
 - All 921 tests pass (no regressions)
 ```
 
-**未經要求不可自動 push**：
-- 本地 commit 後，等待明確指示再 push
-- 允許 code review 或進一步修改
+### 9. Git Checkpoint
 
-### 10. 階段完成後更新 STATUS
+**符合以下條件時才建立 commit**：
 
-每個 Phase 工作完成後，**必須更新** `docs/engineering/STATUS.md`：
+- [ ] 該 Phase 工作完整（無依賴等待）
+- [ ] 所有新測試通過
+- [ ] 完整 pytest 回歸通過
+- [ ] 變更範圍清晰可審查
+- [ ] 提交信息清楚描述做了什麼
 
-```markdown
-## 當前階段
+**Commit 信息格式**：
+```
+feat: [phase] brief description
 
-**Phase X：[工作名稱]** ← **COMPLETED**
-
-完成時間：2026-10-XX
-Commit：abc1234
-
-完成內容：
-- ✓ 工作項 1
-- ✓ 工作項 2
-
-下一步：Phase X+1
+- Point 1
+- Point 2
+- Affected tests: test_*.py (+N new)
 ```
 
-**不要**：
-- 更新 ROADMAP（除非工程計畫本身改變）
-- 修改已通過的 Phase 描述
-- 混淆「計畫」（ROADMAP）與「進度」（STATUS）
+**示例**：
+```
+feat: phase-1a integrate V3 frontend and core validation
+
+- Add web/ SPA frontend (Capture, Home, Detail, Settings)
+- Add test_v3_core_slice.py with 5 core scenarios
+- Update shop/api.py for SPA static routing
+- All 921 tests pass (no regressions)
+```
+
+### 10. 遠端同步與推送
+
+完成 commit 後：
+
+1. **檢查 origin 狀態**：
+   ```bash
+   git fetch origin
+   git status --branch
+   ```
+
+2. **處理衝突**（如有）：
+   - 使用 `git merge origin/main` 整合
+   - 解決衝突，測試通過後再推送
+
+3. **快轉推送**：
+   ```bash
+   git push origin main
+   ```
+
+4. **驗證**：確認 origin/main 已更新至本地 HEAD
+
+### 11. 完成與報告
+
+提交推送後，提供清晰的實作報告，包括：
+
+1. **實際做了什麼** —— 功能、改動、決策
+2. **測試結果** —— pytest/靜態檢查/瀏覽器測試
+3. **Commit SHA** —— 本地與遠端確認
+4. **尚未解決的問題** —— 具體事項、優先級、建議解決順序
+
+**不自動 push 的例外情況**：
+- 使用者明確要求「只做本機」
+- 使用者明確要求「草稿模式」
+- 使用者明確要求「不推送」
 
 ---
 

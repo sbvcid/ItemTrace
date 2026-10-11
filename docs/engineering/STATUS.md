@@ -1,7 +1,7 @@
 # ItemTrace Engineering Status
 
 最後更新：2026-10-11  
-**當前狀態：Phase 3 垃圾桶與刪除完成（本機應用）**  
+**當前狀態：Phase 3 垃圾桶與刪除完成，UX 手機優先修整完成**  
 遠端狀態：`main` 與 `origin/main` 同步（含本階段 commit）  
 測試驗證：`pytest` 完全通過，全 **1073 測試**無失敗、無跳過
 
@@ -34,10 +34,25 @@
 
 ## 當前階段
 
-**Phase 3：垃圾桶與刪除（本機應用）** ← **COMPLETED**
+### UX 手機優先修整 ← **COMPLETED**
 
 完成時間：2026-10-11  
-Commit：本階段 commit（`feat: phase-3 trash lifecycle with restore and strict permanent delete`，已 push）  
+Commit：`e86f6ee` refactor: mobile-first UX refinement（已推送）  
+基準：`de4922d`（Phase 3 垃圾桶完成後）
+
+完成內容：
+- ✓ **首頁簡化**：移除浮動快門按鈕、長標題與副標語；垃圾桶入口改為低視覺權重文字連結
+- ✓ **詳情頁資訊優先**：移除頁首狀態標籤、卡片底部重複返回鍵；簡化 header 結構
+- ✓ **i18n 完整性**：新增 `home.recordsTitle` 與 `home.recordCount` key 區分紀錄數；設定頁移除硬編碼英文
+- ✓ **CSS 收斂**：移除浮動按鈕相關樣式；調整 container padding-bottom；新增語意化 classes（`.header-breadcrumb`、`.detail-meta`）
+- ✓ **文件更新**：DESIGN-SYSTEM.md 和 UX-DESIGN.md 移除過時浮動快門描述、更新示意圖
+- ✓ **測試驗證**：全 1073 pytest 通過、JS 語法檢查通過、無迴歸
+- ✓ **工程指引修正**：AGENTS.md 和 AGENT_GUIDE.md 更新為標準交付流程（實作→測試→commit→推送），移除「待指示」條款
+
+### Phase 3：垃圾桶與刪除 ← **COMPLETED**
+
+完成時間：2026-10-11  
+Commit：`de4922d` feat: phase-3 trash lifecycle（已推送）  
 基準：`5896562`（serial inspect / edit semantics 修正後）
 
 完成內容：
@@ -482,8 +497,8 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 | 項 | 狀態 |
 |---|---|
 | Branch | main |
-| Ahead/Behind | 0 ahead, 0 behind（本階段 commit 已 push） |
-| Uncommitted Changes | 0（本階段變更全數進入獨立 commit） |
+| Ahead/Behind | 0 ahead, 0 behind（本階段 commits 已推送） |
+| Uncommitted Changes | 0（所有變更已 commit 並 push） |
 | 衝突 | 無 |
 | 先前 checkpoint | `2879904`、`4318ae0`、`6bfdeda`、`98edc0c`、`ef85450`、`15f2e9b`、`22b0c22`、`dda8b61`、`7927faf`、`5a4c792`、`79eaecc`、`3e002d2`、`24d1909`、`547a522`、`e57f9ef`、`5896562` —— 未修改、未 amend、未 rebase |
 
@@ -491,14 +506,15 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 
 ## 下一個明確任務
 
-### Phase 3：垃圾桶與刪除 ← 已完成（本階段）
+### Phase 4：分類系統與 AI 自動分類
 檢查清單：
-- [x] 垃圾桶頁面（void 紀錄）＋還原
-- [x] 永久刪除（明確使用者意圖、檔案與事件全清、失敗可診斷）
-- [x] 無自動清理（30 天排程未做 —— 產品決定，見「立即待做」）
-- [x] 補充測試、全測試通過
+- [ ] 分類欄位設計與 schema 更新
+- [ ] 分類 API 端點
+- [ ] 前端分類 UI
+- [ ] AI 自動分類提案
+- [ ] 測試與回歸驗證
 
-（收尾選項可穿插：R 型跨照片身分的下一輪 prompt 評測；屬性逐鍵來源標籤；Phase 1B-B。）
+（收尾選項可穿插：R 型跨照片身分的下一輪 prompt 評測；屬性逐鍵來源標籤；Phase 1B-B；生活備忘欄位設計。）
 
 ### AI-Native 架構研究對照（`docs/engineering/AI-NATIVE-ARCHITECTURE.md`）
 - ✓ S1（提案命名空間）→ Phase 2B：`attribute:<key>` 受驗證契約
@@ -535,3 +551,5 @@ Commit：`feat: sr-1 host/origin guard, key forwarding fix, lan opt-in, media ha
 - **2026-10-10**：SR-1 完成——Host／Origin／`X-Requested-With` 守門（F1/F3）、已存 key 只送 preset＋自訂 URL 需臨時 key（F2）、LAN opt-in＋綁定實測 loopback（F5）、escaping＋CSP／nosniff＋媒體附件化＋移除 inline 處理器（F6）；修復後重演原攻擊全數攔下；測試基線 994 → 1013
 - **2026-10-10**：SR-2 完成——資源上限（body／單檔／檔數／像素／列印光柵；413/400；先前成功檔案保留）＋AI 節流（429＋Retry-After）；`/docs` 預設關閉、API `no-store`／照片 `private`、錯誤訊息去路徑化；列印管線重新序列化並實測修復兩個 mXSS（`<!-->` 註解、實體編碼標記）＋sandbox 預設保留；測試基線 1013 → 1049（+36）
 - **2026-10-11**：Phase 3 垃圾桶與刪除完成——移至垃圾桶（沿用 void、零 migration）＋首頁／搜尋預設排除＋垃圾桶頁（還原至移入前 active／archived，歷史不可靠時安全預設 active）；永久刪除（僅限垃圾桶、單一交易清 DB 與事件、可逆改名後清檔案、刪檔失敗 500 列出路徑不假裝成功、路徑守衛、編號不回收）；無自動清理、備份機制未動；`/trash` UI＋繁英 i18n；測試基線 1052 → 1073（+21；另更新 1 個既有契約測試）
+-   * * 2 0 2 6 - 1 0 - 1 1 * * �U X   Kb_j*QHQ�Ote�[b  ����yd�nm�R�_��0!|S  h e r o   s e c t i o n �s��`��yd��rKajd|0͑D}  D O M ��e�X  i 1 8 n   k e y s   @SR }�xe�gqGrxe�6e�e  i n l i n e   s t y l e s   0R  C S S   c l a s s e s �-��[��[te  i 1 8 n   S�A G E N T S . m d �A G E N T _ G U I D E . m d   �f�e�pj�n�N�NAmz�,nf��W�}�}c  1 0 7 3 �c o m m i t   \ e 8 6 f 6 e e \   �]�c��  o r i g i n / m a i n  
+ 
