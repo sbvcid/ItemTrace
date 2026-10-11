@@ -383,3 +383,33 @@ def test_commit_analysis_auto_rolls_back_entirely_on_invalid_entry(repo, item):
     assert repo.get_suggestion(stale.id).status == "pending"   # supersede 回滾
     assert repo.get_item(item.id).brand == ""                  # 沒有自動套用
     assert [s.id for s in repo.list_suggestions(item_id=item.id)] == [stale.id]
+
+
+# ----------------------------------------------------------------------
+# 針對性修正：取用順序與上限（最新紀錄優先）＋信心門檻語意
+# ----------------------------------------------------------------------
+
+
+def test_list_suggestions_newest_first_returns_the_latest_window(repo, item):
+    """超過 limit 時，newest_first=True 回最新的 N 筆；預設仍為舊→新。"""
+    for index in range(5):
+        repo.add_suggestion(item.id, "brand", f"V{index}")
+
+    newest = repo.list_suggestions(item_id=item.id, limit=3, newest_first=True)
+    assert [s.value for s in newest] == ["V4", "V3", "V2"]
+
+    oldest = repo.list_suggestions(item_id=item.id, limit=3)
+    assert [s.value for s in oldest] == ["V0", "V1", "V2"]
+
+
+def test_sufficient_evidence_helper_is_a_confidence_only_gate():
+    """輔助門檻只讀模型自報分數（>= 0.90），不代表照片證據已被驗證。"""
+    from shop.repo import _has_sufficient_evidence_for_revision
+
+    assert _has_sufficient_evidence_for_revision({"confidence": 0.90})
+    assert _has_sufficient_evidence_for_revision({"confidence": 0.95})
+    assert _has_sufficient_evidence_for_revision({"confidence": 1.0})
+    assert not _has_sufficient_evidence_for_revision({"confidence": 0.89})
+    assert not _has_sufficient_evidence_for_revision({"confidence": None})
+    assert not _has_sufficient_evidence_for_revision({})
+    assert not _has_sufficient_evidence_for_revision({"confidence": "很高"})

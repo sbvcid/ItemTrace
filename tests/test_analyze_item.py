@@ -115,6 +115,34 @@ def test_max_photos_is_respected():
     assert len([1 for m, p in client.calls if m == "GET" and p.startswith("/files/")]) == 1
 
 
+def test_max_photos_two_and_three_are_capped_with_accurate_mapping():
+    """外部工具 --max-photos=2/3：張數不超過請求值，索引仍對回真實照片。"""
+    photos = [
+        {"id": f"PHOTO{i}", "role": "original",
+         "filename": f"files/ITM-0001/original/p{i}.jpg", "orig_name": f"p{i}.jpg"}
+        for i in range(5)
+    ]
+
+    provider = fake_provider([])
+    analyzer.analyze(FakeItemTrace(photos=photos), SECRET, "ITM-0001",
+                     max_photos=2, provider=provider)
+    assert len(provider.seen["data_urls"]) == 2
+
+    provider = fake_provider([])
+    analyzer.analyze(FakeItemTrace(photos=photos), SECRET, "ITM-0001",
+                     max_photos=3, provider=provider)
+    assert len(provider.seen["data_urls"]) == 3
+
+    # max_photos=2 選取「最早 1＋最新 1」：索引 1 對回 PHOTO4
+    provider = fake_provider([
+        {"field": "brand", "value": "ASUS", "confidence": 0.9,
+         "source_photo_index": 1},
+    ])
+    created = analyzer.analyze(FakeItemTrace(photos=photos), SECRET, "ITM-0001",
+                               max_photos=2, provider=provider)
+    assert created[0]["source_photo_id"] == "PHOTO4"
+
+
 def test_item_without_photos_is_an_error():
     client = FakeItemTrace(photos=[])
     with pytest.raises(analyzer.AnalyzerError) as excinfo:

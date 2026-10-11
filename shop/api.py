@@ -764,9 +764,10 @@ def analyze_item_photos(
     **auto=true（詳情頁補證據後的重讀）**：依自主性政策把合格項目直接套用 ——
     描述性屬性、空的身分欄位、先前由系統自動填入的身分值（可自動修訂）；
     使用者手動編輯過的 brand / model / 屬性，在有修改後追加的新照片證據且
-    依據充分（confidence >= 0.90）時可自動套用修訂（可復原），無新證據或證據
-    不足時留待確認；使用者自訂品名（非空）留待確認；識別碼、
-    category/condition/notes 永遠留待確認；曾被拒絕或撤回的值不自動套用。
+    模型自報信心 >= 0.90（輔助門檻；不證明照片證據充分）時可自動套用修訂
+    （可復原），無新證據或分數不足時留待確認；使用者自訂品名（非空）留待確認；
+    識別碼、category/condition/notes 永遠留待確認；曾被拒絕或撤回的值永不
+    自動套用（有新證據時可再次提出，但僅進入待確認清單）。
     自動套用產生 status='accepted'、source='auto' 的建議（可用
     POST /api/suggestions/{id}/undo 復原）。
 
@@ -1471,7 +1472,11 @@ def _analysis_context(
     all_photos = repo.list_photos(item_id=item.id, role="original", limit=500)
     observations = repo.list_observations(item.id, limit=500)
     identifiers = repo.list_identifiers(item_id=item.id)
-    suggestions = repo.list_suggestions(item_id=item.id, limit=500)
+    # 取最新的 500 筆（不是最舊的）：配額必須優先涵蓋最近的拒絕／撤回，
+    # 否則新拒絕會因舊→新排序被擠出取用窗口。
+    suggestions = repo.list_suggestions(
+        item_id=item.id, limit=500, newest_first=True
+    )
     events = repo.item_history(item.id, limit=200)
 
     return ai_client.build_analysis_context(

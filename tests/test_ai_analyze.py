@@ -1800,7 +1800,7 @@ def test_analysis_context_distinguishes_auto_applied_user_accepted_and_undo(
 def test_user_edited_brand_with_decisive_new_evidence_auto_applies(
     repo, config, client, ai_config_file, fake_provider
 ):
-    """使用者手動改正品牌後，追加具備充分依據（confidence >= 0.90）的新照片，系統依政策自動修訂並可復原。"""
+    """使用者手動改正品牌後，追加達輔助門檻（模型自報信心 >= 0.90）的新照片，系統依政策自動修訂並可復原。"""
     item, photos, _ = add_item_with_photos(repo, config, count=1)
     # 使用者手動設定 brand 為 Sony
     client.patch(f"/api/items/{item.id}", json={"brand": "Sony"})
@@ -1817,7 +1817,7 @@ def test_user_edited_brand_with_decisive_new_evidence_auto_applies(
     res = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
     by_field = {s["field"]: s for s in res}
 
-    # 充分依據支持下自動套用
+    # 新證據＋自報信心達輔助門檻 → 自動套用
     assert by_field["brand"]["status"] == "accepted"
     assert by_field["brand"]["source"] == "auto"
     assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == "Audio-Technica"
@@ -1961,5 +1961,230 @@ def test_select_photos_handles_more_than_five_identifiers_deterministically():
     # 優先保留最新 5 張識別碼照片（P3, P4, P5, P6, P7）
     for p_id in ("P3", "P4", "P5", "P6", "P7"):
         assert p_id in selected_ids
+
+
+# ----------------------------------------------------------------------
+# K. 針對性修正：歷史取用順序與上限、拒絕語意、照片上限
+# ----------------------------------------------------------------------
+
+
+def _numbered_photos(count: int):
+    """12 系列假照片：建立順序＝時間順序，供選取政策測試。"""
+    from shop.models import Photo
+
+    return [
+        Photo(
+            id=f"P{i}", item_id="ITM-1", observation_id="", role="original",
+            filename=f"p{i}.jpg", orig_name=f"p{i}.jpg", sha256=str(i), bytes=10,
+            width=100, height=100, captured_at=f"2026-10-10T10:{i:02d}:00",
+            angle="", source="upload", created_at=f"2026-10-10T10:{i:02d}:00",
+        )
+        for i in range(count)
+    ]
+
+
+def _photo_identifier(photo_id: str, index: int):
+    from shop.models import Identifier
+
+    return Identifier(
+        id=f"ID{index}", item_id="ITM-1", kind="serial",
+        value=f"SN-{index}", normalized=f"SN{index}", source_photo_id=photo_id,
+    )
+
+
+def test_build_analysis_context_selects_most_recent_decided_suggestions():
+    """純函式：不論呼叫端以何種順序提供（DB 預設舊→新），配額一律留給最近紀錄。"""
+    from shop.ai_client import build_analysis_context
+
+    def entry(index: int, status: str, value: str) -> dict:
+        return {
+            "id": f"S{index:03d}",
+            "created_at": f"2026-01-01T00:00:{index:02d}",
+            "status": status,
+            "source": "external",
+            "field": "brand",
+            "value": value,
+        }
+
+    for status in ("rejected", "accepted", "superseded"):
+        quota = 8 if status != "superseded" else 4
+        old = [entry(i, status, f"OLD-{status}-{i}") for i in range(quota + 2)]
+        recent = entry(99, status, f"RECENT-{status}")
+        for ordering in (old + [recent], [recent] + old):
+            context = build_analysis_context({"name": "x"}, suggestions=ordering)
+            assert f"RECENT-{status}" in context
+            assert f"OLD-{status}-0" not in context   # 最舊的一批被配額取代
+
+
+def test_analysis_context_prefers_recent_decided_suggestions(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """超過配額的歷史：最近的拒絕／採納／取代／撤回必須被選入上下文。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+
+    for index in range(10):
+        repo.reject_suggestion(
+            repo.add_suggestion(item.id, "brand", f"OLD-REJECTED-{index}").id
+        )
+        repo.accept_suggestion(
+            repo.add_suggestion(item.id, "model", f"OLD-ACCEPTED-{index}").id
+        )
+        repo.add_suggestion(item.id, "category", f"OLD-SUPERSEDED-{index}")
+    repo.replace_pending_suggestions(item.id, [])
+
+    repo.reject_suggestion(
+        repo.add_suggestion(item.id, "brand", "RECENT-REJECTED").id
+    )
+    repo.accept_suggestion(
+        repo.add_suggestion(item.id, "model", "RECENT-ACCEPTED").id
+    )
+    repo.add_suggestion(item.id, "category", "RECENT-SUPERSEDED")
+    repo.replace_pending_suggestions(item.id, [])
+
+    applied = _apply_auto(
+        client, fake_provider, item.id, [_brand_entry("RECENT-UNDO")]
+    )
+    undo = client.post(f"/api/suggestions/{applied[0]['id']}/undo")
+    assert undo.status_code == 200
+
+    calls = fake_provider(provider_response([]))
+    response = client.post(f"/api/items/{item.id}/ai/analyze?auto=1")
+    assert response.status_code == 201
+    # fake_provider 的 calls 為 fixture 共用：取最後一次（＝本次 analyze）
+    context = calls[-1]["context"]
+
+    for marker in ("RECENT-REJECTED", "RECENT-ACCEPTED",
+                   "RECENT-SUPERSEDED", "RECENT-UNDO"):
+        assert marker in context, f"{marker} 必須被選入上下文"
+    for dropped in ("OLD-REJECTED-0", "OLD-ACCEPTED-0", "OLD-SUPERSEDED-0"):
+        assert dropped not in context, f"{dropped} 是最舊的，不該佔用配額"
+
+
+def test_recent_rejection_survives_the_suggestion_fetch_window(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """建議數超過取用上限（500 筆）時，最近的拒絕仍在防護窗口內。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    for index in range(500):
+        repo.add_suggestion(item.id, "attribute:filler", f"filler-{index:04d}")
+    rejected = repo.add_suggestion(item.id, "brand", "DeWalt")
+    assert client.post(f"/api/suggestions/{rejected.id}/reject").status_code == 200
+
+    fake_provider(provider_response([
+        {"field": "brand", "value": "DeWalt", "confidence": 0.99,
+         "source_photo_index": 0},
+    ]))
+    body = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+
+    assert len(body) == 1
+    assert body[0]["field"] == "brand"
+    assert body[0]["status"] == "pending"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == ""
+
+
+def test_rejected_value_may_be_reproposed_but_is_never_auto_applied(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """拒絕只禁止靜默自動套用，不禁止再次提出：新證據下仍只進待確認清單。"""
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    rejected = repo.add_suggestion(item.id, "brand", "DeWalt")
+    client.post(f"/api/suggestions/{rejected.id}/reject")
+
+    # 1. 舊證據（原本的 Photo 0）重提：可以提出，但只會是待確認
+    fake_provider(provider_response([
+        {"field": "brand", "value": "DeWalt", "confidence": 0.99,
+         "source_photo_index": 0},
+    ]))
+    old_evidence = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert len(old_evidence) == 1
+    assert old_evidence[0]["status"] == "pending"
+    assert old_evidence[0]["source"] == "external"
+
+    # 2. 追加新照片後重提同一個曾被拒絕的值：仍不得自動套用
+    add_evidence_photo(client, item.id, filename="new_plate.jpg", tag=71)
+    fake_provider(provider_response([
+        {"field": "brand", "value": "DeWalt", "confidence": 0.99,
+         "source_photo_index": 1},
+    ]))
+    new_evidence = client.post(f"/api/items/{item.id}/ai/analyze?auto=1").json()
+    assert len(new_evidence) == 1
+    assert new_evidence[0]["status"] == "pending"
+    assert new_evidence[0]["source"] == "external"
+    assert client.get(f"/api/items/{item.id}").json()["item"]["brand"] == ""
+
+
+def test_rejection_policy_text_distinguishes_no_auto_from_no_reproposal(
+    repo, config, client, ai_config_file, fake_provider
+):
+    """提示詞與上下文必須明確區分『禁止靜默自動套用』與『禁止再次提出』。"""
+    from shop.ai_client import PROMPT
+
+    assert "可以再次提出" in PROMPT
+    assert "不會自動套用被拒絕或撤回過的值" in PROMPT
+
+    item, photos, _ = add_item_with_photos(repo, config, count=1)
+    rejected = repo.add_suggestion(item.id, "brand", "DeWalt")
+    client.post(f"/api/suggestions/{rejected.id}/reject")
+
+    calls = fake_provider(provider_response([]))
+    client.post(f"/api/items/{item.id}/ai/analyze?auto=1")
+    context = calls[-1]["context"]
+    assert "無新證據時請勿重複提議" in context
+    assert "系統絕不會自動套用被拒絕或撤回過的值" in context
+
+
+def test_select_photos_for_analysis_never_exceeds_max_photos():
+    """所有有效 N 下回傳張數 <= N，且保持時間遞增（索引映射用）。"""
+    from shop.ai_client import select_photos_for_analysis
+
+    photos = _numbered_photos(12)
+    identifiers = [_photo_identifier(photos[i].id, i) for i in (2, 4, 7)]
+
+    for max_photos in range(0, 13):
+        for idents in (None, identifiers):
+            selected = select_photos_for_analysis(
+                photos, identifiers=idents, max_photos=max_photos
+            )
+            assert len(selected) == min(len(photos), max_photos)
+            indexes = [photos.index(photo) for photo in selected]
+            assert indexes == sorted(indexes)
+
+
+def test_select_photos_max_photos_two_and_three_boundaries():
+    """max_photos=2、3 的邊界：不得超過上限（曾回傳超出請求張數）。"""
+    from shop.ai_client import select_photos_for_analysis
+
+    photos = _numbered_photos(12)
+    identifiers = [_photo_identifier(photos[i].id, i) for i in (2, 4, 7)]
+
+    # 無識別碼：最早 1／2 張＋最新 1 張
+    assert [p.id for p in select_photos_for_analysis(
+        photos, max_photos=2)] == ["P0", "P11"]
+    assert [p.id for p in select_photos_for_analysis(
+        photos, max_photos=3)] == ["P0", "P1", "P11"]
+
+    # 有識別碼：小預算下基線與最新證據優先，識別碼不佔名額
+    assert [p.id for p in select_photos_for_analysis(
+        photos, identifiers=identifiers, max_photos=2)] == ["P0", "P11"]
+    assert [p.id for p in select_photos_for_analysis(
+        photos, identifiers=identifiers, max_photos=3)] == ["P0", "P10", "P11"]
+
+
+def test_select_photos_default_eight_keeps_identifiers_and_mapping():
+    """預設 8 張：識別碼保留與來源索引映射不受上限修正影響。"""
+    from shop.ai_client import MAX_PHOTOS, select_photos_for_analysis
+
+    assert MAX_PHOTOS == 8
+    photos = _numbered_photos(12)
+    identifiers = [_photo_identifier(photos[i].id, i) for i in (2, 4, 7)]
+
+    selected = select_photos_for_analysis(photos, identifiers=identifiers)
+    assert [p.id for p in selected] == [
+        "P0", "P1", "P2", "P4", "P7", "P9", "P10", "P11"
+    ]
+    slice_index = {photo.id: index for index, photo in enumerate(selected)}
+    assert slice_index == {
+        "P0": 0, "P1": 1, "P2": 2, "P4": 3, "P7": 4, "P9": 5, "P10": 6, "P11": 7
+    }
 
 

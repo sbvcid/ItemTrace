@@ -917,12 +917,20 @@ class Repository:
         status: str | None = None,
         limit: int = 200,
         offset: int = 0,
+        newest_first: bool = False,
     ) -> list[Suggestion]:
+        """列出建議。預設舊 → 新（既有呼叫端的顯示順序不變）。
+
+        `newest_first=True` 時改取「最新的 N 筆」——當總數超過 limit 時，
+        舊 → 新排序會丟掉最新的紀錄；歷史防護（拒絕／撤回值）與重新分析
+        上下文必須以最近的紀錄為優先，不能漏掉新的拒絕。
+        """
         where, params = _where({"item_id": item_id, "status": status})
         limit, offset = _paging(limit, offset)
+        order = "created_at DESC, id DESC" if newest_first else "created_at, id"
         rows = self.conn.execute(
             f"SELECT * FROM suggestions{where}"  # noqa: S608
-            " ORDER BY created_at, id LIMIT ? OFFSET ?",
+            f" ORDER BY {order} LIMIT ? OFFSET ?",
             (*params, limit, offset),
         ).fetchall()
         return [Suggestion.from_row(row) for row in rows]
@@ -1183,13 +1191,20 @@ class Repository:
         *,
         history_events: list[Event] | None = None,
     ) -> dict[str, FieldProvenance]:
-        """完整追蹤欄位來源、最後修改時序與曾遭拒絕的值。"""
+        """完整追蹤欄位來源、最後修改時序與曾遭拒絕的值。
+
+        拒絕值防護必須看到「最近」的拒絕：建議數超過取用上限時，舊 →
+        新排序會只拿到最舊的一批，新的拒絕會漏掉、防護失效；因此這裡
+        明確取最新的紀錄（newest_first=True）。
+        """
         events_list = (
             history_events
             if history_events is not None
             else self.list_events("item", item.id, limit=500)
         )
-        suggestions = self.list_suggestions(item_id=item.id, limit=500)
+        suggestions = self.list_suggestions(
+            item_id=item.id, limit=500, newest_first=True
+        )
         rejected_by_field: dict[str, set[str]] = {}
         for s in suggestions:
             if s.status == "rejected":
@@ -1934,10 +1949,15 @@ def _is_new_evidence(
 
 
 def _has_sufficient_evidence_for_revision(entry: Mapping[str, Any]) -> bool:
-    """判定新照片提案是否具備足以覆寫人工編輯的充分依據。
+    """輔助門檻：模型自報信心是否達到 0.90。
 
-    依據產品政策：AI 不得僅因照片較新就以微弱猜測覆寫使用者修正。
-    要求：自報信心度必須具備明確把握（confidence >= 0.90）。
+    這個函式只讀模型回傳的分數，**不證明**照片證據真的足以證實品牌或
+    型號 —— 程式無法獨立驗證視覺內容。過往評測顯示自報信心鑑別力有限
+    （正確與資訊不足的重讀都會回 0.90~1.00，見 AI-EVALUATION-REPORT.md），
+    所以它只是額外的保守條件。
+
+    程式能驗證的是：來源照片存在、照片相對使用者修改是否為新證據
+    （時間戳／事件序）、欄位歷史狀態與拒絕紀錄、以及模型回報的分數本身。
     """
     conf = entry.get("confidence")
     if conf is None:
@@ -1966,19 +1986,23 @@ def _auto_decision(
       - identifier:* → 永遠 pending（T0）。
       - category/condition/notes → pending（T2）。
       - 曾被使用者明確拒絕（rejected）或撤回（undone）的值 → pending。
+        重點區分：拒絕只禁止「靜默自動套用」，不禁止「再次提出」——
+        模型可以在新證據支持下再次提出該值，但永遠只會是待確認建議，
+        系統不得僅因新照片存在或信心度高就自動套用。
       - name/brand/model：
         - 空值且非使用者清空 → auto。
         - 來源是 auto（AI 先前自動填入）→ auto（可修訂）。
         - 使用者編輯或確認過的（user）：若本次提案有「在使用者修改之後追加的
-          新照片證據」，且「具備充分依據（confidence >= 0.90）」，未被拒絕，
-          視為新證據支持的合理修訂 → auto；若為修改前的舊照片或新照片證據不足，
-          則保留使用者意圖 → pending。品名（name）非空時維持 pending。
+          新照片證據」，且「模型自報信心 >= 0.90（輔助門檻，不代表證據已被
+          獨立驗證）」，未被拒絕，視為新證據支持的合理修訂 → auto；
+          若為修改前的舊照片或新照片證據不足，則保留使用者意圖 → pending。
+          品名（name）非空時維持 pending。
       - 購買資訊（vendor/amount/…）：只在現值為空、使用者沒動過、且
         「同一張照片也提供了身分等級資訊」時自動；否則 conflict。
       - 其他描述性 attribute：
         - 空值且非使用者設定 → auto。
         - auto 來源可修訂 → auto。
-        - 使用者編輯過的：新照片且充分依據支持 → auto；舊照片或弱證據 → pending。
+        - 使用者編輯過的：新照片且自報信心達標 → auto；舊照片或弱證據 → pending。
     """
     field = entry["field"]
     photo_id = entry.get("source_photo_id")
@@ -2007,6 +2031,8 @@ def _auto_decision(
         user_edit_event_id = None
 
     if str(entry.get("value")) in rejected:
+        # 拒絕／撤回過的值：只禁止靜默自動套用，不禁止再次提出 ——
+        # 再次提出時永遠留在 pending，由使用者確認。
         return "pending"
 
     new_evidence = _is_new_evidence(

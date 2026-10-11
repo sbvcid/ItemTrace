@@ -87,7 +87,7 @@ PROMPT = """\
 5. 照片順序就是給定的順序，不要重新編號。
 6. 若提供了「紀錄上下文」（包含目前狀態、識別碼、照片觀測、歷史修改與歷次 AI 判讀）：
    - 這是整筆紀錄的完整演進脈絡：請綜合「本次照片證據」、「目前狀態」與「歷史修改」重新理解整筆紀錄。
-   - 使用者的歷史修正與手動輸入是關鍵事實與意圖依據：切勿盲目推翻使用者的修正，也切勿再次提出使用者已明確拒絕（rejected）或撤回（undone）的舊值，除非本次新照片提供顛覆性的明確確鑿證據。
+   - 使用者的歷史修正與手動輸入是關鍵事實與意圖依據：切勿盲目推翻使用者的修正。使用者已明確拒絕（rejected）或撤回（undone）的值，在沒有新證據時不要重複提出；若本次新照片提供實質、明確的新證據重新支持該值，可以再次提出，但那只會進入待確認清單 —— 系統不會自動套用被拒絕或撤回過的值（「禁止靜默自動套用」不等於「禁止再次提出」）。
    - 新證據評估：當新追加的照片有更清楚的銘牌、型號標籤、包裝或收據支持時，應勇於提出更精準的新判讀來修訂舊資料；但若新證據模糊、不完整或不足以推翻現有合理內容，應尊重並保留現有狀態，不要隨意以粗略猜測覆蓋。
    - 歷史存在矛盾時（如照片與舊備註不同、或多張照片標籤不一）：以可查證的照片證據為準，若多張照片各有依據則依規則 3 分別提出。
    - 仍然正確的欄位可以照原值重新提出；使用者自己的備註不需要重複建議。
@@ -766,31 +766,43 @@ def build_analysis_context(
     lines.append("\n### 【歷次 AI 判讀與結果】")
     sugg_lines = []
 
+    # 不論呼叫端提供的順序為何（DB 預設是舊→新），一律按時間排序後取
+    # **最近**的紀錄：配額要花在最新的拒絕／撤回／採納上，不能因為
+    # 正序排序而優先保留最早、最可能已無關的紀錄。
+    ordered = sorted(
+        sugg_list,
+        key=lambda s: (
+            str(_obj_get(s, "created_at") or ""),
+            str(_obj_get(s, "id") or ""),
+        ),
+    )
     rejected_suggs = [
-        s for s in sugg_list if _obj_get(s, "status") == "rejected"
+        s for s in ordered if _obj_get(s, "status") == "rejected"
     ]
     accepted_suggs = [
-        s for s in sugg_list if _obj_get(s, "status") == "accepted"
+        s for s in ordered if _obj_get(s, "status") == "accepted"
     ]
     superseded_suggs = [
-        s for s in sugg_list if _obj_get(s, "status") == "superseded"
+        s for s in ordered if _obj_get(s, "status") == "superseded"
     ]
 
-    for s in rejected_suggs[:8]:
+    for s in rejected_suggs[-8:]:
         s_id = _obj_get(s, "id")
         s_src = _obj_get(s, "source")
         s_field = _obj_get(s, "field")
         s_val = _obj_get(s, "value")
         if s_id in undone_ids or s_src == "auto":
             sugg_lines.append(
-                f"- ↩️ 使用者先前撤回（Undo）：{s_field} = {s_val!r}（切勿無新證據盲目重複！）"
+                f"- ↩️ 使用者先前撤回（Undo）：{s_field} = {s_val!r}"
+                "（無新證據時請勿重複提議；此值永遠不會自動套用）"
             )
         else:
             sugg_lines.append(
-                f"- ⚠️ 使用者明確拒絕：{s_field} = {s_val!r}（切勿無新證據盲目重複！）"
+                f"- ⚠️ 使用者明確拒絕：{s_field} = {s_val!r}"
+                "（無新證據時請勿重複提議；此值永遠不會自動套用）"
             )
 
-    for s in accepted_suggs[:8]:
+    for s in accepted_suggs[-8:]:
         s_src = _obj_get(s, "source")
         s_field = _obj_get(s, "field")
         s_val = _obj_get(s, "value")
@@ -799,7 +811,7 @@ def build_analysis_context(
         else:
             sugg_lines.append(f"- ✓ 使用者已採納：{s_field} = {s_val!r}")
 
-    for s in superseded_suggs[:4]:
+    for s in superseded_suggs[-4:]:
         s_field = _obj_get(s, "field")
         s_val = _obj_get(s, "value")
         sugg_lines.append(
@@ -821,7 +833,9 @@ def build_analysis_context(
         "- 若新照片證據不足或模糊，請維持現狀，切勿以粗略猜測隨意覆蓋。"
     )
     lines.append(
-        "- 曾遭使用者明確拒絕或撤回（Undo）的值，切勿重新提議；該等值不是既定事實。"
+        "- 曾遭使用者明確拒絕或撤回（Undo）的值：沒有新的實質照片證據時，"
+        "不要重複提出；若新照片提供了實質新證據重新支持該值，可以再次提出，"
+        "但那只會是待確認建議 —— 系統絕不會自動套用被拒絕或撤回過的值。"
     )
     lines.append(
         "- 識別碼（serial / imei / barcode）必須精確照抄照片可見字元，並指向對應照片索引。"
@@ -839,19 +853,26 @@ def select_photos_for_analysis(
 ) -> list[Any]:
     """全域照片精選政策（上限 max_photos，預設 8 張）。
 
-    ≤8 全送；>8 時精選：
+    回傳張數保證不超過 max_photos（len(photos) <= max_photos 時全送）。
+    >max_photos 時精選：
     1. 必須保留：Photo 0（初始建檔外觀基線）。
-    2. 必須保留：最新追加照片（至少 2 張，確保能獲取新證據）。
+    2. 必須保留：最新追加照片（預算允許時保留最新 2 張，確保能獲取新證據；
+       預算只有 2 張時保留最新 1 張）。
     3. 優先保留：包含已登記識別碼（serial/imei/barcode）證據的照片。
-       - 在 8 張預算中，扣除 Photo 0 與最新 2 張後，最多提供 5 個名額給識別碼照片。
-       - 若識別碼照片 <= 5 張：全數保留。
-       - 若識別碼照片 > 5 張：優先保留最新的 5 張識別碼照片（貼近最新狀態）。
-    4. 餘額補齊：若識別碼照片少於 5 張，由最新照片往前依序補滿 8 張。若無識別碼照片，
-       維持預設之「最早 2 張＋最新 6 張」。
+       - 名額＝預算扣除 Photo 0、最新保留與第二張基線後的餘額
+         （8 張預算時為 5 張）。
+       - 若識別碼照片 <= 名額：全數保留。
+       - 若識別碼照片 > 名額：優先保留最新的名額張數（貼近最新狀態）；
+         8 張預算時讓出 Photo 1 以容納更多識別碼證據。
+       - 小預算（2~3 張）時基線與最新證據用盡預算，識別碼無名額。
+    4. 餘額補齊：若識別碼照片少於名額，由最新照片往前依序補滿。若無識別碼照片，
+       維持「最早 2 張＋最新 N-2 張」（N=2 時為最早 1 張＋最新 1 張）。
     5. 保持時間遞增順序，確保 source_photo_index 映射至切片精準無誤。
     """
-    if max_photos < 2:
-        return photos[:max_photos]
+    if max_photos <= 0:
+        return []
+    if max_photos == 1:
+        return photos[:1]
     if len(photos) <= max_photos:
         return photos
 
@@ -867,14 +888,20 @@ def select_photos_for_analysis(
     ]
 
     if not ident_indices:
+        if max_photos == 2:
+            return [photos[0], photos[-1]]
         return photos[:2] + photos[-(max_photos - 2):]
 
+    # 初始保留隨預算縮放：Photo 0 固定；最新照片（1~2 張）與第二張
+    # 建檔基線只在預算允許時加入 —— 小預算不得先塞超過上限。
     selected: set[int] = {0}
-    if len(photos) > 1:
-        selected.add(1)
-    selected.add(len(photos) - 1)
-    if len(photos) > 2:
+    recent_slots = max_photos - 1
+    if recent_slots >= 1:
+        selected.add(len(photos) - 1)
+    if recent_slots >= 2:
         selected.add(len(photos) - 2)
+    if recent_slots >= 3:
+        selected.add(1)
 
     ident_candidates = [i for i in ident_indices if i not in selected]
     avail = max_photos - len(selected)
@@ -885,16 +912,13 @@ def select_photos_for_analysis(
 
     if len(ident_candidates) <= avail:
         selected.update(ident_candidates)
-    else:
+    elif avail > 0:
         selected.update(ident_candidates[-avail:])
 
     for i in range(len(photos) - 1, -1, -1):
         if len(selected) >= max_photos:
             break
         selected.add(i)
-
-    if len(selected) < max_photos and len(photos) > 1:
-        selected.add(1)
 
     return [photos[i] for i in sorted(selected)]
 
