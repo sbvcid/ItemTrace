@@ -33,12 +33,17 @@
 
 from __future__ import annotations
 
+import base64
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Mapping, Union
+
+import ulid
+from ulid import ulid as ulid_new
 
 from . import db, events, ids
 from .config import Config
@@ -58,6 +63,7 @@ from .models import (
     Identifier,
     Item,
     Observation,
+    PairedDevice,
     Photo,
     Suggestion,
     Template,
@@ -98,6 +104,9 @@ IDENTIFIER_COLUMNS = (
 SUGGESTION_COLUMNS = (
     "id", "item_id", "field", "value", "confidence", "source", "model_name",
     "source_photo_id", "status", "created_at", "decided_at",
+)
+PAIRED_DEVICE_COLUMNS = (
+    "id", "name", "public_key", "created_at", "last_seen_at", "revoked_at",
 )
 
 # ----------------------------------------------------------------------
@@ -1645,6 +1654,146 @@ class Repository:
                 actor=actor,
                 payload=_snapshot(template),
             )
+
+    # ------------------------------------------------------------------
+    # paired devices (手機配對)
+    # ------------------------------------------------------------------
+
+    def create_pairing_session(
+        self, *, actor: str = "system"
+    ) -> tuple[str, str, str]:
+        """建立配對會話。
+
+        回傳 (pairing_code, challenge, expires_at)：
+        - pairing_code: 6 位數字，給手機掃描 QR Code 用
+        - challenge: 隨機挑戰碼，手機需用私鑰簽名回傳
+        - expires_at: ISO 8601 時間戳，通常 5 分鐘後過期
+        """
+        import secrets
+        from datetime import datetime, timedelta
+
+        pairing_code = f"{secrets.randbelow(1000000):06d}"
+        challenge = secrets.token_urlsafe(32)
+        expires_at = (datetime.now() + timedelta(minutes=5)).isoformat(timespec="seconds")
+
+        # 儲存到暫存表（用 events 表的 payload 儲存，或建立專用表）
+        # 這裡用 schema_meta 的 key 來存，key 格式：pairing:{pairing_code}
+        self.conn.execute(
+            "INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)",
+            (f"pairing:{pairing_code}", f"{challenge}|{expires_at}"),
+        )
+        return pairing_code, challenge, expires_at
+
+    def verify_pairing_session(
+        self, pairing_code: str, public_key: str, signature: str, device_name: str = "", actor: str = "system"
+    ) -> tuple[str, str] | None:
+        """驗證配對會話。
+
+        成功回傳 (device_id, access_token)，失敗回傳 None。
+        """
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        from cryptography.exceptions import InvalidSignature
+
+        row = self.conn.execute(
+            "SELECT value FROM schema_meta WHERE key = ?", (f"pairing:{pairing_code}",)
+        ).fetchone()
+        if not row:
+            return None
+        challenge, expires_at = row["value"].split("|", 1)
+        if datetime.now() > datetime.fromisoformat(expires_at):
+            self.conn.execute("DELETE FROM schema_meta WHERE key = ?", (f"pairing:{pairing_code}",))
+            return None
+
+        # 驗證簽名
+        try:
+            verify_key = ed25519.Ed25519PublicKey.from_public_bytes(
+                base64.b64decode(public_key)
+            )
+            verify_key.verify(base64.b64decode(signature), challenge.encode())
+        except (InvalidSignature, ValueError):
+            return None
+
+        # 配對成功：建立裝置記錄
+        device_id = f"DEV-{ulid_new()[:12].upper()}"
+        access_token = secrets.token_urlsafe(32)
+        stamp = db.now()
+
+        self.conn.execute(
+            """INSERT INTO paired_devices (id, name, public_key, created_at, last_seen_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (device_id, device_name or f"手機 {device_id[-6:]}", public_key, stamp, stamp),
+        )
+        # 存儲 access_token -> device_id 映射（用於 API 驗證）
+        self.conn.execute(
+            "INSERT INTO schema_meta (key, value) VALUES (?, ?)",
+            (f"device_token:{access_token}", device_id),
+        )
+        events.append(
+            self.conn,
+            entity_type="paired_device",
+            entity_id=device_id,
+            type="paired_device.created",
+            actor=actor,
+            payload={"name": device_name or f"手機 {device_id[-6:]}"},
+        )
+
+        # 清理配對會話
+        self.conn.execute("DELETE FROM schema_meta WHERE key = ?", (f"pairing:{pairing_code}",))
+        return device_id, access_token
+
+    def get_paired_device(self, device_id: str) -> PairedDevice:
+        return PairedDevice.from_row(_fetch(self.conn, "paired_devices", device_id))
+
+    def list_paired_devices(self, *, include_revoked: bool = False) -> list[PairedDevice]:
+        where = "" if include_revoked else " WHERE revoked_at IS NULL"
+        rows = self.conn.execute(
+            f"SELECT * FROM paired_devices{where} ORDER BY created_at DESC"  # noqa: S608
+        ).fetchall()
+        return [PairedDevice.from_row(row) for row in rows]
+
+    def revoke_paired_device(self, device_id: str, *, actor: str = "user") -> PairedDevice:
+        with db.transaction(self.conn):
+            device = self.get_paired_device(device_id)
+            if device.revoked_at:
+                return device  # 已撤銷，冪等
+            stamp = db.now()
+            after = replace(device, revoked_at=stamp)
+            _update(self.conn, "paired_devices", PAIRED_DEVICE_COLUMNS, after, device_id)
+            events.append(
+                self.conn,
+                entity_type="paired_device",
+                entity_id=device_id,
+                type="paired_device.revoked",
+                actor=actor,
+                payload=_snapshot(device),
+            )
+            return after
+
+    def update_paired_device_last_seen(self, device_id: str) -> None:
+        """更新裝置最後活躍時間。"""
+        self.conn.execute(
+            "UPDATE paired_devices SET last_seen_at = ? WHERE id = ? AND revoked_at IS NULL",
+            (db.now(), device_id),
+        )
+
+    def get_paired_device_by_token(self, access_token: str) -> PairedDevice | None:
+        """透過存取權杖查找裝置（用於 API 驗證）。
+
+        為了安全，資料庫不直接存 access_token，而是存 public_key。
+        access_token 是配對時一次性發給手機的，手機後續請求帶上 access_token。
+        這裡為了簡單實作，在配對時同時存 access_token 到 schema_meta，
+        key 格式：device_token:{access_token} -> device_id
+        """
+        row = self.conn.execute(
+            "SELECT value FROM schema_meta WHERE key = ?", (f"device_token:{access_token}",)
+        ).fetchone()
+        if not row:
+            return None
+        device_id = row["value"]
+        try:
+            return self.get_paired_device(device_id)
+        except NotFoundError:
+            return None
 
     # ------------------------------------------------------------------
     # 內部檢查

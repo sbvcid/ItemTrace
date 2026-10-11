@@ -53,7 +53,7 @@ from .errors import (
 )
 from . import evidence as evidence_mod
 from . import security
-from .models import Identifier, Item, Observation, Photo
+from .models import Identifier, Item, Observation, PairedDevice, Photo
 from .repo import Repository
 from .settings import router as settings_router
 from .schemas import (
@@ -83,6 +83,10 @@ from .schemas import (
     ObservationCreate,
     ObservationOut,
     ObservationPatch,
+    PairedDeviceOut,
+    PairingStartOut,
+    PairingVerifyOut,
+    PairingVerifyRequest,
     PhotoOut,
     PhotoPatch,
     PhotoSkipped,
@@ -234,9 +238,48 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def _security_guard(request: Request, call_next):
-        rejection = security.check_request(request, allowed_hosts)
-        if rejection is not None:
-            return rejection
+        # 配對裝置端點不需要配對認證
+        path = request.url.path
+        is_pairing_endpoint = path.startswith("/api/pairing/")
+
+        # 檢查是否為配對裝置請求
+        paired_device_id = None
+        if not is_pairing_endpoint and path.startswith("/api/"):
+            token = security.extract_bearer_token(request)
+            if token:
+                from .db import session as db_session
+                from . import db as db_mod
+                with db_session(cfg) as conn:
+                    row = conn.execute(
+                        "SELECT value FROM schema_meta WHERE key = ?", (f"device_token:{token}",)
+                    ).fetchone()
+                    if row:
+                        device_id = row["value"]
+                        device_row = conn.execute(
+                            "SELECT * FROM paired_devices WHERE id = ? AND revoked_at IS NULL", (device_id,)
+                        ).fetchone()
+                        if device_row:
+                            paired_device_id = device_id
+                            conn.execute(
+                                "UPDATE paired_devices SET last_seen_at = ? WHERE id = ?",
+                                (db_mod.now(), device_id),
+                            )
+
+        # 如果是配對裝置，允許通過（但仍需通過 Host 檢查防 DNS rebinding）
+        if paired_device_id:
+            # 配對裝置同樣需通過 Host 檢查
+            rejection = security.check_request(request, allowed_hosts)
+            if rejection is not None:
+                return rejection
+            # 配對裝置免除 CSRF 標頭檢查（Bearer token 已驗證身份）
+            # 將 device_id 存入 request.state 供端點使用
+            request.state.paired_device_id = paired_device_id
+        else:
+            # 非配對裝置：原有邏輯
+            rejection = security.check_request(request, allowed_hosts)
+            if rejection is not None:
+                return rejection
+
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -1371,6 +1414,106 @@ def stats(repo: Repo, limit: Annotated[int, Query(ge=1, le=200)] = 10) -> StatsO
         recent=to_outs(repo.list_recent_events(limit)),
         categories=repo.distinct_categories(),
     )
+
+
+# ----------------------------------------------------------------------
+# 手機配對
+# ----------------------------------------------------------------------
+#
+# 配對流程：
+# 1. 電腦端點選「連結手機」→ POST /api/pairing/start
+#    回傳 pairing_code、server_url、expires_at、qr_data
+#    前端將 qr_data 顯示為 QR Code
+# 2. 手機掃描 QR Code → 生成 Ed25519 密鑰對
+#    用私鑰簽名 challenge → POST /api/pairing/verify
+#    回傳 device_id、access_token
+# 3. 手機後續請求帶上 Authorization: Bearer <access_token>
+#    伺服器驗證 token 對應的 paired_device 且未撤銷
+# 4. 電腦端可查看已配對裝置 GET /api/pairing/devices
+#    可撤銷裝置 DELETE /api/pairing/devices/{device_id}
+#
+# 安全性：
+# - 配對碼 6 位數字，5 分鐘過期，防暴力破解
+# - Ed25519 簽名驗證，私鑰永不離開手機
+# - access_token 32 字節 URL-safe，足夠熵值
+# - 已撤銷裝置無法存取任何 API
+# - 維持既有 Host/Origin/CSRF 防護：手機請求同樣需帶
+#   X-Requested-With: ItemTrace 標頭
+
+
+@router.post("/api/pairing/start", response_model=PairingStartOut, tags=["pairing"])
+def start_pairing(
+    repo: Repo,
+    cfg: Annotated[Config, Depends(get_config)],
+    request: Request,
+) -> PairingStartOut:
+    """啟動手機配對會話。
+
+    回傳給前端顯示 QR Code 所需的資料：
+    - pairing_code: 6 位數字配對碼
+    - server_url: 伺服器完整 URL（含 scheme、host、port）
+    - expires_at: 過期時間（ISO 8601）
+    - qr_data: 給 QR Code 掃描的完整資料（JSON 字串）
+    """
+    pairing_code, challenge, expires_at = repo.create_pairing_session()
+
+    # 取得伺服器 URL：優先用請求的 host，否則用 config
+    host = request.headers.get("host", f"{cfg.server_host}:{cfg.server_port}")
+    scheme = "https" if request.url.scheme == "https" else "http"
+    server_url = f"{scheme}://{host}"
+
+    import json
+    qr_data = json.dumps({
+        "pairing_code": pairing_code,
+        "server_url": server_url,
+        "challenge": challenge,
+    }, separators=(",", ":"))
+
+    return PairingStartOut(
+        pairing_code=pairing_code,
+        server_url=server_url,
+        expires_at=expires_at,
+        qr_data=qr_data,
+    )
+
+
+@router.post("/api/pairing/verify", response_model=PairingVerifyOut, tags=["pairing"])
+def verify_pairing(
+    body: PairingVerifyRequest,
+    repo: Repo,
+) -> PairingVerifyOut:
+    """驗證手機配對。
+
+    手機掃描 QR Code 後，生成 Ed25519 密鑰對，用私鑰簽名 challenge，
+    送回 public_key、signature、device_name。
+    成功回傳 device_id 與 access_token。
+    """
+    result = repo.verify_pairing_session(
+        body.pairing_code,
+        body.public_key,
+        body.signature,
+        body.device_name,
+    )
+    if result is None:
+        raise ValidationError("配對碼無效、已過期或簽名驗證失敗")
+    device_id, access_token = result
+    return PairingVerifyOut(device_id=device_id, access_token=access_token)
+
+
+@router.get("/api/pairing/devices", response_model=list[PairedDeviceOut], tags=["pairing"])
+def list_paired_devices(repo: Repo) -> list[PairedDeviceOut]:
+    """列出所有已配對裝置（含已撤銷）。"""
+    devices = repo.list_paired_devices(include_revoked=True)
+    return [to_out(device) for device in devices]
+
+
+@router.delete("/api/pairing/devices/{device_id}", status_code=204, tags=["pairing"])
+def revoke_paired_device(device_id: str, repo: Repo) -> None:
+    """撤銷已配對裝置。
+
+    撤銷後該裝置無法再存取任何 API。冪等：重複撤銷不報錯。
+    """
+    repo.revoke_paired_device(device_id)
 
 
 # ----------------------------------------------------------------------

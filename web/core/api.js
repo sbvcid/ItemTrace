@@ -210,6 +210,23 @@ export const api = {
       body: JSON.stringify(data),
     });
   },
+
+  // Phone Pairing
+  async startPairing() {
+    return request('/api/pairing/start', {
+      method: 'POST',
+    });
+  },
+
+  async listPairedDevices() {
+    return request('/api/pairing/devices');
+  },
+
+  async revokePairedDevice(deviceId) {
+    return request(`/api/pairing/devices/${deviceId}`, {
+      method: 'DELETE',
+    });
+  },
 };
 
 /**

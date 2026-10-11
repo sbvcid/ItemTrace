@@ -113,6 +113,16 @@ CREATE TABLE IF NOT EXISTS templates (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_templates_name ON templates(name);
 
+CREATE TABLE IF NOT EXISTS paired_devices (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL DEFAULT '',
+    public_key      TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    last_seen_at    TEXT,
+    revoked_at      TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_paired_revoked ON paired_devices(revoked_at);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

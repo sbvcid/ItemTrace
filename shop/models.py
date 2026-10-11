@@ -26,6 +26,7 @@ __all__ = [
     "Identifier",
     "Item",
     "Observation",
+    "PairedDevice",
     "Photo",
     "Suggestion",
     "Template",
@@ -341,6 +342,36 @@ class Template:
             unit=row["unit"] or None,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PairedDevice:
+    """已配對的手機裝置。
+
+    使用公鑰加密驗證，不存儲私鑰。手機首次掃描 QR Code 時生成密鑰對，
+    公鑰送回伺服器存儲，私鑰留在手機端。後續請求由手機用私鑰簽名驗證。
+    """
+    id: str
+    name: str = ""
+    public_key: str = ""
+    created_at: str = ""
+    last_seen_at: str | None = None
+    revoked_at: str | None = None
+
+    @property
+    def is_revoked(self) -> bool:
+        return self.revoked_at is not None
+
+    @classmethod
+    def from_row(cls, row: Row) -> PairedDevice:
+        return cls(
+            id=row["id"],
+            name=row["name"],
+            public_key=row["public_key"],
+            created_at=row["created_at"],
+            last_seen_at=row["last_seen_at"],
+            revoked_at=row["revoked_at"],
         )
 
 

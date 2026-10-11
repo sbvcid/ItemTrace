@@ -11,7 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import print_config
-from .models import Event, Identifier, Item, Observation, Photo, Suggestion, Template
+from .models import Event, Identifier, Item, Observation, PairedDevice, Photo, Suggestion, Template
 
 
 class _Out(BaseModel):
@@ -537,3 +537,59 @@ def to_out(row: Any) -> BaseModel:
 
 def to_outs(rows: list[Any]) -> list[Any]:
     return [to_out(row) for row in rows]
+
+
+class PairedDeviceOut(_Out):
+    id: str
+    name: str
+    public_key: str
+    created_at: str
+    last_seen_at: str | None
+    revoked_at: str | None
+
+
+class PairingStartOut(BaseModel):
+    """POST /api/pairing/start 的回應。
+
+    包含給手機掃描的 QR Code 資料：配對碼、伺服器 URL、過期時間。
+    """
+    pairing_code: str
+    server_url: str
+    expires_at: str
+    qr_data: str
+
+
+class PairingVerifyRequest(BaseModel):
+    """POST /api/pairing/verify 的請求。
+
+    手機掃描 QR Code 後，用私鑰簽名挑戰碼並送回公鑰與簽名。
+    """
+    pairing_code: str
+    public_key: str
+    signature: str
+    device_name: str = ""
+
+
+class PairingVerifyOut(BaseModel):
+    """POST /api/pairing/verify 的回應。
+
+    配對成功後回傳裝置 ID 與存取權杖（給手機後續請求用）。
+    """
+    device_id: str
+    access_token: str
+
+
+class PairingRevokeRequest(BaseModel):
+    device_id: str
+
+
+_OUT_MODELS: dict[type, type[BaseModel]] = {
+    Item: ItemOut,
+    Observation: ObservationOut,
+    Photo: PhotoOut,
+    Identifier: IdentifierOut,
+    Suggestion: SuggestionOut,
+    Event: EventOut,
+    Template: TemplateOut,
+    PairedDevice: PairedDeviceOut,
+}
