@@ -53,7 +53,6 @@ export async function createRecordDetailView(params, router) {
   `;
 
   const detailContent = el.querySelector('#detail-content');
-  const statusBadge = el.querySelector('#status-badge');
   const addPhotoBtn = el.querySelector('#btn-add-photo');
   const reanalyzeBtn = el.querySelector('#btn-reanalyze');
   const editToggleBtn = el.querySelector('#btn-edit-toggle');
@@ -105,6 +104,17 @@ export async function createRecordDetailView(params, router) {
       renderDetail(data);
     } catch (err) {
       console.error('Failed to load item detail:', err);
+      renderLoadError(err);
+    }
+  }
+
+  function renderLoadError(err) {
+    // 錯誤分類：只有後端確實回報紀錄不存在（404）時才顯示「找不到此
+    // 紀錄」；授權失敗、伺服器錯誤與網路中斷各有符合實際狀況的訊息，
+    // 不再一律偽裝成 404。
+    const status = err && typeof err.status === 'number' ? err.status : null;
+
+    if (status === 404) {
       detailContent.innerHTML = `
         <div class="empty-state">
           <div class="empty-icon">⚠️</div>
@@ -113,6 +123,40 @@ export async function createRecordDetailView(params, router) {
           <a href="/" class="btn-primary" style="display: inline-flex; width: auto;" data-link>${t('detail.backHome')}</a>
         </div>
       `;
+      return;
+    }
+
+    let title = t('detail.loadErrorTitle');
+    let subtitle = t('detail.loadErrorNetwork');
+    if (status === 401 || status === 403) {
+      title = t('detail.errorAuthTitle');
+      subtitle = err.message || t('detail.loadErrorNetwork');
+    } else if (status !== null) {
+      subtitle = t('detail.loadErrorServer', { status });
+      if (err.message && err.message !== `HTTP ${status}`) {
+        subtitle = `${subtitle}：${err.message}`;
+      }
+    }
+
+    detailContent.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">⚠️</div>
+        <div class="empty-title">${escapeHtml(title)}</div>
+        <div class="empty-subtitle">${escapeHtml(subtitle)}</div>
+        <button type="button" class="btn-primary" id="btn-detail-retry" style="display: inline-flex; width: auto;">${t('detail.retry')}</button>
+        <a href="/" class="btn-secondary" style="display: inline-flex; width: auto; margin-top: 8px;" data-link>${t('detail.backHome')}</a>
+      </div>
+    `;
+    const retryBtn = detailContent.querySelector('#btn-detail-retry');
+    if (retryBtn) {
+      retryBtn.addEventListener('click', () => {
+        detailContent.innerHTML = `
+          <div style="text-align: center; padding: 48px 20px; color: var(--text-muted);">
+            ${t('detail.loading')}
+          </div>
+        `;
+        loadDetail();
+      });
     }
   }
 
@@ -538,12 +582,6 @@ export async function createRecordDetailView(params, router) {
     const item = data.item;
     const photos = data.photos || [];
     const identifiers = data.identifiers || [];
-
-    statusBadge.textContent = item.status === 'active'
-      ? t('detail.statusActive')
-      : item.status === 'archived'
-        ? t('detail.statusArchived')
-        : t('detail.statusDeleted');
 
     // 已在垃圾桶的紀錄：不再提供「移至垃圾桶」；還原／永久刪除在垃圾桶頁。
     moveTrashBtn.style.display = item.status === 'void' ? 'none' : '';

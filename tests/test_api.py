@@ -147,6 +147,23 @@ def test_get_missing_item_is_404(client):
     assert "ITM-9999" in response.json()["detail"]
 
 
+def test_listed_item_opens_in_detail(client):
+    """首頁卡片流程的後端契約：列表看得到的紀錄，詳情必須載得到。
+
+    迴歸：詳情頁曾因前端例外（查詢已移除的 #status-badge）而一律顯示
+    「找不到此紀錄」，即使本端點從頭到尾都是 200。
+    """
+    item = create_item(client, name="列表到詳情")
+    listed = client.get("/api/items").json()
+    assert any(row["id"] == item["id"] for row in listed)
+
+    response = client.get(f"/api/items/{item['id']}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["item"]["id"] == item["id"]
+    assert body["item"]["name"] == "列表到詳情"
+
+
 def test_patch_item_updates_and_records_event(client):
     item = create_item(client, brand="ASUS")
     response = client.patch(f"/api/items/{item['id']}", json={"brand": "acer"})
