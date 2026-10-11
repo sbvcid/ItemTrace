@@ -64,7 +64,8 @@ def main(argv: list[str] | None = None) -> int:
         for address in pairing.local_ipv4_addresses():
             print(f"區網位址   ：http://{address}:{port}/")
         print(
-            "手機配對：在電腦的「設定」頁點選「連結手機」，用手機掃描 QR Code。\n"
+            "手機配對：在電腦的「設定」頁「手機配對」區塊點選「開始配對」，"
+            "用手機掃描 QR Code。\n"
             "未配對的裝置只能看到配對頁；資料與照片需要配對後的裝置權杖。"
         )
     if config.enable_docs:

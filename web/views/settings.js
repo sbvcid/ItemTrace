@@ -95,6 +95,12 @@ export async function createSettingsView(params, router) {
             <h3 style="font-size: 1rem; font-weight: 700; margin-bottom: 12px;">${t('settings.pairingScanTitle')}</h3>
             <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 16px;">${t('settings.pairingScanSubtitle')}</p>
             <div id="pairing-qr-code" style="display: inline-block; padding: 16px; background: white; border: 1px solid var(--border-default); border-radius: var(--radius-md);"></div>
+            <!-- QR 載入失敗：顯示具體原因與重試（不出現空白區塊或破圖） -->
+            <div id="pairing-qr-error" style="display: none; text-align: left; margin-top: 4px; padding: 14px 16px; background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);">
+              <div style="font-weight: 700; font-size: 0.9rem; color: var(--color-danger);">⚠️ ${t('settings.pairingQrErrorTitle')}</div>
+              <p id="pairing-qr-error-detail" style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 6px; line-height: 1.6;"></p>
+              <button type="button" class="btn-secondary" id="btn-retry-qr" style="margin-top: 10px;">${t('settings.pairingQrRetry')}</button>
+            </div>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 12px; font-family: var(--font-mono);" id="pairing-code-display"></p>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;" id="pairing-expires"></p>
             <p style="font-size: 0.72rem; color: var(--text-muted); margin-top: 10px; word-break: break-all; font-family: var(--font-mono);" id="pairing-url-display"></p>
@@ -106,6 +112,8 @@ export async function createSettingsView(params, router) {
           <div id="pairing-start-container" style="text-align: center; padding: 20px;">
             <button type="button" class="btn-primary" id="btn-start-pairing">${t('settings.pairingStartBtn')}</button>
             <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px;">${t('settings.pairingStartNote')}</p>
+            <!-- 建立工作階段失敗：保留可讀取的錯誤訊息 -->
+            <p id="pairing-start-error" style="display: none; font-size: 0.82rem; color: var(--color-danger); margin-top: 10px; line-height: 1.6; text-align: left; padding: 10px 12px; background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);"></p>
           </div>
         </div>
 
@@ -153,6 +161,10 @@ export async function createSettingsView(params, router) {
   const pairingQrContainer = el.querySelector('#pairing-qr-container');
   const pairingStartContainer = el.querySelector('#pairing-start-container');
   const pairingQrCode = el.querySelector('#pairing-qr-code');
+  const pairingQrError = el.querySelector('#pairing-qr-error');
+  const qrErrorDetail = el.querySelector('#pairing-qr-error-detail');
+  const btnRetryQr = el.querySelector('#btn-retry-qr');
+  const pairingStartError = el.querySelector('#pairing-start-error');
   const pairingCodeDisplay = el.querySelector('#pairing-code-display');
   const pairingExpires = el.querySelector('#pairing-expires');
   const pairingUrlDisplay = el.querySelector('#pairing-url-display');
@@ -161,6 +173,8 @@ export async function createSettingsView(params, router) {
   const pairedDevicesEmpty = el.querySelector('#paired-devices-empty');
 
   let pairingPollInterval = null;
+  let qrSessionId = null;
+  let qrRetryCount = 0;
 
   providerSelect.addEventListener('change', () => {
     const val = providerSelect.value;
@@ -329,21 +343,85 @@ export async function createSettingsView(params, router) {
     btnStartPairing.textContent = t('settings.pairingStartBtn');
   }
 
+  function clearPairingErrors() {
+    pairingStartError.style.display = 'none';
+    pairingStartError.textContent = '';
+    pairingQrError.style.display = 'none';
+    qrErrorDetail.textContent = '';
+  }
+
+  function showStartError(message) {
+    pairingStartError.textContent = message;
+    pairingStartError.style.display = 'block';
+  }
+
+  function qrImageUrl() {
+    const base = `/api/pairing/sessions/${encodeURIComponent(qrSessionId)}/qr.svg`;
+    // 重試時加遞增參數避開快取；只有重試次數，不含任何配對資料。
+    return qrRetryCount > 0 ? `${base}?retry=${qrRetryCount}` : base;
+  }
+
+  async function describeQrFailure(src) {
+    // <img> 的 error 事件不帶狀態碼：直接抓同一端點，解析後端的具體原因。
+    try {
+      const response = await fetch(src, { headers: { 'X-Requested-With': 'ItemTrace' } });
+      if (response.ok) {
+        // 伺服器回了 200，但瀏覽器無法解碼（SVG 格式問題）。
+        return t('settings.pairingQrErrorDecode');
+      }
+      try {
+        const data = await response.json();
+        if (data && typeof data.detail === 'string' && data.detail) {
+          return data.detail;
+        }
+      } catch (_) {
+        // 非 JSON 的錯誤內容
+      }
+      return t('settings.pairingQrErrorGeneric');
+    } catch (_) {
+      return t('settings.pairingQrErrorNetwork');
+    }
+  }
+
+  async function handleQrFailure(src) {
+    // 先立刻收起圖片（不留空白區塊或破圖），再解析具體原因。
+    pairingQrCode.innerHTML = '';
+    pairingQrCode.style.display = 'none';
+    qrErrorDetail.textContent = t('app.loading');
+    pairingQrError.style.display = 'block';
+    qrErrorDetail.textContent = await describeQrFailure(src);
+  }
+
+  function attachQrImage() {
+    const src = qrImageUrl();
+    pairingQrError.style.display = 'none';
+    pairingQrCode.style.display = 'inline-block';
+    pairingQrCode.innerHTML = '';
+    const img = document.createElement('img');
+    img.alt = t('settings.pairingScanTitle');
+    img.width = 200;
+    img.height = 200;
+    img.src = src;
+    img.addEventListener('error', () => { handleQrFailure(src); });
+    img.addEventListener('load', () => {
+      // 防禦：SVG 曾因缺 namespace「載入成功但解碼失敗」（naturalWidth 0）。
+      if (!img.naturalWidth) { handleQrFailure(src); }
+    });
+    pairingQrCode.appendChild(img);
+  }
+
   async function startPairing() {
     btnStartPairing.disabled = true;
     btnStartPairing.textContent = t('app.loading');
+    clearPairingErrors();
 
     try {
       const result = await api.startPairing();
+      qrSessionId = result.session_id;
+      qrRetryCount = 0;
       // QR Code 由後端在本機產生（segno）：不經過任何外部 QR 服務，
       // 配對碼與網址只留在電腦與手機之間。
-      pairingQrCode.innerHTML = '';
-      const img = document.createElement('img');
-      img.src = `/api/pairing/sessions/${encodeURIComponent(result.session_id)}/qr.svg`;
-      img.alt = t('settings.pairingScanTitle');
-      img.width = 200;
-      img.height = 200;
-      pairingQrCode.appendChild(img);
+      attachQrImage();
       pairingCodeDisplay.textContent = `${t('settings.pairingCodeLabel')}: ${result.code}`;
       pairingExpires.textContent = `${t('settings.pairingExpiresLabel')}: ${formatDate(result.expires_at)}`;
       pairingUrlDisplay.textContent = result.pairing_url;
@@ -369,7 +447,12 @@ export async function createSettingsView(params, router) {
         }
       }, 2000);
     } catch (err) {
-      showToast(`${err.message}`);
+      // 保留可讀取的錯誤訊息：後端訊息（如純本機模式、找不到區網位址）
+      // 優先；網路失敗（沒有 status）用本地化說明。
+      const message = err && err.status
+        ? err.message
+        : t('settings.pairingStartErrorNetwork');
+      showStartError(message);
       btnStartPairing.disabled = false;
       btnStartPairing.textContent = t('settings.pairingStartBtn');
     }
@@ -377,8 +460,15 @@ export async function createSettingsView(params, router) {
 
   btnStartPairing.addEventListener('click', startPairing);
 
+  btnRetryQr.addEventListener('click', () => {
+    if (!qrSessionId) return;
+    qrRetryCount += 1;
+    attachQrImage();
+  });
+
   btnCancelPairing.addEventListener('click', () => {
     stopPairingPoll();
+    clearPairingErrors();
     hidePairingQr();
   });
 

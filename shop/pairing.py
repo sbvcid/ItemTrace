@@ -130,8 +130,23 @@ def build_pairing_url(host: str, port: int, session_id: str, code: str) -> str:
 def render_qr_svg(data: str) -> bytes:
     """把配對網址渲染成 SVG（本機產生，不連外）。
 
+    **用獨立 SVG 文件，不要用 ``svg_inline()``**：``svg_inline()`` 產生的是
+    「內嵌進 HTML」的片段 —— 沒有 SVG namespace（``xmlns``）也沒有
+    ``viewBox``。把它當成獨立檔案由 ``<img src="/…/qr.svg">`` 載入時，
+    瀏覽器會拿到 HTTP 200 但**無法解碼**（實測 ``naturalWidth = 0``，
+    畫面一片空白 —— 這正是 QR Code 曾經不顯示的原因）。
+
+    獨立文件要用 ``save(kind="svg", svgns=True, xmldecl=True, unit="px")``：
+    帶 XML 宣告與 namespace；``unit="px"`` 會附上等值 ``viewBox``，
+    讓 ``<img>`` 以任何尺寸顯示時都能正確縮放。
+
     segno 是純 Python 實作，不依賴 Pillow；SVG 由瀏覽器直接顯示。
     """
+    import io
+
     import segno
 
-    return segno.make(data, error="m").svg_inline().encode("utf-8")
+    qr = segno.make(data, error="m")
+    buffer = io.BytesIO()
+    qr.save(buffer, kind="svg", xmldecl=True, svgns=True, nl=True, unit="px")
+    return buffer.getvalue()

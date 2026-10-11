@@ -397,6 +397,51 @@ def test_qr_is_served_locally_as_svg(config, fake_lan_ip):
     assert b"qrserver" not in response.content
 
 
+def test_qr_svg_is_a_standalone_renderable_document(config, fake_lan_ip):
+    """迴歸：QR SVG 必須是獨立、可被瀏覽器解碼的文件。
+
+    災情：原本用 segno 的 ``svg_inline()``（內嵌 HTML 用的片段，沒有
+    SVG namespace 與 viewBox）。``<img src="/…/qr.svg">`` 拿到 HTTP 200
+    但瀏覽器無法解碼（實測 naturalWidth = 0），設定頁的 QR 一片空白。
+    """
+    from xml.dom import minidom
+
+    with _admin(config) as admin:
+        start = admin.post("/api/pairing/start").json()
+        response = admin.get(
+            f"/api/pairing/sessions/{start['session_id']}/qr.svg"
+        )
+    assert response.status_code == 200
+    body = response.content
+    assert body.startswith(b"<?xml"), "獨立 SVG 應有 XML 宣告"
+    assert b'xmlns="http://www.w3.org/2000/svg"' in body, "缺 namespace 瀏覽器無法解碼"
+    assert b"viewBox=" in body, "<img> 縮放需要 viewBox"
+    # 必須是格式正確的 XML（解碼失敗曾是實際災情）。
+    document = minidom.parseString(body)
+    assert document.documentElement.tagName == "svg"
+
+
+def test_pairing_copy_matches_the_real_button():
+    """zh-TW 文案必須跟畫面上的按鈕一致：沒有「連結手機」，用「開始配對」。"""
+    zh = (ROOT / "web" / "i18n" / "zh-TW.js").read_text(encoding="utf-8")
+    assert "連結手機" not in zh
+    assert "開始配對" in zh
+    en = (ROOT / "web" / "i18n" / "en.js").read_text(encoding="utf-8")
+    assert "連結手機" not in en
+    # 整個前端都不該再出現舊按鈕名稱。
+    for path in (ROOT / "web").rglob("*.js"):
+        assert "連結手機" not in path.read_text(encoding="utf-8"), path
+
+
+def test_settings_view_shows_pairing_failures_with_retry():
+    """前端必須有明確的失敗處理：可讀訊息＋QR 重試，不能只留空白或破圖。"""
+    source = (ROOT / "web" / "views" / "settings.js").read_text(encoding="utf-8")
+    assert "pairing-start-error" in source, "建立工作階段失敗要保留可讀訊息"
+    assert "pairing-qr-error" in source, "QR 載入失敗要顯示原因區塊"
+    assert "btn-retry-qr" in source, "QR 載入失敗要提供重試"
+    assert "addEventListener('error'" in source, "要監聽 QR 圖片載入失敗"
+
+
 def test_qr_generation_never_uses_the_network(config, fake_lan_ip, monkeypatch):
     """QR 產生期間任何 socket 連線都直接失敗 —— 證明是純本機產生。"""
     with _admin(config) as admin:
