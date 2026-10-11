@@ -86,12 +86,16 @@ def test_readme_does_not_invent_config_keys():
 
 
 def test_readme_explains_the_lan_setting():
-    """手機要連得起來，必須說明 server_host 與安全提醒。"""
+    """手機要連得起來，README 必須說明 server_host 與存取模型。
+
+    新模型（手機配對）下不能只說「區網能連」：要說清楚未配對裝置
+    拿不到資料 —— 配對是唯一的授權途徑。
+    """
     assert "server_host" in README
     assert "0.0.0.0" in README
     assert "127.0.0.1" in README
-    # 不能把「區網內無密碼」寫得太輕鬆
-    assert "沒有密碼" in README or "不用登入" in README
+    assert "配對" in README
+    assert "未配對" in README
 
 
 def test_readme_states_v1_has_no_ai():

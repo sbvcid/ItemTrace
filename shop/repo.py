@@ -33,8 +33,7 @@
 
 from __future__ import annotations
 
-import base64
-import secrets
+import hmac
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict, replace
@@ -42,10 +41,7 @@ from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Mapping, Union
 
-import ulid
-from ulid import ulid as ulid_new
-
-from . import db, events, ids
+from . import db, events, ids, pairing
 from .config import Config
 from .errors import ConflictError, NotFoundError, PurgeError, ValidationError
 from .models import (
@@ -64,6 +60,7 @@ from .models import (
     Item,
     Observation,
     PairedDevice,
+    PairingSession,
     Photo,
     Suggestion,
     Template,
@@ -106,7 +103,11 @@ SUGGESTION_COLUMNS = (
     "source_photo_id", "status", "created_at", "decided_at",
 )
 PAIRED_DEVICE_COLUMNS = (
-    "id", "name", "public_key", "created_at", "last_seen_at", "revoked_at",
+    "id", "name", "token_hash", "created_at", "last_seen_at", "revoked_at",
+)
+PAIRING_SESSION_COLUMNS = (
+    "id", "code", "pairing_url", "created_at", "expires_at", "attempts",
+    "claimed_at", "claimed_device_id",
 )
 
 # ----------------------------------------------------------------------
@@ -1656,90 +1657,149 @@ class Repository:
             )
 
     # ------------------------------------------------------------------
-    # paired devices (手機配對)
+    # 手機配對（工作階段與裝置權杖；完整流程與安全模型見 shop/pairing.py）
     # ------------------------------------------------------------------
 
     def create_pairing_session(
-        self, *, actor: str = "system"
+        self,
+        pairing_url_template: str,
+        *,
+        ttl_seconds: int | None = None,
     ) -> tuple[str, str, str]:
-        """建立配對會話。
+        """建立短效、一次性的配對工作階段。
 
-        回傳 (pairing_code, challenge, expires_at)：
-        - pairing_code: 6 位數字，給手機掃描 QR Code 用
-        - challenge: 隨機挑戰碼，手機需用私鑰簽名回傳
-        - expires_at: ISO 8601 時間戳，通常 5 分鐘後過期
+        `pairing_url_template` 內用 `{session_id}` / `{code}` 佔位（主機與
+        埠由呼叫端決定 —— repo 不碰網路）。回傳 (session_id, code, expires_at)。
+        建立時順手清掉已過期的工作階段（機會式清理，不跑額外排程）。
         """
-        import secrets
-        from datetime import datetime, timedelta
-
-        pairing_code = f"{secrets.randbelow(1000000):06d}"
-        challenge = secrets.token_urlsafe(32)
-        expires_at = (datetime.now() + timedelta(minutes=5)).isoformat(timespec="seconds")
-
-        # 儲存到暫存表（用 events 表的 payload 儲存，或建立專用表）
-        # 這裡用 schema_meta 的 key 來存，key 格式：pairing:{pairing_code}
-        self.conn.execute(
-            "INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)",
-            (f"pairing:{pairing_code}", f"{challenge}|{expires_at}"),
-        )
-        return pairing_code, challenge, expires_at
-
-    def verify_pairing_session(
-        self, pairing_code: str, public_key: str, signature: str, device_name: str = "", actor: str = "system"
-    ) -> tuple[str, str] | None:
-        """驗證配對會話。
-
-        成功回傳 (device_id, access_token)，失敗回傳 None。
-        """
-        from cryptography.hazmat.primitives.asymmetric import ed25519
-        from cryptography.exceptions import InvalidSignature
-
-        row = self.conn.execute(
-            "SELECT value FROM schema_meta WHERE key = ?", (f"pairing:{pairing_code}",)
-        ).fetchone()
-        if not row:
-            return None
-        challenge, expires_at = row["value"].split("|", 1)
-        if datetime.now() > datetime.fromisoformat(expires_at):
-            self.conn.execute("DELETE FROM schema_meta WHERE key = ?", (f"pairing:{pairing_code}",))
-            return None
-
-        # 驗證簽名
-        try:
-            verify_key = ed25519.Ed25519PublicKey.from_public_bytes(
-                base64.b64decode(public_key)
+        if ttl_seconds is None:
+            ttl_seconds = pairing.PAIRING_TTL_SECONDS
+        with db.transaction(self.conn):
+            stamp = datetime.now()
+            self.conn.execute(
+                "DELETE FROM pairing_sessions WHERE expires_at < ?",
+                (stamp.isoformat(timespec="seconds"),),
             )
-            verify_key.verify(base64.b64decode(signature), challenge.encode())
-        except (InvalidSignature, ValueError):
-            return None
+            session_id = ids.new_id()
+            code = ""
+            for _ in range(20):
+                code = pairing.generate_pairing_code()
+                clash = self.conn.execute(
+                    "SELECT 1 FROM pairing_sessions WHERE code = ?", (code,)
+                ).fetchone()
+                if clash is None:
+                    break
+            else:
+                raise ValidationError("配對碼產生失敗，請再試一次")
+            session = PairingSession(
+                id=session_id,
+                code=code,
+                pairing_url=pairing_url_template.format(
+                    session_id=session_id, code=code
+                ),
+                created_at=stamp.isoformat(timespec="seconds"),
+                expires_at=(
+                    stamp + timedelta(seconds=int(ttl_seconds))
+                ).isoformat(timespec="seconds"),
+                attempts=0,
+                claimed_at=None,
+                claimed_device_id=None,
+            )
+            _insert(self.conn, "pairing_sessions", PAIRING_SESSION_COLUMNS, session)
+            return session.id, session.code, session.expires_at
 
-        # 配對成功：建立裝置記錄
-        device_id = f"DEV-{ulid_new()[:12].upper()}"
-        access_token = secrets.token_urlsafe(32)
-        stamp = db.now()
+    def get_pairing_session(self, session_id: str) -> PairingSession | None:
+        row = self.conn.execute(
+            "SELECT * FROM pairing_sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        return PairingSession.from_row(row) if row else None
 
-        self.conn.execute(
-            """INSERT INTO paired_devices (id, name, public_key, created_at, last_seen_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (device_id, device_name or f"手機 {device_id[-6:]}", public_key, stamp, stamp),
-        )
-        # 存儲 access_token -> device_id 映射（用於 API 驗證）
-        self.conn.execute(
-            "INSERT INTO schema_meta (key, value) VALUES (?, ?)",
-            (f"device_token:{access_token}", device_id),
-        )
-        events.append(
-            self.conn,
-            entity_type="paired_device",
-            entity_id=device_id,
-            type="paired_device.created",
-            actor=actor,
-            payload={"name": device_name or f"手機 {device_id[-6:]}"},
-        )
+    def claim_pairing_session(
+        self, session_id: str, code: str, device_name: str = ""
+    ) -> tuple[str, str, str]:
+        """手機端認領配對工作階段：驗證成功 → 建立裝置並回傳權杖原文。
 
-        # 清理配對會話
-        self.conn.execute("DELETE FROM schema_meta WHERE key = ?", (f"pairing:{pairing_code}",))
-        return device_id, access_token
+        檢查順序（每一項都有明確、可操作的原因）：
+        1. 工作階段不存在 → ValidationError
+        2. 已使用過（一次性）→ ConflictError
+        3. 已過期 → ValidationError
+        4. 錯誤嘗試達上限 → ValidationError（鎖定後連正確的碼也不受理）
+        5. 碼不正確 → 累計 attempts 後 ValidationError
+
+        **錯誤嘗試的計數必須持久化**：計數以獨立的交易提交後才拋錯，
+        不能跟失敗路徑一起回滾 —— 否則暴力嘗試永遠不會累計。
+
+        成功路徑在同一個交易內完成：建立裝置列、工作階段標記已使用、
+        寫入事件。權杖只存雜湊（shop/pairing.hash_device_token）。
+        """
+        session = self.get_pairing_session(session_id)
+        if session is None:
+            raise ValidationError(
+                "找不到配對工作階段；請在電腦上重新產生 QR Code"
+            )
+        if session.claimed_at is not None:
+            raise ConflictError(
+                "此配對連結已使用過；請在電腦上重新產生 QR Code"
+            )
+        if datetime.now() > datetime.fromisoformat(session.expires_at):
+            raise ValidationError(
+                "配對工作階段已過期（有效 5 分鐘）；"
+                "請在電腦上重新點選「連結手機」"
+            )
+        if session.attempts >= pairing.PAIRING_MAX_ATTEMPTS:
+            raise ValidationError(
+                "配對碼嘗試次數過多，此工作階段已失效；"
+                "請在電腦上重新產生 QR Code"
+            )
+        if not hmac.compare_digest(str(code or ""), session.code):
+            attempts = session.attempts + 1
+            with db.transaction(self.conn):
+                self.conn.execute(
+                    "UPDATE pairing_sessions SET attempts = ? WHERE id = ?",
+                    (attempts, session_id),
+                )
+            remaining = pairing.PAIRING_MAX_ATTEMPTS - attempts
+            if remaining <= 0:
+                raise ValidationError(
+                    "配對碼嘗試次數過多，此工作階段已失效；"
+                    "請在電腦上重新產生 QR Code"
+                )
+            raise ValidationError(f"配對碼不正確（還可嘗試 {remaining} 次）")
+
+        with db.transaction(self.conn):
+            # 交易內重新確認（避免與另一台裝置同時 claim 同一工作階段）。
+            current = self.get_pairing_session(session_id)
+            if current is None or current.claimed_at is not None:
+                raise ConflictError(
+                    "此配對連結已使用過；請在電腦上重新產生 QR Code"
+                )
+            token = pairing.generate_device_token()
+            device_id = f"DEV-{ids.new_id()[:12].upper()}"
+            name = (device_name or "").strip()[:60] or f"手機 {device_id[-6:]}"
+            stamp = db.now()
+            device = PairedDevice(
+                id=device_id,
+                name=name,
+                token_hash=pairing.hash_device_token(token),
+                created_at=stamp,
+                last_seen_at=stamp,
+                revoked_at=None,
+            )
+            _insert(self.conn, "paired_devices", PAIRED_DEVICE_COLUMNS, device)
+            self.conn.execute(
+                "UPDATE pairing_sessions SET claimed_at = ?, claimed_device_id = ?"
+                " WHERE id = ?",
+                (stamp, device_id, session_id),
+            )
+            events.append(
+                self.conn,
+                entity_type="paired_device",
+                entity_id=device_id,
+                type="paired_device.created",
+                actor="system",
+                payload={"name": name, "pairing_session": session_id},
+            )
+            return device_id, name, token
 
     def get_paired_device(self, device_id: str) -> PairedDevice:
         return PairedDevice.from_row(_fetch(self.conn, "paired_devices", device_id))
@@ -1750,6 +1810,25 @@ class Repository:
             f"SELECT * FROM paired_devices{where} ORDER BY created_at DESC"  # noqa: S608
         ).fetchall()
         return [PairedDevice.from_row(row) for row in rows]
+
+    def find_paired_device_by_token(self, token: str) -> PairedDevice | None:
+        """以權杖原文查找裝置（含已撤銷；由呼叫端判斷 revoked_at）。"""
+        row = self.conn.execute(
+            "SELECT * FROM paired_devices WHERE token_hash = ?",
+            (pairing.hash_device_token(token),),
+        ).fetchone()
+        return PairedDevice.from_row(row) if row else None
+
+    def touch_paired_device(self, device_id: str, *, interval_seconds: int = 60) -> None:
+        """更新 last_seen_at（節流：間隔內不重複寫入，避免每個請求一次寫入）。"""
+        cutoff = (
+            datetime.now() - timedelta(seconds=int(interval_seconds))
+        ).isoformat(timespec="seconds")
+        self.conn.execute(
+            "UPDATE paired_devices SET last_seen_at = ?"
+            " WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)",
+            (db.now(), device_id, cutoff),
+        )
 
     def revoke_paired_device(self, device_id: str, *, actor: str = "user") -> PairedDevice:
         with db.transaction(self.conn):
@@ -1768,32 +1847,6 @@ class Repository:
                 payload=_snapshot(device),
             )
             return after
-
-    def update_paired_device_last_seen(self, device_id: str) -> None:
-        """更新裝置最後活躍時間。"""
-        self.conn.execute(
-            "UPDATE paired_devices SET last_seen_at = ? WHERE id = ? AND revoked_at IS NULL",
-            (db.now(), device_id),
-        )
-
-    def get_paired_device_by_token(self, access_token: str) -> PairedDevice | None:
-        """透過存取權杖查找裝置（用於 API 驗證）。
-
-        為了安全，資料庫不直接存 access_token，而是存 public_key。
-        access_token 是配對時一次性發給手機的，手機後續請求帶上 access_token。
-        這裡為了簡單實作，在配對時同時存 access_token 到 schema_meta，
-        key 格式：device_token:{access_token} -> device_id
-        """
-        row = self.conn.execute(
-            "SELECT value FROM schema_meta WHERE key = ?", (f"device_token:{access_token}",)
-        ).fetchone()
-        if not row:
-            return None
-        device_id = row["value"]
-        try:
-            return self.get_paired_device(device_id)
-        except NotFoundError:
-            return None
 
     # ------------------------------------------------------------------
     # 內部檢查

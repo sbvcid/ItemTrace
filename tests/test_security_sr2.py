@@ -34,10 +34,12 @@ TEST_HEADERS = {"X-Requested-With": "ItemTrace"}
 
 
 def _client_for(app_config, **kwargs):
+    """模擬電腦本機瀏覽器的 TestClient（loopback ＝ admin）。"""
     from fastapi.testclient import TestClient
 
     from shop.api import create_app
 
+    kwargs.setdefault("client", ("127.0.0.1", 50000))
     return TestClient(
         create_app(app_config), base_url="http://localhost", headers=TEST_HEADERS, **kwargs
     )

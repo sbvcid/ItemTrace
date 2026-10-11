@@ -1,8 +1,6 @@
-"""SR-1 安全防護：Host／Origin 驗證與變更端點標頭（SECURITY-AUDIT F1/F3）。
+"""安全防護：Host／Origin／CSRF 檢查與連線身分授權（三層模型）。
 
-信任模型：這是本機桌面應用，沒有登入系統。這一層防的不是「區網上的直接
-用戶端」（那由 F5 的綁定 opt-in 與『信任區網』文件說明），而是**瀏覽器替
-攻擊者送出的請求**：
+第一層是既有的瀏覽器攻擊防護（SECURITY-AUDIT F1/F3）：
 
 1. **DNS rebinding**（F1）：惡意網頁把網域 rebind 到 127.0.0.1 後，瀏覽器
    送出的請求 Host 是攻擊者的網域 —— 這裡用 Host 白名單擋掉。
@@ -15,8 +13,19 @@
    **缺少 Origin 不單獨構成信任** —— 非瀏覽器請求仍要通過 Host 檢查，
    變更類還要帶標頭。
 
-`X-Requested-With` 的檢查是「不變式」：同源瀏覽器前端會帶、外部攻擊網頁
-在沒有 CORS 的情況下無法帶。
+第二層是**連線身分授權**（手機配對，見 shop/pairing.py）。服務預設綁定
+區網，但授權分三級：
+
+    admin    電腦本機（loopback）連線 —— 完整資料存取＋配對管理
+             （產生 QR Code、列出／撤銷裝置）。
+    device   已配對裝置（有效且未撤銷的裝置權杖；Authorization: Bearer
+             或 HttpOnly cookie）—— 完整資料存取，不含配對管理。
+    unpaired 區網上的其他連線 —— 只能載入前端殼、配對頁與完成配對所需的
+             最小端點（claim／session／health）。
+
+未配對連線**不會**因為「GET 是安全方法」「Host 檢查通過」或「帶了 CSRF
+標頭」而取得任何資料存取權。`X-Requested-With` 的檢查是不變式；授權
+判定看的是 socket 對端位址與裝置憑證，兩者都不是請求方可偽造的字串。
 """
 
 from __future__ import annotations
@@ -28,6 +37,9 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+
+from . import db, pairing
+from .repo import Repository
 
 #: 瀏覽器變更類請求必須帶的自訂標頭（值固定）。
 CLIENT_HEADER = "X-Requested-With"
@@ -73,7 +85,7 @@ def host_port(header_value: str) -> int:
 
 
 def is_loopback_bind_host(host: str) -> bool:
-    """綁定位址是否為 loopback（供 serve.py 的 opt-in 判斷）。"""
+    """綁定位址是否為 loopback（serve.py 用來判斷手機是否連得到）。"""
     value = (host or "").strip()
     if value.lower() == "localhost":
         return True
@@ -83,24 +95,14 @@ def is_loopback_bind_host(host: str) -> bool:
         return False
 
 
-def require_lan_opt_in(config, host: str) -> bool:
-    """非 loopback 綁定且未設 allow_lan → 應該拒絕啟動（SR-1／F5）。
-
-    沒有登入機制的服務不無聲開放區網；要開放必須是 config.json 的
-    明示選擇。
-    """
-    return (not is_loopback_bind_host(host)) and not bool(
-        getattr(config, "allow_lan", False)
-    )
-
-
 def build_allowed_hosts(cfg) -> frozenset[str]:
     """建立 Host 白名單。
 
     - 一律允許：`localhost`、`127.0.0.1`、`::1`。
     - `server_host` 是具體位址時允許該位址。
-    - `server_host` 是 0.0.0.0／:: 時（區網 opt-in），以本機介面位址與
-      主機名盡力補齊；打不到想要的別名時用 config 的 `allowed_hosts` 補。
+    - `server_host` 是 0.0.0.0／:: 時（預設值；手機配對需要），以本機介面
+      位址、主機名與 shop.pairing 偵測到的區網位址盡力補齊；打不到的
+      別名用 config 的 `allowed_hosts` 補。
     - `allowed_hosts` 設定的項目一律併入。
     """
     hosts = {"localhost", "127.0.0.1", "::1"}
@@ -113,6 +115,8 @@ def build_allowed_hosts(cfg) -> frozenset[str]:
             hosts.update(ip.strip().lower() for ip in ips if ip.strip())
         except OSError:
             pass
+        # 手機掃 QR Code 時連的是偵測到的區網 IP，必須在白名單內。
+        hosts.update(ip.lower() for ip in pairing.local_ipv4_addresses())
     else:
         hosts.add(host)
     hosts.update(
@@ -189,196 +193,151 @@ def enforce_ai_quota(request: Request) -> None:
 
 
 # ----------------------------------------------------------------------
-# 手機配對裝置認證
+# 連線身分與授權（三層模型；流程與安全模型見 shop/pairing.py）
 # ----------------------------------------------------------------------
-#
-# 已配對的手機裝置使用 access_token 進行認證。
-# Authorization: Bearer <access_token>
-# 伺服器查找 token 對應的 paired_device，檢查是否存在且未撤銷。
-# 這層認證在 Host/Origin/CSRF 防護**之後**進行，所以配對裝置
-# 同樣受到既有安全防護（但不需要 CSRF 標頭，因為有 Bearer token）。
 
-from fastapi import HTTPException, Request
-from starlette.responses import JSONResponse
+SESSION_ADMIN = "admin"
+SESSION_DEVICE = "device"
+SESSION_UNPAIRED = "unpaired"
 
-from .repo import Repository
+#: 未配對連線仍可存取的最小 API 集合（完成配對與前端啟動判斷所必需）。
+#: /api/health 供連線自我檢查；/api/session 讓前端決定顯示配對引導頁；
+#: /api/pairing/claim 是配對動作本身。
+PUBLIC_API_PATHS = frozenset({"/api/health", "/api/session", "/api/pairing/claim"})
+
+#: 配對管理 API：只有電腦本機（loopback）可以呼叫。
+ADMIN_API_PREFIXES = (
+    "/api/pairing/start",
+    "/api/pairing/devices",
+    "/api/pairing/sessions",
+)
 
 
-PAIRING_AUTH_HEADER = "Authorization"
-BEARER_PREFIX = "Bearer "
+class SessionInfo:
+    """一個請求的授權身分（guard_request 判定後放在 request.state.session）。"""
+
+    __slots__ = ("role", "device_id", "device_name")
+
+    def __init__(
+        self, role: str, device_id: str | None = None, device_name: str | None = None
+    ) -> None:
+        self.role = role
+        self.device_id = device_id
+        self.device_name = device_name
+
+
+def is_loopback_client(request: Request) -> bool:
+    """請求是否來自電腦本機（只看 socket 對端位址，不看任何標頭）。"""
+    client = request.client
+    if client is None or not client.host:
+        return False
+    try:
+        address = ipaddress.ip_address(client.host)
+    except ValueError:
+        # 測試用的 "testclient" 或非 IP 主機名一律視為非本機。
+        return False
+    if address.is_loopback:
+        return True
+    # dual-stack（IPv6 socket）上，本機連線可能呈現為 IPv4-mapped 位址。
+    mapped = getattr(address, "ipv4_mapped", None)
+    return bool(mapped is not None and mapped.is_loopback)
 
 
 def extract_bearer_token(request: Request) -> str | None:
-    """從 Authorization 標頭提取 Bearer token。"""
-    auth = request.headers.get(PAIRING_AUTH_HEADER, "")
-    if auth.startswith(BEARER_PREFIX):
-        return auth[len(BEARER_PREFIX):].strip()
+    """從 Authorization 標頭提取 Bearer 權杖。"""
+    auth = request.headers.get("Authorization", "")
+    prefix = "Bearer "
+    if auth.startswith(prefix):
+        token = auth[len(prefix):].strip()
+        return token or None
     return None
 
 
-def get_paired_device_from_request(request: Request) -> Repository | None:
-    """從請求中獲取配對裝置的 Repository 存取權限。
+def extract_device_cookie(request: Request) -> str | None:
+    """裝置 cookie。
 
-    回傳 Repository 實例（已綁定配對裝置的資料庫連線），
-    若無有效 token 或裝置已撤銷則回傳 None。
-
-    注意：這裡不拋出例外，而是回傳 None 讓呼叫端決定如何處理。
-    API 端點若需要強制配對裝置認證，應檢查回傳值並自行拋 401/403。
+    手機瀏覽器的 ``<img src="/files/...">`` 不會經過 fetch、不會帶
+    Authorization 標頭，所以配對成功時伺服器另外下一個 HttpOnly cookie，
+    讓媒體請求也能通過裝置認證（狀態改變端點另受 CSRF 標頭保護）。
     """
-    token = extract_bearer_token(request)
-    if not token:
-        return None
-
-    # 從 app.state 獲取 config，建立 repo
-    config = getattr(request.app.state, "config", None)
-    if config is None:
-        return None
-
-    # 這裡我們需要一個簡單的方式來驗證 token
-    # 為了不破壞現有的 repo 依賴注入模式，我們在這裡直接查詢
-    from .config import Config
-    from .db import session as db_session
-    from . import db as db_mod
-
-    with db_session(config) as conn:
-        # 查詢 schema_meta 找 device_id
-        row = conn.execute(
-            "SELECT value FROM schema_meta WHERE key = ?", (f"device_token:{token}",)
-        ).fetchone()
-        if not row:
-            return None
-        device_id = row["value"]
-
-        # 查詢 paired_devices 確認存在且未撤銷
-        device_row = conn.execute(
-            "SELECT * FROM paired_devices WHERE id = ? AND revoked_at IS NULL", (device_id,)
-        ).fetchone()
-        if not device_row:
-            return None
-
-        # 更新最後活躍時間
-        conn.execute(
-            "UPDATE paired_devices SET last_seen_at = ? WHERE id = ?",
-            (db_mod.now(), device_id),
-        )
-
-    # 回傳一個特殊的 repo 實例（這裡為了簡單，直接用現有的 get_repo 依賴）
-    # 實際上配對裝置應該有完整存取權，所以不需要特殊的 repo
-    return None  # 實際驗證在依賴中完成
+    value = request.cookies.get(pairing.COOKIE_NAME, "")
+    return value.strip() or None
 
 
-async def require_paired_device(request: Request) -> str:
-    """FastAPI 依賴：要求有效的配對裝置 token。
+def request_device_token(request: Request) -> str | None:
+    return extract_bearer_token(request) or extract_device_cookie(request)
 
-    成功回傳 device_id，失敗拋 401/403。
-    這個依賴用於需要手機配對認證的端點。
+
+def _lookup_device(cfg, token: str):
+    with db.session(cfg) as conn:
+        repo = Repository(conn, cfg)
+        device = repo.find_paired_device_by_token(token)
+        if device is not None:
+            repo.touch_paired_device(device.id)  # 內部有 60 秒節流
+        return device
+
+
+def guard_request(
+    request: Request, cfg, allowed_hosts: frozenset[str]
+) -> Response | None:
+    """單一入口：Host／Origin／CSRF 檢查 ＋ 三層授權。
+
+    回傳 None＝放行（並在 ``request.state.session`` 放入 SessionInfo），
+    否則回傳 JSONResponse。未配對連線只放行 PUBLIC_API_PATHS 與靜態前端；
+    配對管理端點只放行電腦本機；其餘 /api/* 與 /files/* 需要 admin 或
+    有效且未撤銷的裝置權杖。
     """
-    token = extract_bearer_token(request)
-    if not token:
-        raise HTTPException(
-            status_code=401,
-            detail="缺少 Authorization: Bearer <access_token> 標頭",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    config = getattr(request.app.state, "config", None)
-    if config is None:
-        raise HTTPException(status_code=500, detail="伺服器設定錯誤")
-
-    from .db import session as db_session
-    from . import db as db_mod
-
-    with db_session(config) as conn:
-        row = conn.execute(
-            "SELECT value FROM schema_meta WHERE key = ?", (f"device_token:{token}",)
-        ).fetchone()
-        if not row:
-            raise HTTPException(
-                status_code=401,
-                detail="無效的存取權杖",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        device_id = row["value"]
-
-        device_row = conn.execute(
-            "SELECT * FROM paired_devices WHERE id = ? AND revoked_at IS NULL", (device_id,)
-        ).fetchone()
-        if not device_row:
-            raise HTTPException(
-                status_code=403,
-                detail="裝置已被撤銷或不存在",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        conn.execute(
-            "UPDATE paired_devices SET last_seen_at = ? WHERE id = ?",
-            (db_mod.now(), device_id),
-        )
-
-    return device_id
-
-
-def check_request_with_pairing(
-    request: Request, allowed_hosts: frozenset[str], require_pairing: bool = False
-):
-    """擴展的請求檢查：支援配對裝置認證。
-
-    如果 require_pairing=True，則要求有效的配對裝置 token。
-    否則維持原有行為：本機/區網請求通過 Host/Origin/CSRF 檢查。
-
-    配對裝置的請求同樣需通過 Host 檢查（防 DNS rebinding），
-    但免除 CSRF 標頭檢查（因為有 Bearer token 驗證身份）。
-    """
-    # 先做基本的 Host/Origin 檢查（防 DNS rebinding）
     rejection = check_request(request, allowed_hosts)
     if rejection is not None:
         return rejection
 
-    # 如果要求配對認證，檢查 Bearer token
-    if require_pairing:
-        token = extract_bearer_token(request)
-        if not token:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "需要配對裝置認證：請在 Authorization 標頭帶上 Bearer token"},
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+    path = request.url.path
+    if not (path.startswith("/api/") or path.startswith("/files/")):
+        # 前端殼、配對頁與靜態資源：任何連線都可載入（不含任何資料）。
+        return None
 
-        config = getattr(request.app.state, "config", None)
-        if config is None:
-            return JSONResponse(
-                status_code=500,
-                content={"detail": "伺服器設定錯誤"},
-            )
+    admin = is_loopback_client(request)
+    device = None
+    token = None
+    if not admin:
+        token = request_device_token(request)
+        if token:
+            device = _lookup_device(cfg, token)
 
-        from .db import session as db_session
-        from . import db as db_mod
+    valid_device = device is not None and device.revoked_at is None
+    if admin:
+        info = SessionInfo(SESSION_ADMIN)
+    elif valid_device:
+        info = SessionInfo(SESSION_DEVICE, device.id, device.name)
+    else:
+        info = SessionInfo(SESSION_UNPAIRED)
+    request.state.session = info
 
-        with db_session(config) as conn:
-            row = conn.execute(
-                "SELECT value FROM schema_meta WHERE key = ?", (f"device_token:{token}",)
-            ).fetchone()
-            if not row:
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "無效的存取權杖"},
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-            device_id = row["value"]
+    if path in PUBLIC_API_PATHS:
+        return None
 
-            device_row = conn.execute(
-                "SELECT * FROM paired_devices WHERE id = ? AND revoked_at IS NULL", (device_id,)
-            ).fetchone()
-            if not device_row:
-                return JSONResponse(
-                    status_code=403,
-                    content={"detail": "裝置已被撤銷或不存在"},
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
+    if path.startswith(ADMIN_API_PREFIXES) and not admin:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": "配對管理僅限電腦本機操作；請在電腦上開啟 ItemTrace 設定頁"
+            },
+        )
 
-            conn.execute(
-                "UPDATE paired_devices SET last_seen_at = ? WHERE id = ?",
-                (db_mod.now(), device_id),
-            )
+    if admin or valid_device:
+        return None
 
-    return None
+    if token:
+        # 帶了憑證但無效或已撤銷：明確告知授權失效（前端會清除本機權杖）。
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "裝置授權無效或已撤銷；請在電腦上重新配對"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return JSONResponse(
+        status_code=403,
+        content={
+            "detail": "此裝置尚未配對，無法存取 ItemTrace 資料；"
+            "請先在電腦上完成手機配對"
+        },
+    )

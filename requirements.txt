@@ -4,6 +4,10 @@ fastapi>=0.115
 uvicorn>=0.30
 python-multipart>=0.0.9
 
+# 手機配對的 QR Code（shop/pairing.py）。純 Python、無網路、無其他依賴：
+# QR 一律在本機產生，配對碼與網址不會被送往任何第三方服務。
+segno>=1.6
+
 # 列印功能（shop/print_backend.py）。兩者都是軟性依賴：缺任一個，
 # 列印會回 400 並說明原因，其餘功能不受影響。
 # - PyMuPDF：把 Chromium 產生的 PDF 校正成精確 mm 並光柵化。

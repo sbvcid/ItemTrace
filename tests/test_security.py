@@ -20,11 +20,16 @@ TEST_HEADERS = {"X-Requested-With": "ItemTrace"}
 
 
 def _simple_client(app_config, **kwargs):
-    """建立 TestClient（可選擇是否帶標頭）。"""
+    """建立 TestClient（模擬電腦本機瀏覽器；可覆寫 client 位址）。
+
+    三層授權下 loopback ＝ admin，既有 Host／CSRF 測試不變；
+    要模擬未配對的區網裝置請用 client=("192.168.0.149", …)。
+    """
     from fastapi.testclient import TestClient
 
     from shop.api import create_app
 
+    kwargs.setdefault("client", ("127.0.0.1", 50000))
     return TestClient(
         create_app(app_config), base_url="http://localhost", **kwargs
     )
@@ -247,16 +252,21 @@ def test_loopback_bind_host_detection():
     assert not security.is_loopback_bind_host("192.168.1.50")
 
 
-def test_config_defaults_are_loopback_and_lan_requires_opt_in(config):
-    assert config_mod.DEFAULTS["server_host"] == "127.0.0.1"
-    assert config_mod.DEFAULTS["allow_lan"] is False
-    assert config.allow_lan is False
+def test_config_defaults_are_lan_capable_without_manual_opt_in(config):
+    """手機配對需要區網綁定，所以預設 host 是 0.0.0.0；安全靠三層授權
+    （admin／device／unpaired，見 shop/security.py），不再要求 allow_lan。"""
+    assert config_mod.DEFAULTS["server_host"] == "0.0.0.0"
+    assert "allow_lan" not in config_mod.DEFAULTS
+    assert config.server_host == "0.0.0.0"
 
-    assert security.require_lan_opt_in(config, "0.0.0.0") is True
-    assert security.require_lan_opt_in(config, "192.168.1.50") is True
-    assert security.require_lan_opt_in(config, "127.0.0.1") is False
-    lan_ok = dataclasses.replace(config, allow_lan=True)
-    assert security.require_lan_opt_in(lan_ok, "0.0.0.0") is False
+    from serve import resolve_bind_host
+
+    assert resolve_bind_host(config, None) == "0.0.0.0"
+    # 命令列明示覆寫仍優先。
+    assert resolve_bind_host(config, "127.0.0.1") == "127.0.0.1"
+    # 明示只綁 loopback 的設定仍被尊重（手機屆時連不到，serve 會提示）。
+    loopback_only = dataclasses.replace(config, server_host="127.0.0.1")
+    assert security.is_loopback_bind_host(resolve_bind_host(loopback_only, None))
 
 
 # ----------------------------------------------------------------------

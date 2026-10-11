@@ -75,6 +75,7 @@ def init(config: Config) -> bool:
     """建立 schema。回傳 True 代表這是首次建立。"""
     fresh = not config.database.exists()
     with session(config) as conn:
+        _migrate_pairing_tables(conn)
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         conn.execute(
             "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('version', ?)",
@@ -85,6 +86,24 @@ def init(config: Config) -> bool:
             (now(),),
         )
     return fresh
+
+
+def _migrate_pairing_tables(conn: sqlite3.Connection) -> None:
+    """配對表的最小遷移。
+
+    手機配對尚未正式發行，但開發中的資料庫可能已存在舊形狀的
+    paired_devices（公鑰模型）。該表只保存配對憑證、沒有使用者資料，
+    偵測到舊形狀時直接重建 —— 代價是舊裝置需要重新配對，不會動到
+    物品、照片或事件。
+    """
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='paired_devices'"
+    ).fetchone()
+    if row is None:
+        return
+    columns = {info[1] for info in conn.execute("PRAGMA table_info(paired_devices)")}
+    if "token_hash" not in columns:
+        conn.execute("DROP TABLE paired_devices")
 
 
 def version(config: Config) -> str:

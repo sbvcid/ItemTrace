@@ -33,12 +33,13 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, ai_client, ai_config, config as config_mod, db as db_mod, ids
 from . import inbox as inbox_mod
 from . import limits
+from . import pairing
 from . import photos as photos_mod
 from . import print_backend as print_backend_mod
 from . import template_renderer as template_renderer_mod
@@ -53,7 +54,7 @@ from .errors import (
 )
 from . import evidence as evidence_mod
 from . import security
-from .models import Identifier, Item, Observation, PairedDevice, Photo
+from .models import Identifier, Item, Observation, Photo
 from .repo import Repository
 from .settings import router as settings_router
 from .schemas import (
@@ -84,14 +85,16 @@ from .schemas import (
     ObservationOut,
     ObservationPatch,
     PairedDeviceOut,
+    PairingClaimOut,
+    PairingClaimRequest,
+    PairingSessionStatusOut,
     PairingStartOut,
-    PairingVerifyOut,
-    PairingVerifyRequest,
     PhotoOut,
     PhotoPatch,
     PhotoSkipped,
     PhotoUploadResult,
     PrinterOut,
+    SessionOut,
     SkippedFile,
     StatsOut,
     SuggestionCreate,
@@ -232,54 +235,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         cfg.analyze_per_minute, limits.ANALYZE_WINDOW_SECONDS
     )
 
-    # SR-1（SECURITY-AUDIT F1/F3）：Host／Origin 驗證＋變更端點自訂標頭；
-    # 回應統一套上 nosniff／Referrer-Policy，HTML 另加 CSP 與 frame 保護。
+    # 守門層：Host／Origin／CSRF 檢查 ＋ 三層授權（admin／device／unpaired；
+    # 見 shop/security.py 與 shop/pairing.py）。配對管理只放行電腦本機，
+    # 未配對的區網連線只能載入配對頁與完成配對所需的最小端點。
     allowed_hosts = security.build_allowed_hosts(cfg)
 
     @app.middleware("http")
     async def _security_guard(request: Request, call_next):
-        # 配對裝置端點不需要配對認證
-        path = request.url.path
-        is_pairing_endpoint = path.startswith("/api/pairing/")
-
-        # 檢查是否為配對裝置請求
-        paired_device_id = None
-        if not is_pairing_endpoint and path.startswith("/api/"):
-            token = security.extract_bearer_token(request)
-            if token:
-                from .db import session as db_session
-                from . import db as db_mod
-                with db_session(cfg) as conn:
-                    row = conn.execute(
-                        "SELECT value FROM schema_meta WHERE key = ?", (f"device_token:{token}",)
-                    ).fetchone()
-                    if row:
-                        device_id = row["value"]
-                        device_row = conn.execute(
-                            "SELECT * FROM paired_devices WHERE id = ? AND revoked_at IS NULL", (device_id,)
-                        ).fetchone()
-                        if device_row:
-                            paired_device_id = device_id
-                            conn.execute(
-                                "UPDATE paired_devices SET last_seen_at = ? WHERE id = ?",
-                                (db_mod.now(), device_id),
-                            )
-
-        # 如果是配對裝置，允許通過（但仍需通過 Host 檢查防 DNS rebinding）
-        if paired_device_id:
-            # 配對裝置同樣需通過 Host 檢查
-            rejection = security.check_request(request, allowed_hosts)
-            if rejection is not None:
-                return rejection
-            # 配對裝置免除 CSRF 標頭檢查（Bearer token 已驗證身份）
-            # 將 device_id 存入 request.state 供端點使用
-            request.state.paired_device_id = paired_device_id
-        else:
-            # 非配對裝置：原有邏輯
-            rejection = security.check_request(request, allowed_hosts)
-            if rejection is not None:
-                return rejection
-
+        rejection = security.guard_request(request, cfg, allowed_hosts)
+        if rejection is not None:
+            return rejection
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -1416,102 +1381,184 @@ def stats(repo: Repo, limit: Annotated[int, Query(ge=1, le=200)] = 10) -> StatsO
     )
 
 
+@router.get("/api/session", response_model=SessionOut, tags=["system"])
+def session_info(request: Request) -> SessionOut:
+    """本連線的身分：admin（電腦本機）| device（已配對）| unpaired（其他）。
+
+    前端啟動時據此決定顯示 App 或配對引導頁；此端點不需要憑證
+    （回應不含任何私人資料）。
+    """
+    info = getattr(request.state, "session", None)
+    if info is None:
+        return SessionOut(role=security.SESSION_UNPAIRED)
+    return SessionOut(
+        role=info.role, device_id=info.device_id, device_name=info.device_name
+    )
+
+
 # ----------------------------------------------------------------------
 # 手機配對
 # ----------------------------------------------------------------------
 #
-# 配對流程：
-# 1. 電腦端點選「連結手機」→ POST /api/pairing/start
-#    回傳 pairing_code、server_url、expires_at、qr_data
-#    前端將 qr_data 顯示為 QR Code
-# 2. 手機掃描 QR Code → 生成 Ed25519 密鑰對
-#    用私鑰簽名 challenge → POST /api/pairing/verify
-#    回傳 device_id、access_token
-# 3. 手機後續請求帶上 Authorization: Bearer <access_token>
-#    伺服器驗證 token 對應的 paired_device 且未撤銷
-# 4. 電腦端可查看已配對裝置 GET /api/pairing/devices
-#    可撤銷裝置 DELETE /api/pairing/devices/{device_id}
+# 完整流程與安全模型見 shop/pairing.py 的 module docstring。摘要：
 #
-# 安全性：
-# - 配對碼 6 位數字，5 分鐘過期，防暴力破解
-# - Ed25519 簽名驗證，私鑰永不離開手機
-# - access_token 32 字節 URL-safe，足夠熵值
-# - 已撤銷裝置無法存取任何 API
-# - 維持既有 Host/Origin/CSRF 防護：手機請求同樣需帶
-#   X-Requested-With: ItemTrace 標頭
+# 1. 電腦（loopback）POST /api/pairing/start → 短效一次性工作階段
+# 2. 電腦顯示 QR：GET /api/pairing/sessions/{id}/qr.svg（本機 segno 產生）
+# 3. 手機掃描 → 開啟 /pair?id=…&code=… → POST /api/pairing/claim
+#    → 發給裝置權杖（只存雜湊）並下 HttpOnly cookie
+# 4. 手機之後的請求：fetch 帶 Authorization: Bearer（web/core/api.js
+#    自動附加）；<img src="/files/…"> 靠 cookie
+# 5. 電腦：GET /api/pairing/sessions/{id}（輪詢）、GET /api/pairing/devices、
+#    DELETE /api/pairing/devices/{id}（撤銷）
+#
+# 授權：配對管理端點只放行電腦本機；claim 是未配對連線唯一可用的寫入
+# 端點；其餘資料／照片端點都需要 admin 或有效裝置權杖（shop/security.py
+# 的三層模型）。
+
+
+def _pairing_local_host(cfg: Config) -> str:
+    """配對網址要用的主機位址（手機必須連得到）。
+
+    - server_host 是具體位址 → 直接使用（loopback 除外：手機連不到，
+      給出可操作的錯誤訊息）。
+    - server_host 是 0.0.0.0／:: → 用 shop.pairing 偵測到的第一個
+      區網 IPv4；偵測不到（電腦沒連網）也給出明確原因。
+    """
+    host = (cfg.server_host or "").strip()
+    if host and host not in ("0.0.0.0", "::"):
+        if security.is_loopback_bind_host(host):
+            raise ValidationError(
+                f"伺服器目前只監聽本機（server_host={host}），手機無法連線；"
+                '請移除 config.json 的 server_host 或設為 "0.0.0.0" 後重新啟動'
+            )
+        return host
+    addresses = pairing.local_ipv4_addresses()
+    if not addresses:
+        raise ValidationError(
+            "找不到可用的區網位址（電腦目前沒有區網連線？）；"
+            "請確認電腦已連上與手機相同的 Wi-Fi／網路後重試"
+        )
+    return addresses[0]
+
+
+def _pairing_status(repo: Repo, session_id: str) -> PairingSessionStatusOut:
+    session = repo.get_pairing_session(session_id)
+    if session is None:
+        raise NotFoundError(f"配對工作階段不存在：{session_id}")
+    device_name = None
+    if session.claimed_device_id:
+        try:
+            device_name = repo.get_paired_device(session.claimed_device_id).name
+        except NotFoundError:
+            device_name = None
+    return PairingSessionStatusOut(
+        session_id=session.id,
+        claimed=session.claimed_at is not None,
+        device_id=session.claimed_device_id,
+        device_name=device_name,
+        expires_at=session.expires_at,
+    )
 
 
 @router.post("/api/pairing/start", response_model=PairingStartOut, tags=["pairing"])
 def start_pairing(
     repo: Repo,
     cfg: Annotated[Config, Depends(get_config)],
-    request: Request,
 ) -> PairingStartOut:
-    """啟動手機配對會話。
+    """啟動手機配對工作階段（僅限電腦本機，由守門層強制）。
 
-    回傳給前端顯示 QR Code 所需的資料：
-    - pairing_code: 6 位數字配對碼
-    - server_url: 伺服器完整 URL（含 scheme、host、port）
-    - expires_at: 過期時間（ISO 8601）
-    - qr_data: 給 QR Code 掃描的完整資料（JSON 字串）
+    `pairing_url` 是 QR Code 的內容：手機瀏覽器可直接開啟的網址，不是
+    只能顯示的文字 JSON。配對碼 5 分鐘內有效、只能成功使用一次。
     """
-    pairing_code, challenge, expires_at = repo.create_pairing_session()
-
-    # 取得伺服器 URL：優先用請求的 host，否則用 config
-    host = request.headers.get("host", f"{cfg.server_host}:{cfg.server_port}")
-    scheme = "https" if request.url.scheme == "https" else "http"
-    server_url = f"{scheme}://{host}"
-
-    import json
-    qr_data = json.dumps({
-        "pairing_code": pairing_code,
-        "server_url": server_url,
-        "challenge": challenge,
-    }, separators=(",", ":"))
-
+    host = _pairing_local_host(cfg)
+    template = pairing.build_pairing_url(
+        host, cfg.server_port, "{session_id}", "{code}"
+    )
+    session_id, code, expires_at = repo.create_pairing_session(template)
+    session = repo.get_pairing_session(session_id)
     return PairingStartOut(
-        pairing_code=pairing_code,
-        server_url=server_url,
+        session_id=session_id,
+        code=code,
+        pairing_url=session.pairing_url if session else "",
         expires_at=expires_at,
-        qr_data=qr_data,
     )
 
 
-@router.post("/api/pairing/verify", response_model=PairingVerifyOut, tags=["pairing"])
-def verify_pairing(
-    body: PairingVerifyRequest,
-    repo: Repo,
-) -> PairingVerifyOut:
-    """驗證手機配對。
+@router.get(
+    "/api/pairing/sessions/{session_id}",
+    response_model=PairingSessionStatusOut,
+    tags=["pairing"],
+)
+def pairing_session_status(session_id: str, repo: Repo) -> PairingSessionStatusOut:
+    """電腦端輪詢：配對工作階段是否已被手機認領（僅限電腦本機）。"""
+    return _pairing_status(repo, session_id)
 
-    手機掃描 QR Code 後，生成 Ed25519 密鑰對，用私鑰簽名 challenge，
-    送回 public_key、signature、device_name。
-    成功回傳 device_id 與 access_token。
+
+@router.get("/api/pairing/sessions/{session_id}/qr.svg", tags=["pairing"])
+def pairing_session_qr(session_id: str, repo: Repo) -> Response:
+    """在本機產生 QR Code（segno；沒有任何外部服務）。
+
+    QR 內容為該工作階段的配對網址；配對碼與網址不會被送往第三方。
     """
-    result = repo.verify_pairing_session(
-        body.pairing_code,
-        body.public_key,
-        body.signature,
-        body.device_name,
+    session = repo.get_pairing_session(session_id)
+    if session is None:
+        raise NotFoundError(f"配對工作階段不存在：{session_id}")
+    try:
+        svg = pairing.render_qr_svg(session.pairing_url)
+    except ImportError:
+        raise ValidationError(
+            "QR Code 需要 segno 套件；請執行 pip install -r requirements.txt"
+        ) from None
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "no-store"},
     )
-    if result is None:
-        raise ValidationError("配對碼無效、已過期或簽名驗證失敗")
-    device_id, access_token = result
-    return PairingVerifyOut(device_id=device_id, access_token=access_token)
+
+
+@router.post("/api/pairing/claim", response_model=PairingClaimOut, tags=["pairing"])
+def claim_pairing(
+    body: PairingClaimRequest,
+    repo: Repo,
+    response: Response,
+) -> PairingClaimOut:
+    """手機端認領配對（未配對連線唯一可用的寫入端點）。
+
+    驗證失敗（碼錯誤／過期／已使用／嘗試過多）回 400／409 並附可操作的
+    說明。成功時：發給裝置權杖（伺服器只存 SHA-256 雜湊），並對手機下
+    一個 HttpOnly cookie —— 手機的 ``<img src="/files/…">`` 不經過 fetch、
+    不會帶 Authorization 標頭，需要 cookie 才能通過媒體認證。
+    """
+    device_id, name, token = repo.claim_pairing_session(
+        body.session_id, body.code, body.device_name
+    )
+    response.set_cookie(
+        key=pairing.COOKIE_NAME,
+        value=token,
+        max_age=pairing.COOKIE_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+    return PairingClaimOut(device_id=device_id, device_name=name, token=token)
 
 
 @router.get("/api/pairing/devices", response_model=list[PairedDeviceOut], tags=["pairing"])
 def list_paired_devices(repo: Repo) -> list[PairedDeviceOut]:
-    """列出所有已配對裝置（含已撤銷）。"""
+    """列出已配對裝置（含已撤銷；僅限電腦本機）。
+
+    回應不含權杖或雜湊 —— 只給使用者看得懂的名稱與時間。
+    """
     devices = repo.list_paired_devices(include_revoked=True)
     return [to_out(device) for device in devices]
 
 
 @router.delete("/api/pairing/devices/{device_id}", status_code=204, tags=["pairing"])
 def revoke_paired_device(device_id: str, repo: Repo) -> None:
-    """撤銷已配對裝置。
+    """撤銷已配對裝置（僅限電腦本機）。
 
-    撤銷後該裝置無法再存取任何 API。冪等：重複撤銷不報錯。
+    撤銷後該裝置的權杖（含 cookie）立即失效，無法再存取任何私人 API。
+    冪等：重複撤銷不報錯。
     """
     repo.revoke_paired_device(device_id)
 

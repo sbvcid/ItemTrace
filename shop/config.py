@@ -19,10 +19,13 @@ DEFAULTS = {
     "database": "catalog.db",
     "backup_dir": "backups",
     "backup_keep": 30,
-    "server_host": "127.0.0.1",
+    # 手機配對需要區網連線，所以預設綁定所有介面（0.0.0.0）。
+    # 這不等於開放資料：未配對的區網裝置只能載入配對頁與完成配對所需的
+    # 端點，資料 API 需要電腦本機（loopback）或已配對裝置的權杖
+    # （三層模型見 shop/security.py）。要只限本機使用可明示設為
+    # "server_host": "127.0.0.1" —— 但手機將無法連線。
+    "server_host": "0.0.0.0",
     "server_port": 8731,
-    # SR-1（SECURITY-AUDIT F5）：沒有登入機制，開放區網必須是明示的選擇。
-    "allow_lan": False,
     # SR-1（F1）：Host 白名單的補充項（例如自訂主機名）；loopback 與
     # 綁定位址一律自動允許。
     "allowed_hosts": [],
@@ -51,7 +54,6 @@ class Config:
     backup_keep: int
     server_host: str
     server_port: int
-    allow_lan: bool = False
     allowed_hosts: tuple[str, ...] = ()
     enable_docs: bool = False
     max_request_bytes: int = limits.MAX_REQUEST_BYTES
@@ -122,7 +124,6 @@ def load(base_dir: Path | None = None) -> Config:
         backup_keep=int(raw["backup_keep"]),
         server_host=str(raw["server_host"]),
         server_port=int(raw["server_port"]),
-        allow_lan=bool(raw.get("allow_lan", False)),
         allowed_hosts=tuple(
             str(item).strip()
             for item in (raw.get("allowed_hosts") or [])

@@ -2,20 +2,82 @@
  * ItemTrace V3 API Client
  *
  * Lightweight Fetch wrapper for communicating with the backend.
+ *
+ * 裝置授權（手機配對）：配對成功後權杖存在 localStorage，之後**每個**
+ * API 呼叫都自動附加 `Authorization: Bearer`，使用者不需要手動貼上。
+ * 另外伺服器會下一個 HttpOnly cookie，讓 `<img src="/files/…">` 這類
+ * 不經過 fetch 的媒體請求也能通過認證。
+ * 收到 401（權杖失效或已撤銷）時自動清除本機權杖 —— 下次載入會回到
+ * 配對引導頁。
  */
+
+const DEVICE_TOKEN_KEY = 'itemtrace.device.token';
+const DEVICE_ID_KEY = 'itemtrace.device.id';
+const DEVICE_NAME_KEY = 'itemtrace.device.name';
+
+function readStorage(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeStorage(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (_) {
+    // 私密瀏覽等情況下 localStorage 可能不可用：不致命，cookie 仍可運作。
+  }
+}
+
+function removeStorage(key) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch (_) {
+    // 同上。
+  }
+}
+
+export function getDeviceToken() {
+  return readStorage(DEVICE_TOKEN_KEY);
+}
+
+export function storeDeviceSession({ token, deviceId = '', deviceName = '' } = {}) {
+  if (token) writeStorage(DEVICE_TOKEN_KEY, token);
+  if (deviceId) writeStorage(DEVICE_ID_KEY, deviceId);
+  if (deviceName) writeStorage(DEVICE_NAME_KEY, deviceName);
+}
+
+export function clearDeviceSession() {
+  removeStorage(DEVICE_TOKEN_KEY);
+  removeStorage(DEVICE_ID_KEY);
+  removeStorage(DEVICE_NAME_KEY);
+}
+
+function deviceAuthHeaders() {
+  const token = getDeviceToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 async function request(path, options = {}) {
   const url = path.startsWith('/') ? path : `/${path}`;
   // SR-1（F3）：所有請求統一套上自訂標頭。變更類請求在後端據此擋掉
   // 跨站「簡單請求」——外部網頁要帶自訂標頭就得先過 CORS preflight，
   // 而本服務沒有 CORS。
+  // 裝置權杖（若有）自動附加：已配對手機不必手動貼上 token。
   const headers = {
     'X-Requested-With': 'ItemTrace',
+    ...deviceAuthHeaders(),
     ...(options.headers || {}),
   };
   const response = await fetch(url, { ...options, headers });
 
   if (!response.ok) {
+    // 權杖無效或已被撤銷：清除本機憑證，讓下次載入回到配對引導。
+    if (response.status === 401) {
+      clearDeviceSession();
+    }
     let errorDetail = `HTTP ${response.status}`;
     try {
       const data = await response.json();
@@ -212,10 +274,19 @@ export const api = {
   },
 
   // Phone Pairing
+  // 電腦端（管理操作；伺服器只接受 loopback 呼叫）
+  async getSession() {
+    return request('/api/session');
+  },
+
   async startPairing() {
     return request('/api/pairing/start', {
       method: 'POST',
     });
+  },
+
+  async pairingStatus(sessionId) {
+    return request(`/api/pairing/sessions/${encodeURIComponent(sessionId)}`);
   },
 
   async listPairedDevices() {
@@ -223,8 +294,21 @@ export const api = {
   },
 
   async revokePairedDevice(deviceId) {
-    return request(`/api/pairing/devices/${deviceId}`, {
+    return request(`/api/pairing/devices/${encodeURIComponent(deviceId)}`, {
       method: 'DELETE',
+    });
+  },
+
+  // 手機端：用 QR Code 網址帶來的 id + code 完成配對（未配對裝置允許）。
+  async claimPairing(sessionId, code, deviceName = '') {
+    return request('/api/pairing/claim', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        code,
+        device_name: deviceName,
+      }),
     });
   },
 };

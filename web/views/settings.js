@@ -97,6 +97,8 @@ export async function createSettingsView(params, router) {
             <div id="pairing-qr-code" style="display: inline-block; padding: 16px; background: white; border: 1px solid var(--border-default); border-radius: var(--radius-md);"></div>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 12px; font-family: var(--font-mono);" id="pairing-code-display"></p>
             <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;" id="pairing-expires"></p>
+            <p style="font-size: 0.72rem; color: var(--text-muted); margin-top: 10px; word-break: break-all; font-family: var(--font-mono);" id="pairing-url-display"></p>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">${t('settings.pairingManualHint')}</p>
             <button type="button" class="btn-secondary" id="btn-cancel-pairing" style="margin-top: 16px;">${t('settings.pairingCancel')}</button>
           </div>
 
@@ -153,6 +155,7 @@ export async function createSettingsView(params, router) {
   const pairingQrCode = el.querySelector('#pairing-qr-code');
   const pairingCodeDisplay = el.querySelector('#pairing-code-display');
   const pairingExpires = el.querySelector('#pairing-expires');
+  const pairingUrlDisplay = el.querySelector('#pairing-url-display');
   const pairedDevicesSection = el.querySelector('#paired-devices-section');
   const pairedDevicesList = el.querySelector('#paired-devices-list');
   const pairedDevicesEmpty = el.querySelector('#paired-devices-empty');
@@ -312,12 +315,18 @@ export async function createSettingsView(params, router) {
     return div.innerHTML;
   }
 
-  function generateQRCode(text) {
-    // Simple QR code generation using a small library or API
-    // For now, use a simple ASCII representation or Google Charts API
-    // In production, you'd want a proper QR code library
-    const size = 200;
-    return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}`;
+  function stopPairingPoll() {
+    if (pairingPollInterval) {
+      clearInterval(pairingPollInterval);
+      pairingPollInterval = null;
+    }
+  }
+
+  function hidePairingQr() {
+    pairingQrContainer.style.display = 'none';
+    pairingStartContainer.style.display = 'block';
+    btnStartPairing.disabled = false;
+    btnStartPairing.textContent = t('settings.pairingStartBtn');
   }
 
   async function startPairing() {
@@ -326,40 +335,39 @@ export async function createSettingsView(params, router) {
 
     try {
       const result = await api.startPairing();
-      // Show QR code
-      pairingQrCode.innerHTML = `<img src="${generateQRCode(result.qr_data)}" alt="QR Code" style="width: 200px; height: 200px;">`;
-      pairingCodeDisplay.textContent = `${t('settings.pairingCodeLabel')}: ${result.pairing_code}`;
+      // QR Code 由後端在本機產生（segno）：不經過任何外部 QR 服務，
+      // 配對碼與網址只留在電腦與手機之間。
+      pairingQrCode.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = `/api/pairing/sessions/${encodeURIComponent(result.session_id)}/qr.svg`;
+      img.alt = t('settings.pairingScanTitle');
+      img.width = 200;
+      img.height = 200;
+      pairingQrCode.appendChild(img);
+      pairingCodeDisplay.textContent = `${t('settings.pairingCodeLabel')}: ${result.code}`;
       pairingExpires.textContent = `${t('settings.pairingExpiresLabel')}: ${formatDate(result.expires_at)}`;
+      pairingUrlDisplay.textContent = result.pairing_url;
       pairingStartContainer.style.display = 'none';
       pairingQrContainer.style.display = 'block';
 
-      // Poll for pairing completion
+      // 輪詢工作階段狀態：手機完成 claim 時立刻顯示成功。
       pairingPollInterval = setInterval(async () => {
         try {
-          // Check if pairing is complete by trying to list devices
-          // The pairing is complete when the device appears in the list
-          const devices = await api.listPairedDevices();
-          // Look for a device created recently (within last 30 seconds)
-          const now = Date.now();
-          const newDevice = devices.find(d => {
-            const created = new Date(d.created_at).getTime();
-            return (now - created) < 30000 && !d.revoked_at;
-          });
-          if (newDevice) {
-            clearInterval(pairingPollInterval);
-            pairingPollInterval = null;
-            pairingQrContainer.style.display = 'none';
-            pairingStartContainer.style.display = 'block';
-            btnStartPairing.disabled = false;
-            btnStartPairing.textContent = t('settings.pairingStartBtn');
+          const status = await api.pairingStatus(result.session_id);
+          if (status.claimed) {
+            stopPairingPoll();
+            hidePairingQr();
             showToast(t('settings.pairingSuccess'));
             loadPairedDevices();
           }
         } catch (err) {
-          // Ignore polling errors
+          // 工作階段已被清除（404）：停止輪詢，回到初始狀態。
+          if (err.status === 404) {
+            stopPairingPoll();
+            hidePairingQr();
+          }
         }
       }, 2000);
-
     } catch (err) {
       showToast(`${err.message}`);
       btnStartPairing.disabled = false;
@@ -370,14 +378,8 @@ export async function createSettingsView(params, router) {
   btnStartPairing.addEventListener('click', startPairing);
 
   btnCancelPairing.addEventListener('click', () => {
-    if (pairingPollInterval) {
-      clearInterval(pairingPollInterval);
-      pairingPollInterval = null;
-    }
-    pairingQrContainer.style.display = 'none';
-    pairingStartContainer.style.display = 'block';
-    btnStartPairing.disabled = false;
-    btnStartPairing.textContent = t('settings.pairingStartBtn');
+    stopPairingPoll();
+    hidePairingQr();
   });
 
   loadSettings();
@@ -387,9 +389,7 @@ export async function createSettingsView(params, router) {
   return {
     element: el,
     destroy() {
-      if (pairingPollInterval) {
-        clearInterval(pairingPollInterval);
-      }
+      stopPairingPoll();
     },
   };
 }

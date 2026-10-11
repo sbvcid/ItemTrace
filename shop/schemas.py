@@ -453,9 +453,9 @@ class AiSettingsOut(BaseModel):
     presets: dict[str, str]
     #: 請求是否來自本機 loopback（只用於顯示提示）。
     is_loopback: bool
-    #: 任何能連到這台 server 的裝置都能改設定 —— 這台 server
-    #: 刻意只服務受信任區網，信任模型與「區網可讀寫所有商品
-    #: 資料」一致（見 shop/settings.py 的 docstring）。
+    #: 能存取這個端點的（電腦本機或已配對裝置）都能改設定 ——
+    #: 未配對的區網裝置在守門層就被 403，不會走到這裡
+    #: （三層模型見 shop/security.py；配對流程見 shop/pairing.py）。
     can_edit: bool
     #: 僅供使用者知道設定存在哪，不是秘密。
     config_file: str
@@ -540,47 +540,67 @@ def to_outs(rows: list[Any]) -> list[Any]:
 
 
 class PairedDeviceOut(_Out):
+    """已配對裝置的公開欄位。
+
+    刻意沒有 token_hash：裝置憑證的雜湊也不對外暴露。
+    """
     id: str
     name: str
-    public_key: str
     created_at: str
     last_seen_at: str | None
     revoked_at: str | None
 
 
 class PairingStartOut(BaseModel):
-    """POST /api/pairing/start 的回應。
+    """POST /api/pairing/start 的回應（僅限電腦本機的管理操作）。
 
-    包含給手機掃描的 QR Code 資料：配對碼、伺服器 URL、過期時間。
+    包含給手機掃描的資訊：一次性配對碼、可直接開啟的配對網址與過期時間。
+    QR Code 由 `GET /api/pairing/sessions/{id}/qr.svg` 在本機產生。
     """
-    pairing_code: str
-    server_url: str
+    session_id: str
+    code: str
+    pairing_url: str
     expires_at: str
-    qr_data: str
 
 
-class PairingVerifyRequest(BaseModel):
-    """POST /api/pairing/verify 的請求。
+class PairingSessionStatusOut(BaseModel):
+    """GET /api/pairing/sessions/{id}：電腦端輪詢配對是否完成。"""
+    session_id: str
+    claimed: bool
+    device_id: str | None = None
+    device_name: str | None = None
+    expires_at: str
 
-    手機掃描 QR Code 後，用私鑰簽名挑戰碼並送回公鑰與簽名。
+
+class PairingClaimRequest(BaseModel):
+    """POST /api/pairing/claim 的請求（手機端，未配對時唯一可用的端點之一）。
+
+    手機從 QR Code 的 URL 取得 id 與 code，直接送回；不需要（也無法在
+    HTTP 區網使用）瀏覽器端密碼學 —— 見 shop/pairing.py 的說明。
     """
-    pairing_code: str
-    public_key: str
-    signature: str
+    session_id: str
+    code: str
     device_name: str = ""
 
 
-class PairingVerifyOut(BaseModel):
-    """POST /api/pairing/verify 的回應。
+class PairingClaimOut(BaseModel):
+    """POST /api/pairing/claim 的回應。
 
-    配對成功後回傳裝置 ID 與存取權杖（給手機後續請求用）。
+    `token` 是裝置權杖原文，只在此回應出現一次；伺服器只保存雜湊。
     """
     device_id: str
-    access_token: str
+    device_name: str
+    token: str
 
 
-class PairingRevokeRequest(BaseModel):
-    device_id: str
+class SessionOut(BaseModel):
+    """GET /api/session：本連線的身分（前端啟動時決定顯示什麼）。
+
+    role: admin（電腦本機）| device（已配對手機）| unpaired（其他裝置）
+    """
+    role: str
+    device_id: str | None = None
+    device_name: str | None = None
 
 
 _OUT_MODELS: dict[type, type[BaseModel]] = {

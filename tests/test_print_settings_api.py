@@ -197,14 +197,37 @@ def test_saving_an_unknown_template_is_allowed(client, print_config_file):
     assert resp.json()["template_id"] == "TPL-9999"
 
 
-def test_settings_are_readable_from_lan(client, print_config_file, client_factory):
-    """手機要能在設定頁調整 —— 列印設定不含機密，不限制 loopback。"""
+def test_printing_settings_require_pairing_for_lan(
+    config, print_config_file, client_factory, paired_device
+):
+    """列印設定不含機密，但三層授權一致：未配對的區網裝置不能讀寫，
+    已配對手機可以。"""
     with client_factory(("192.168.1.50", 5000)) as lan:
         resp = lan.post("/api/settings/printing", json={
             "printer": "Xprinter XP-470E", "template_id": "TPL-0002",
         })
+        assert resp.status_code == 403
+        assert lan.get("/api/settings/printing").status_code == 403
+
+    _device_id, _name, token = paired_device
+    from fastapi.testclient import TestClient
+
+    from shop.api import create_app
+
+    with TestClient(
+        create_app(config),
+        client=("192.168.1.50", 5000),
+        base_url="http://localhost",
+        headers={
+            "X-Requested-With": "ItemTrace",
+            "Authorization": f"Bearer {token}",
+        },
+    ) as phone:
+        resp = phone.post("/api/settings/printing", json={
+            "printer": "Xprinter XP-470E", "template_id": "TPL-0002",
+        })
         assert resp.status_code == 200
-        assert lan.get("/api/settings/printing").json()["template_id"] == "TPL-0002"
+        assert phone.get("/api/settings/printing").json()["template_id"] == "TPL-0002"
 
 
 def test_malformed_settings_file_is_reported_not_raised(

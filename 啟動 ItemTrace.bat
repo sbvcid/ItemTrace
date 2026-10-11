@@ -27,8 +27,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/3] 啟動服務。要讓手機連進來，請把 config.json 的 server_host 改成 0.0.0.0。
-echo       然後在同一個 Wi-Fi 用瀏覽器打 http://^<電腦IP^>:8731/
+echo [3/3] 啟動服務。手機連線不需要改任何設定：
+echo       在電腦的「設定」頁點選「連結手機」，再用手機掃描 QR Code 即可。
 python serve.py
 
 pause

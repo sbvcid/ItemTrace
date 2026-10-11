@@ -8,11 +8,10 @@
 
 2. **key 只存在這台電腦的檔案裡。** 寫入類端點（存檔／清除／測試）
    會把 key 寫進 tools/ai_config.local.json（.gitignore、atomic write、
-   0600），任何回應都不含 key。本專案沒有登入系統，而 server 刻意
-   只服務受信任區網（config.json 的 server_host + 防火牆），區網裡
-   任何裝置本來就能讀寫所有商品資料 —— 讓區網裝置（例如手機）
-   也能操作 AI 設定，與那個信任模型一致。若不信任區網，請把
-   server_host 改回 127.0.0.1，寫入類端點就只接受本機。
+   0600），任何回應都不含 key。存取權由守門層（shop/security.py 的三層
+   模型）統一決定：電腦本機（loopback）與**已配對的裝置**可以用；
+   區網上未配對的裝置一律 403，連讀取都拿不到。
+   配對方式見 shop/pairing.py（電腦端產生 QR Code，手機掃描即可）。
 
    判斷來源用的是 `request.client.host` —— 那是 socket 的對端位址，
    由 WebSocket/HTTP server 從連線本身取得。**不看 X-Forwarded-For**，

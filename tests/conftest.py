@@ -38,9 +38,20 @@ def repo(config: config_mod.Config):
         yield repository
 
 
+#: 測試用的來源位址：本機（管理端；完整存取）與區網（手機／未配對裝置）。
+#: TestClient(client=...) 設定的是 scope["client"]，也就是 server 從
+#: socket 對端看到的那個位址 —— 授權判定看的正是這個，不看任何標頭。
+LOOPBACK_ADDRESS = ("127.0.0.1", 51000)
+LAN_ADDRESS = ("192.168.50.23", 51001)
+
+
 @pytest.fixture()
 def client(config: config_mod.Config):
-    """指向 tmp DATA_ROOT 的 HTTP 測試客戶端。"""
+    """指向 tmp DATA_ROOT 的 HTTP 測試客戶端（模擬電腦本機瀏覽器）。
+
+    三層授權（shop/security.py）下，loopback ＝ admin，等同使用者
+    在電腦上開 ItemTrace；未帶裝置權杖的其他位址只能進配對流程。
+    """
     from fastapi.testclient import TestClient
 
     from shop.api import create_app
@@ -49,10 +60,30 @@ def client(config: config_mod.Config):
     # ——等同 ItemTrace 網頁前端的行為（web/core/api.js 會自動附加）。
     with TestClient(
         create_app(config),
+        client=LOOPBACK_ADDRESS,
         base_url="http://localhost",
         headers={"X-Requested-With": "ItemTrace"},
     ) as test_client:
         yield test_client
+
+
+def pair_test_device(config: config_mod.Config, name: str = "Test Phone"):
+    """直接以 repo 完成一次配對，回傳 (device_id, name, token)。
+
+    走的是與 HTTP claim 相同的 repo 方法（create_pairing_session ＋
+    claim_pairing_session），所以測試裝置與真實配對產生的資料形狀一致。
+    """
+    with Repository.open(config) as repository:
+        session_id, code, _expires = repository.create_pairing_session(
+            "http://192.168.50.23:8731/pair?id={session_id}&code={code}"
+        )
+        return repository.claim_pairing_session(session_id, code, name)
+
+
+@pytest.fixture()
+def paired_device(config: config_mod.Config):
+    """一台已配對的測試裝置：(device_id, name, token)。"""
+    return pair_test_device(config)
 
 
 @pytest.fixture()

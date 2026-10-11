@@ -347,14 +347,14 @@ class Template:
 
 @dataclass(frozen=True, slots=True)
 class PairedDevice:
-    """已配對的手機裝置。
+    """已配對的手機／區網裝置。
 
-    使用公鑰加密驗證，不存儲私鑰。手機首次掃描 QR Code 時生成密鑰對，
-    公鑰送回伺服器存儲，私鑰留在手機端。後續請求由手機用私鑰簽名驗證。
+    伺服器只保存裝置權杖的 SHA-256 雜湊；token_hash 是內部欄位，
+    不進 API 回應（PairedDeviceOut 不含它）。
     """
     id: str
     name: str = ""
-    public_key: str = ""
+    token_hash: str = ""
     created_at: str = ""
     last_seen_at: str | None = None
     revoked_at: str | None = None
@@ -368,10 +368,36 @@ class PairedDevice:
         return cls(
             id=row["id"],
             name=row["name"],
-            public_key=row["public_key"],
+            token_hash=row["token_hash"],
             created_at=row["created_at"],
             last_seen_at=row["last_seen_at"],
             revoked_at=row["revoked_at"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PairingSession:
+    """短效、一次性的配對工作階段（shop/pairing.py 的流程說明）。"""
+    id: str
+    code: str
+    pairing_url: str = ""
+    created_at: str = ""
+    expires_at: str = ""
+    attempts: int = 0
+    claimed_at: str | None = None
+    claimed_device_id: str | None = None
+
+    @classmethod
+    def from_row(cls, row: Row) -> PairingSession:
+        return cls(
+            id=row["id"],
+            code=row["code"],
+            pairing_url=row["pairing_url"],
+            created_at=row["created_at"],
+            expires_at=row["expires_at"],
+            attempts=row["attempts"],
+            claimed_at=row["claimed_at"],
+            claimed_device_id=row["claimed_device_id"],
         )
 
 

@@ -1,7 +1,8 @@
 """`/api/settings/ai` 的契約與安全性。
 
 最重要的一件事：**回應裡永遠不能出現 API key**。
-第二重要：**只有 loopback 可以改設定**。
+第二重要：**只有電腦本機（loopback）與已配對裝置可以讀寫設定**；
+未配對的區網裝置一律 403（三層模型見 shop/security.py）。
 
 這裡用 fake provider，完全不對 OpenRouter 發請求。
 """
@@ -143,14 +144,40 @@ def test_get_when_unconfigured(local, config_file):
     assert not config_file.exists(), "讀取不該憑空造出設定檔"
 
 
-def test_get_is_readable_from_lan(lan, seeded):
-    """讀取沒有秘密，所以區網也能看。"""
+def _paired_client(config, token, address=LAN):
+    """模擬已配對手機：區網來源位址 ＋ Bearer 裝置權杖。"""
+    from fastapi.testclient import TestClient
+
+    from shop.api import create_app
+
+    return TestClient(
+        create_app(config),
+        client=tuple(address),
+        base_url="http://localhost",
+        headers={
+            "X-Requested-With": "ItemTrace",
+            "Authorization": f"Bearer {token}",
+        },
+    )
+
+
+def test_unpaired_lan_cannot_read_settings(lan, seeded):
+    """未配對的區網裝置不能讀取 AI 設定（新三層模型）。"""
     response = lan.get("/api/settings/ai")
-    assert response.status_code == 200
-    assert response.json()["configured"] is True
-    assert response.json()["can_edit"] is True
-    assert response.json()["is_loopback"] is False
+    assert response.status_code == 403
     assert SECRET not in response.text
+
+
+def test_paired_device_can_read_settings(config, seeded, paired_device):
+    """已配對手機（區網位址＋有效權杖）可以讀取設定；回應不含 key。"""
+    _device_id, _name, token = paired_device
+    with _paired_client(config, token) as c:
+        response = c.get("/api/settings/ai")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["configured"] is True
+        assert body["is_loopback"] is False
+        assert SECRET not in response.text
 
 
 def test_settings_html_never_contains_a_key(client, seeded):
@@ -380,7 +407,7 @@ def test_test_api_without_configuration_is_a_clear_error(local, config_file, fak
 
 
 # ----------------------------------------------------------------------
-# 10. 區網：受信任區網可操作（server 刻意只服務區網）
+# 10. 三層授權：loopback 與已配對裝置可操作；未配對區網一律拒絕
 # ----------------------------------------------------------------------
 
 
@@ -392,31 +419,34 @@ def test_loopback_can_edit(client_factory, seeded, address):
         assert c.post("/api/settings/ai", json={"model": "m:free"}).status_code == 200
 
 
-def test_lan_can_change_the_model(lan, seeded):
-    """區網裝置（例如手機）可以改設定 —— 與「區網可讀寫所有
-    商品資料」的信任模型一致。若不信任區網，把 server_host
-    改回 127.0.0.1。"""
-    response = lan.post("/api/settings/ai", json={"model": "hacked/model"})
-    assert response.status_code == 200
-    assert json.loads(seeded.read_text(encoding="utf-8"))["model"] == "hacked/model"
-
-def test_lan_can_change_the_key(lan, seeded):
-    response = lan.post("/api/settings/ai", json={"api_key": "sk-or-v1-HACKED"})
-    assert response.status_code == 200
-    assert json.loads(seeded.read_text(encoding="utf-8"))["api_key"] == "sk-or-v1-HACKED"
-
-def test_lan_can_clear_the_key(lan, seeded):
-    assert lan.post("/api/settings/ai/clear-key").status_code == 200
-    assert "api_key" not in json.loads(seeded.read_text(encoding="utf-8"))
-
-def test_lan_can_test_the_api(lan, seeded, fake_provider):
+def test_unpaired_lan_cannot_change_model_or_key(lan, seeded, fake_provider):
+    """未配對的區網裝置不能改 model／key，也不能測 API。"""
     calls = fake_provider()
-    assert lan.post("/api/settings/ai/test", json={}).status_code == 200
-    assert len(calls) == 1
+    assert lan.post("/api/settings/ai", json={"model": "hacked/model"}).status_code == 403
+    assert lan.post("/api/settings/ai", json={"api_key": "sk-or-v1-HACKED"}).status_code == 403
+    assert lan.post("/api/settings/ai/clear-key").status_code == 403
+    assert lan.post("/api/settings/ai/test", json={}).status_code == 403
+    assert calls == [], "拒絕必須發生在 provider 呼叫之前"
+    stored = json.loads(seeded.read_text(encoding="utf-8"))
+    assert stored["model"] == "seed/model:free"
+    assert stored["api_key"] == SECRET
+
+
+def test_paired_device_can_change_settings(config, seeded, paired_device):
+    """已配對手機（區網位址＋有效權杖）可以完整操作設定。"""
+    _device_id, _name, token = paired_device
+    with _paired_client(config, token) as c:
+        response = c.post("/api/settings/ai", json={"model": "phone/model:free"})
+        assert response.status_code == 200
+        assert c.post("/api/settings/ai/clear-key").status_code == 200
+    stored = json.loads(seeded.read_text(encoding="utf-8"))
+    assert stored["model"] == "phone/model:free"
+    assert "api_key" not in stored
+
 
 def test_spoofed_headers_do_not_change_anything(client_factory, seeded):
-    """來源判斷只看 socket 對端位址，偽造標頭不影響任何事
-    （現在區網本來就能寫，這個測試釘住「判斷不靠標頭」）。"""
+    """授權看 socket 對端位址與裝置憑證，不看任何可偽造的標頭：
+    未配對的區網裝置就算偽造 X-Forwarded-For／Host 也不能改設定。"""
     with client_factory(LAN) as c:
         response = c.post(
             "/api/settings/ai",
@@ -424,8 +454,8 @@ def test_spoofed_headers_do_not_change_anything(client_factory, seeded):
             headers={"X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1",
                      "Host": "localhost"},
         )
-        assert response.status_code == 200
-    assert json.loads(seeded.read_text(encoding="utf-8"))["api_key"] == "sk-or-v1-SPOOFED"
+        assert response.status_code == 403
+    assert json.loads(seeded.read_text(encoding="utf-8"))["api_key"] == SECRET
 
 
 def test_loopback_detection_is_not_via_headers():

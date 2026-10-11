@@ -113,15 +113,32 @@ CREATE TABLE IF NOT EXISTS templates (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_templates_name ON templates(name);
 
+-- 已配對的手機／區網裝置（手機免設定檔配對）。
+-- 只存裝置權杖的 SHA-256 雜湊；權杖原文只在配對成功當下回給手機一次。
 CREATE TABLE IF NOT EXISTS paired_devices (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL DEFAULT '',
-    public_key      TEXT NOT NULL,
+    token_hash      TEXT NOT NULL,
     created_at      TEXT NOT NULL,
     last_seen_at    TEXT,
     revoked_at      TEXT
 ) STRICT;
+CREATE INDEX IF NOT EXISTS idx_paired_token   ON paired_devices(token_hash);
 CREATE INDEX IF NOT EXISTS idx_paired_revoked ON paired_devices(revoked_at);
+
+-- 短效、一次性的配對工作階段（見 shop/pairing.py 的流程說明）。
+-- code 是 6 位數字（一次性），attempts 記錄錯誤嘗試次數，達到上限即失效。
+CREATE TABLE IF NOT EXISTS pairing_sessions (
+    id                TEXT PRIMARY KEY,
+    code              TEXT NOT NULL,
+    pairing_url       TEXT NOT NULL DEFAULT '',
+    created_at        TEXT NOT NULL,
+    expires_at        TEXT NOT NULL,
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    claimed_at        TEXT,
+    claimed_device_id TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_pairing_expires ON pairing_sessions(expires_at);
 
 CREATE TABLE IF NOT EXISTS schema_meta (
     key   TEXT PRIMARY KEY,
