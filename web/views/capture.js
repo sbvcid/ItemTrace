@@ -7,6 +7,7 @@
 
 import { api } from '../core/api.js';
 import { escapeHtml } from '../core/dom.js';
+import { partitionImageFiles } from '../core/photoFiles.js';
 import { showToast } from '../core/router.js';
 import { t } from '../i18n/index.js';
 
@@ -23,19 +24,39 @@ export async function createCaptureView(params, router) {
     </header>
 
     <main class="container">
-      <!-- 步驟 1: 拍照與托盤 -->
+      <!-- 步驟 1: 拍照／匯入與托盤 -->
       <section id="step-camera">
-        <!-- 點選或拖放區域 -->
+        <!-- 兩種明確入口：拍照（後置相機）與匯入（系統照片／檔案選擇器）＋拖放 -->
         <div class="capture-zone" id="drop-zone">
           <div class="capture-zone-icon">📷</div>
-          <div class="capture-zone-title">${t('capture.btnCamera')}</div>
-          <div class="capture-zone-hint">${t('capture.stepSubtitle')}</div>
+          <div class="capture-zone-title">${t('capture.zoneTitle')}</div>
+          <div class="capture-zone-hint">${t('capture.zoneSubtitle')}</div>
+          <div class="capture-zone-actions">
+            <button type="button" class="btn-primary capture-entry-btn" id="btn-capture-photo">
+              <span class="capture-entry-icon">📷</span>
+              <span>${t('capture.btnTakePhoto')}</span>
+            </button>
+            <button type="button" class="btn-secondary capture-entry-btn" id="btn-import-photos">
+              <span class="capture-entry-icon">🖼️</span>
+              <span class="capture-entry-label" id="btn-import-text">${t('capture.btnImport')}</span>
+            </button>
+          </div>
+          <div class="capture-zone-drophint">${t('capture.zoneDropHint')}</div>
+          <!-- 拍照：capture="environment" 提示行動瀏覽器開啟後置相機（不保證所有裝置；
+               桌面上就是一個檔案選擇器）。單張一拍，追加就再按一次。 -->
           <input
             type="file"
-            id="camera-input"
+            id="capture-input"
             class="file-input-hidden"
             accept="image/*"
             capture="environment"
+          />
+          <!-- 匯入：不設 capture，交給系統的照片／檔案選擇器；支援一次選多張。 -->
+          <input
+            type="file"
+            id="import-input"
+            class="file-input-hidden"
+            accept="image/*"
             multiple
           />
         </div>
@@ -48,9 +69,16 @@ export async function createCaptureView(params, router) {
           </div>
           <div class="tray-grid" id="tray-grid">
             <!-- Thumbnails inserted here -->
-            <button type="button" class="tray-add-more" id="btn-add-more">
-              <span style="font-size: 1.2rem;">＋</span>
-              <span>${t('capture.btnAddMore')}</span>
+          </div>
+          <!-- 已有照片時的追加入口：同樣區分拍照與匯入，不再只有一個含糊的按鈕 -->
+          <div class="tray-add-row" id="tray-add-row">
+            <button type="button" class="tray-add-action" id="btn-add-capture">
+              <span>📷</span>
+              <span>${t('capture.addCapture')}</span>
+            </button>
+            <button type="button" class="tray-add-action" id="btn-add-import">
+              <span>🖼️</span>
+              <span>${t('capture.addImport')}</span>
             </button>
           </div>
         </div>
@@ -218,14 +246,19 @@ export async function createCaptureView(params, router) {
 
   // Elements
   const dropZone = el.querySelector('#drop-zone');
-  const cameraInput = el.querySelector('#camera-input');
+  const captureInput = el.querySelector('#capture-input');
+  const importInput = el.querySelector('#import-input');
+  const btnCapturePhoto = el.querySelector('#btn-capture-photo');
+  const btnImportPhotos = el.querySelector('#btn-import-photos');
+  const btnImportText = el.querySelector('#btn-import-text');
   const traySection = el.querySelector('#tray-section');
   const trayGrid = el.querySelector('#tray-grid');
   const trayCountLabel = el.querySelector('#tray-count-label');
   const stepCameraActions = el.querySelector('#step-camera-actions');
   const btnStartOrganize = el.querySelector('#btn-start-organize');
   const btnStartText = el.querySelector('#btn-start-text');
-  const btnAddMore = el.querySelector('#btn-add-more');
+  const btnAddCapture = el.querySelector('#btn-add-capture');
+  const btnAddImport = el.querySelector('#btn-add-import');
   const btnClearAll = el.querySelector('#btn-clear-all');
 
   const stepCamera = el.querySelector('#step-camera');
@@ -256,11 +289,28 @@ export async function createCaptureView(params, router) {
   const inspectorImg = el.querySelector('#inspector-img');
   const btnCloseInspector = el.querySelector('#btn-close-inspector');
 
-  // Trigger camera input on click
-  dropZone.addEventListener('click', () => cameraInput.click());
-  btnAddMore.addEventListener('click', () => cameraInput.click());
+  // 觸控（多半是手機）用「從相簿匯入」；桌面上「選擇照片」較中性。
+  // DOM 掛載後才替換（掛載前的 isConnected 為 false，先照預設文案）。
+  const isTouchDevice = () => (
+    typeof window.matchMedia === 'function'
+    && window.matchMedia('(pointer: coarse)').matches
+  );
+  function renderEntryLabels() {
+    if (!el.isConnected) return;
+    btnImportText.textContent = isTouchDevice()
+      ? t('capture.btnImportMobile')
+      : t('capture.btnImport');
+  }
 
-  // Drag and drop handlers
+  // 兩個入口互相獨立：拍照走 capture="environment" 的輸入框，匯入走
+  // 不帶 capture 的 multiple 檔案輸入框 —— 使用者不會誤以為只能拍照、
+  // 或只能選已有的照片。
+  btnCapturePhoto.addEventListener('click', () => captureInput.click());
+  btnImportPhotos.addEventListener('click', () => importInput.click());
+  btnAddCapture.addEventListener('click', () => captureInput.click());
+  btnAddImport.addEventListener('click', () => importInput.click());
+
+  // Drag and drop handlers（桌面拖放匯入；與兩個入口共用 appendFiles）
   dropZone.addEventListener('dragover', (e) => {
     e.preventDefault();
     dropZone.classList.add('dragover');
@@ -274,34 +324,43 @@ export async function createCaptureView(params, router) {
     e.preventDefault();
     dropZone.classList.remove('dragover');
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      appendFiles(Array.from(e.dataTransfer.files));
+      appendFiles(Array.from(e.dataTransfer.files), 'import');
     }
   });
 
-  cameraInput.addEventListener('change', (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      appendFiles(Array.from(e.target.files));
-      cameraInput.value = ''; // Reset for subsequent selections
-    }
+  // 取消選取不會觸發 change —— 先前已選的照片永遠保留；重設 value 只
+  // 發生在確實讀到檔案之後（同一張照片可以再選一次）。
+  captureInput.addEventListener('change', () => {
+    appendFiles(Array.from(captureInput.files || []), 'capture');
+    captureInput.value = '';
   });
 
-  function appendFiles(newFiles) {
-    const validImages = newFiles.filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|webp|heic|bmp)$/i.test(f.name));
-    if (validImages.length === 0) {
-      showToast(t('capture.uploadError'));
-      return;
-    }
+  importInput.addEventListener('change', () => {
+    appendFiles(Array.from(importInput.files || []), 'import');
+    importInput.value = '';
+  });
 
-    for (const file of validImages) {
+  function appendFiles(newFiles, origin = 'import') {
+    if (!newFiles || newFiles.length === 0) return;
+    // 格式分流（web/core/photoFiles.js）：HEIC／HEIF 等無法走完
+    // 預覽→上傳→AI 的格式在選取當下就明確提示，不假裝成功。
+    const { valid, unsupported } = partitionImageFiles(newFiles);
+    if (unsupported.length > 0) {
+      showToast(t('capture.unsupportedFormat'));
+    }
+    if (valid.length === 0) return;
+
+    // 追加：保留既有照片（不整批清空），新照片接在後面。
+    for (const file of valid) {
       const url = URL.createObjectURL(file);
-      capturedFiles.push({ file, url });
+      capturedFiles.push({ file, url, origin });
     }
 
     renderTray();
   }
 
   function renderTray() {
-    // Remove old thumbnails, keep btnAddMore
+    // Remove old thumbnails, keep the add-action row
     const items = trayGrid.querySelectorAll('.tray-item');
     items.forEach(item => item.remove());
 
@@ -324,6 +383,17 @@ export async function createCaptureView(params, router) {
         <button type="button" class="tray-item-remove" title="${t('app.delete')}">✕</button>
       `;
 
+      // 前端預覽兜底：無法解碼的圖（例如瀏覽器不支援的格式）不能靜默
+      // 卡在托盤裡——移除該張並明確告知，其餘照片不受影響。
+      thumb.querySelector('img').addEventListener('error', () => {
+        const currentIndex = capturedFiles.indexOf(item);
+        if (currentIndex === -1) return;
+        URL.revokeObjectURL(item.url);
+        capturedFiles.splice(currentIndex, 1);
+        showToast(t('capture.previewUnsupported'));
+        renderTray();
+      });
+
       thumb.querySelector('.tray-item-remove').addEventListener('click', (e) => {
         e.stopPropagation();
         URL.revokeObjectURL(item.url);
@@ -331,7 +401,7 @@ export async function createCaptureView(params, router) {
         renderTray();
       });
 
-      trayGrid.insertBefore(thumb, btnAddMore);
+      trayGrid.appendChild(thumb);
     });
   }
 
@@ -1379,6 +1449,24 @@ export async function createCaptureView(params, router) {
       router.navigate('/');
     }
   });
+
+  // 掛載後才依裝置替換匯入按鈕文案（觸控裝置顯示「從相簿匯入」）。
+  if (typeof MutationObserver === 'function') {
+    let labelObserver = null;
+    const applyLabels = () => {
+      if (labelObserver) {
+        labelObserver.disconnect();
+        labelObserver = null;
+      }
+      renderEntryLabels();
+    };
+    if (el.isConnected) {
+      applyLabels();
+    } else {
+      labelObserver = new MutationObserver(applyLabels);
+      labelObserver.observe(document.body, { childList: true });
+    }
+  }
 
   return {
     element: el,

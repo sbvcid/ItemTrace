@@ -2,11 +2,11 @@
 
 最後更新：2026-10-12
 
-**當前狀態：Phase 4 資料夾管理 UI 與路由完成，前端整合全數通過，1190 測試無失敗**
+**當前狀態：拍照／匯入雙入口 UX 完成（有限範圍、零 schema／API 變更），1196 測試無失敗**
 
 遠端狀態：`main` 與 `origin/main` 同步（含本階段 commit）
 
-測試驗證：`pytest` 完全通過，全 **1190 測試**無失敗、無跳過
+測試驗證：`pytest` 完全通過，全 **1196 測試**無失敗、無跳過（+6 於 1190 基線）
 
 ## 📱 MVP 交付檢查清單
 
@@ -36,6 +36,36 @@
 ---
 
 ## 當前階段
+
+### 拍照與相簿／檔案匯入雙入口（capture UX）← **COMPLETED**
+
+完成時間：2026-10-12（有限範圍 UX；零 schema、零後端 API 變更）
+
+- ✓ **兩種明確入口**（`/capture` 初始畫面與托盤中都有）：拍照用
+  `capture="environment"` 的圖片輸入框（行動瀏覽器提示後置相機；不保證
+  所有裝置）；匯入用 `type=file`、`accept="image/*"`、`multiple`、
+  不帶 capture（手機／電腦走系統照片／檔案選擇器）。兩者視覺層級相近
+- ✓ **文案依情境**：觸控裝置（`pointer: coarse`）顯示「從相簿匯入」、
+  桌面上顯示「選擇照片」；不宣稱能存取整個相簿，只處理使用者明確選取
+  交付的照片；文案全部走 i18n（雙語 7 keys，無硬寫字串）
+- ✓ **共用既有流程**：兩個入口與拖放都進同一個 `appendFiles()` 待整理
+  流程（多張、預覽縮圖、移除、分批追加、確認後才 AI 分析、存起來才
+  建檔）；追加不清空、不重複；每個 file input 讀取後重設（同一張照片
+  可再次選取）；取消選取不顯示錯誤、不清既有照片
+- ✓ **格式誠實處理**：新增 `web/core/photoFiles.js` 分流 —— HEIC／HEIF
+  （瀏覽器多半無法預覽、後端也不保證解碼）在選取當下明確提示、不假裝
+  匯入成功；瀏覽器無法解碼的其他圖以縮圖 onerror 兜底移除並告知；
+  未引入影像函式庫或轉檔系統
+- ✓ **測試 +6**（`tests/test_capture_inputs.py`）：兩個獨立入口靜態接線
+  （capture／multiple／reset）、雙語 key、Node 執行實際 ESM 模組驗證
+  格式分流與兩批追加保留／取消不清空／同名不誤刪／HEIC 提示；全 1196
+  pytest 通過、`node --check` 全 web JS 通過
+- ✓ **隔離瀏覽器實測**（暫存資料目錄、`127.0.0.1:8732`、正式資料零接觸）：
+  拍照與匯入按鈕開啟對應輸入框（file chooser 實測）；匯入 2 張→托盤
+  2 張；追加 1 張→3 張且三張縮圖可解碼；HEIC 被拒＋雙語提示、托盤不變；
+  壞檔預覽兜底移除；「AI 開始整理」→3 張進 inbox、0 筆正式紀錄（確認
+  儲存才建檔的生命週期不變）；取消→inbox 清空、0 筆紀錄；375px 窄螢幕
+  兩顆按鈕全寬 47~51px 高、畫面完整；英文語系文案正確、0 console error
 
 ### Phase 4：資料夾管理 UI 與路由整合 ← **COMPLETED**
 
@@ -405,11 +435,11 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 
 | 項目 | 數值 | 備註 |
 |---|---|---|
-| 測試檔案數 | 40 | conftest＋38 個 test_*.py＋__init__（本階段未新增檔案） |
-| 總測試數 | 1083 | 5896562 基線 1052；Phase 3 +21；capture 建檔流程修正 +10 |
-| 通過 | 1083 ✓ | 100% pass rate |
+| 測試檔案數 | 41 | conftest＋39 個 test_*.py＋__init__（本階段新增 test_capture_inputs.py） |
+| 總測試數 | 1196 | 1190 基線；拍照／匯入雙入口 +6 |
+| 通過 | 1196 ✓ | 100% pass rate |
 | 失敗 | 0 | 零失敗 |
-| 跳過 | 0 | 無跳過（本機有 Chromium／PyMuPDF，列印與 canary 測試皆實跑） |
+| 跳過 | 0 | 無跳過（本機有 Chromium／PyMuPDF／node，列印、canary 與 JS 邏輯測試皆實跑） |
 | 覆蓋率 | 未測 | 建議後續補充 |
 
 **測試框架**：pytest（可選 pytest-cov 補充覆蓋率）
@@ -425,7 +455,7 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 - **安全（SR-1）**：test_security.py (17) —— Host／Origin／自訂標頭、key 不轉送（canary＋接收器）、綁定 opt-in、媒體標頭、CSP/escaping 靜態守門
 - **安全（SR-2）**：test_security_sr2.py (30) —— body／單檔／檔數／像素／列印尺寸上限、AI 節流、docs 開關、快取政策、錯誤訊息去路徑化、註解／實體 mXSS、render-time 驗證、sandbox 命令、raster MIME、真實 Chromium canary PDF
 
-**最近運行**：2026-10-11，`pytest -q` → collected=1083（逐檔加總），failures=0，exit=0
+**最近運行**：2026-10-12，`pytest` → 1196 passed，failures=0，exit=0（本階段：拍照／匯入雙入口 +6）
 
 ---
 
@@ -442,6 +472,7 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 
 ### 核心產品體驗
 - ✓ 手機隨手拍照 (Capture) — **Implemented, Tested, Committed, Pushed**
+- ✓ 拍照與相簿／檔案匯入雙入口（含 HEIC 明確提示） — **Implemented, Tested, Committed, Pushed**
 - ✓ AI 自動整理與建議 — **Implemented, Tested, Committed, Pushed**
 - ✓ 超低摩擦確認（一鍵存起來） — **Implemented, Tested, Committed, Pushed**
 - ✓ 紀錄詳細檢視與大圖展示 — **Implemented, Tested, Committed, Pushed**
