@@ -2,11 +2,11 @@
 
 最後更新：2026-10-12
 
-**當前狀態：拍照／匯入雙入口 UX 完成（有限範圍、零 schema／API 變更），1196 測試無失敗**
+**當前狀態：拍照／匯入雙入口 UX 完成，裝置文案掛載修正完成（零 schema／API 變更），1199 測試無失敗**
 
 遠端狀態：`main` 與 `origin/main` 同步（含本階段 commit）
 
-測試驗證：`pytest` 完全通過，全 **1196 測試**無失敗、無跳過（+6 於 1190 基線）
+測試驗證：`pytest` 完全通過，全 **1199 測試**無失敗、無跳過（1196 基線 +3）
 
 ## 📱 MVP 交付檢查清單
 
@@ -36,6 +36,32 @@
 ---
 
 ## 當前階段
+
+### 匯入按鈕裝置文案切換修正（capture）← **COMPLETED**
+
+完成時間：2026-10-12（有限範圍修正；僅前端挂載邏輯與測試）
+
+- ✓ **問題**：`renderEntryLabels()` 的掛載監視器觀察 `document.body`
+  且只有 `childList`；router 實際把 view 掛進 `#app`（`#app` 本來就是
+  body 的子節點），監視器永遠等不到插入 —— 觸控裝置的「從相簿匯入」
+  不會生效，按鈕維持模板預設「選擇照片」
+- ✓ **修正**（`web/views/capture.js` 單一區塊）：改為觀察實際掛載容器
+  `#app`（`getElementById('app') || document.body` 後備）並加
+  `subtree: true` 涵蓋任何層級插入；確認掛載後立即 `disconnect()`
+  （不做長期 DOM 監視）；其他 insertion（如 toast）先到時不誤判掛載、
+  繼續等待。未動按鈕行為、流程、API、schema
+- ✓ **測試 +3**（`tests/test_capture_inputs.py`）：以 Node 執行真實
+  `createCaptureView`＋最小 DOM shim 模擬 router 掛載，驗證掛載後
+  文案 —— coarse→「從相簿匯入」、fine→「選擇照片」、無 `#app` 後備
+  仍正確；並驗證掛載前預設文案不變、不相關插入不提早停止監視、掛載
+  後監視器歸零、四個入口（含托盤追加）仍觸發正確 input。反轉驗證：
+  換回舊版監視器時 3 項掛載測試全數失敗（確認能攔住迴歸）
+- ✓ **瀏覽器實測**（隔離暫存資料、`127.0.0.1:8732`、桌面 Chromium、
+  `matchMedia` stub 非真機）：`?stub_coarse` →「從相簿匯入」、
+  `?stub_fine` →「選擇照片」；匯入入口開檔選擇器、選 1 張入托盤、
+  input 重設；0 console error。真機（iOS／Android）未驗證
+- ✓ 全 1199 pytest 通過、`node --check` 全 web JS 通過、`git diff --check`
+  乾淨；正式開發資料庫與手機配對零接觸
 
 ### 拍照與相簿／檔案匯入雙入口（capture UX）← **COMPLETED**
 
@@ -436,8 +462,8 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 | 項目 | 數值 | 備註 |
 |---|---|---|
 | 測試檔案數 | 41 | conftest＋39 個 test_*.py＋__init__（本階段新增 test_capture_inputs.py） |
-| 總測試數 | 1196 | 1190 基線；拍照／匯入雙入口 +6 |
-| 通過 | 1196 ✓ | 100% pass rate |
+| 總測試數 | 1199 | 1196 基線；裝置文案掛載修正 +3 |
+| 通過 | 1199 ✓ | 100% pass rate |
 | 失敗 | 0 | 零失敗 |
 | 跳過 | 0 | 無跳過（本機有 Chromium／PyMuPDF／node，列印、canary 與 JS 邏輯測試皆實跑） |
 | 覆蓋率 | 未測 | 建議後續補充 |
@@ -455,7 +481,7 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 - **安全（SR-1）**：test_security.py (17) —— Host／Origin／自訂標頭、key 不轉送（canary＋接收器）、綁定 opt-in、媒體標頭、CSP/escaping 靜態守門
 - **安全（SR-2）**：test_security_sr2.py (30) —— body／單檔／檔數／像素／列印尺寸上限、AI 節流、docs 開關、快取政策、錯誤訊息去路徑化、註解／實體 mXSS、render-time 驗證、sandbox 命令、raster MIME、真實 Chromium canary PDF
 
-**最近運行**：2026-10-12，`pytest` → 1196 passed，failures=0，exit=0（本階段：拍照／匯入雙入口 +6）
+**最近運行**：2026-10-12，`pytest` → 1199 passed，failures=0，exit=0（本階段：裝置文案掛載修正 +3）
 
 ---
 

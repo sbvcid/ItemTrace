@@ -1451,20 +1451,32 @@ export async function createCaptureView(params, router) {
   });
 
   // 掛載後才依裝置替換匯入按鈕文案（觸控裝置顯示「從相簿匯入」）。
+  // router 是把 view 掛進 #app 容器（web/app.js 的 router.init），不是
+  // 直接掛在 body；#app 本來就是 body 的子節點，所以觀察 body 的
+  // childList 永遠等不到這次插入。改為觀察實際的 #app 掛載容器，
+  // 並以 subtree 涵蓋任何層級的插入；掛載確認後立刻停止觀察，不做
+  // 長期 DOM 監視。#app 不存在時退回 body（同樣 subtree，仍能等到）。
   if (typeof MutationObserver === 'function') {
     let labelObserver = null;
-    const applyLabels = () => {
+    const stopObserving = () => {
       if (labelObserver) {
         labelObserver.disconnect();
         labelObserver = null;
       }
+    };
+    const applyLabelsWhenMounted = () => {
+      // 其他插入（例如 toast）先到時不能誤判掛載完成：繼續等自己的
+      // view 真的接上文件為止。
+      if (!el.isConnected) return;
+      stopObserving();
       renderEntryLabels();
     };
     if (el.isConnected) {
-      applyLabels();
+      renderEntryLabels();
     } else {
-      labelObserver = new MutationObserver(applyLabels);
-      labelObserver.observe(document.body, { childList: true });
+      const mountRoot = document.getElementById('app') || document.body;
+      labelObserver = new MutationObserver(applyLabelsWhenMounted);
+      labelObserver.observe(mountRoot, { childList: true, subtree: true });
     }
   }
 
