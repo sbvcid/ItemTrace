@@ -854,8 +854,6 @@ body {
 }
 
 .badge-seen {
-  display: none;
-}
   font-size: 0.72rem;
   color: var(--color-seen);
   background: var(--color-seen-surface);
@@ -907,6 +905,28 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+/* 無信心值的內容（未評估或 AI 無把握） */
+.badge-unrated {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 推測內容的視覺區分：輕微斜體 + 左側細線 */
+.ai-field-value.is-inferred {
+  font-style: italic;
+  color: var(--text-secondary);
+  border-left: 2px solid var(--color-inferred);
+  padding-left: 8px;
 }
 
 .is-muted .ai-field-value {

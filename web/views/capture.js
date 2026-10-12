@@ -917,34 +917,38 @@ export async function createCaptureView(params, router) {
     renderAttributeEditRows();
   });
 
-  function createFieldRow(label, value, { confidence = null, mono = false, custom = false, paragraph = false, tags = [], muted = false } = {}) {
-    const row = document.createElement('div');
-    row.className = `ai-field-row${muted ? ' is-muted' : ''}`;
+   function createFieldRow(label, value, { confidence = null, mono = false, custom = false, paragraph = false, tags = [], muted = false } = {}) {
+     const row = document.createElement('div');
+     row.className = `ai-field-row${muted ? ' is-muted' : ''}`;
 
-    // 規則：區分看見 (>= 0.85) 與推測 (< 0.85)；使用者改過的值標「自訂」。
-    const isCertain = confidence !== undefined && confidence !== null && confidence >= 0.85;
-    const badgeHtml = custom
-      ? `<span class="badge-custom">✎ ${t('capture.badgeCustom')}</span>`
-      : isCertain
-        ? `<span class="badge-seen">✓ ${t('capture.badgeSeen')}</span>`
-        : `<span class="badge-guess">~ ${t('capture.badgeInferred')}</span>`;
-    const tagsHtml = tags
-      .map(tag => `<span class="${tag.muted ? 'badge-muted' : 'badge-custom'}">${escapeHtml(tag.text)}</span>`)
-      .join('');
+     // 規則：區分看見 (>= 0.85) 與推測 (< 0.85)；confidence=null 無信心值；使用者改過的值標「自訂」。
+     const isCertain = confidence !== undefined && confidence !== null && confidence >= 0.85;
+     const hasNoConfidence = confidence === null || confidence === undefined;
+     const badgeHtml = custom
+       ? `<span class="badge-custom">✎ ${t('capture.badgeCustom')}</span>`
+       : hasNoConfidence
+         ? `<span class="badge-unrated">🔍 ${t('capture.badgeUnrated')}</span>`
+         : isCertain
+           ? `<span class="badge-seen">✓ ${t('capture.badgeSeen')}</span>`
+           : `<span class="badge-guess">~ ${t('capture.badgeInferred')}</span>`;
+     const tagsHtml = tags
+       .map(tag => `<span class="${tag.muted ? 'badge-muted' : 'badge-custom'}">${escapeHtml(tag.text)}</span>`)
+       .join('');
 
-    const valueStyle = paragraph
-      ? 'font-weight: normal; font-size: 0.95rem; line-height: 1.6; white-space: pre-wrap;'
-      : '';
-    row.innerHTML = `
-      <div class="ai-field-label-group">
-        <span class="ai-field-label">${escapeHtml(label)}</span>
-        ${badgeHtml}
-        ${tagsHtml}
-      </div>
-      <div class="ai-field-value ${mono ? 'mono' : ''}" style="${valueStyle}">${escapeHtml(value)}</div>
-    `;
-    return row;
-  }
+     const valueStyle = paragraph
+       ? 'font-weight: normal; font-size: 0.95rem; line-height: 1.6; white-space: pre-wrap;'
+       : '';
+     const valueClass = `ai-field-value ${mono ? 'mono' : ''}${!isCertain && !hasNoConfidence ? ' is-inferred' : ''}`;
+     row.innerHTML = `
+       <div class="ai-field-label-group">
+         <span class="ai-field-label">${escapeHtml(label)}</span>
+         ${badgeHtml}
+         ${tagsHtml}
+       </div>
+       <div class="${valueClass}" style="${valueStyle}">${escapeHtml(value)}</div>
+     `;
+     return row;
+   }
 
   // Toggle Edit Mode（閱讀↔修改；修改入口在內容下方操作區）
   function setEditMode(next) {
