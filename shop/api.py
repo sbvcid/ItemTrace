@@ -53,6 +53,7 @@ from .errors import (
     ValidationError,
 )
 from . import evidence as evidence_mod
+from . import repo as repo_mod
 from . import security
 from .models import Identifier, Item, Observation, Photo
 from .repo import Repository
@@ -269,6 +270,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     def serve_file(path: str, cfg: Annotated[Config, Depends(get_config)]) -> FileResponse:
         return _serve_file(cfg, path)
 
+    _register_folders(app)
     _register_web(app, docs_enabled)
     _register_ui(app)
 
@@ -306,6 +308,203 @@ def _register_web(app: FastAPI, docs_enabled: bool = False) -> None:
             if candidate.is_file() and candidate.is_relative_to(WEB_DIR.resolve()):
                 return FileResponse(candidate)
         return FileResponse(WEB_DIR / "index.html")
+
+
+def _register_folders(app: FastAPI) -> None:
+    """掛載 Phase 4 資料夾管理 API 端點。"""
+    
+    @app.get("/api/folders")
+    async def list_folders_endpoint(request: Request, status: str = Query("active")) -> JSONResponse:
+        """列出所有資料夾。
+        
+        Query parameters:
+            status: 'active' 或 'archived'（默認為 'active'）
+        """
+        _check_host(request)
+        
+        config = request.app.state.config
+        with db_mod.session(config) as conn:
+            folders = repo_mod.list_folders(conn, status=status)
+            unclassified_count = conn.execute(
+                "SELECT COUNT(*) FROM items WHERE folder_id IS NULL AND status = 'active'"
+            ).fetchone()[0]
+        
+        return JSONResponse(
+            {
+                "folders": folders,
+                "unclassified_count": unclassified_count,
+            }
+        )
+    
+    @app.post("/api/folders")
+    async def create_folder_endpoint(request: Request) -> JSONResponse:
+        """建立新資料夾。
+        
+        Body:
+            {
+                "name": "資料夾名稱",
+                "description": "描述（可選）"
+            }
+        """
+        _check_host(request)
+        
+        body = await request.json()
+        name = body.get("name", "").strip()
+        description = body.get("description", "").strip() or None
+        
+        if not name:
+            return JSONResponse(
+                {"error": "資料夾名稱不能為空"},
+                status_code=400,
+            )
+        
+        config = request.app.state.config
+        try:
+            with db_mod.session(config) as conn:
+                with db_mod.transaction(conn):
+                    folder = repo_mod.create_folder(conn, name, description)
+        except ValidationError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except ConflictError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        
+        return JSONResponse(
+            {
+                "id": folder.id,
+                "name": folder.name,
+                "description": folder.description,
+                "status": folder.status,
+                "created_at": folder.created_at,
+                "updated_at": folder.updated_at,
+            },
+            status_code=201,
+        )
+    
+    @app.patch("/api/folders/{folder_id}")
+    async def update_folder_endpoint(request: Request, folder_id: str) -> JSONResponse:
+        """更新資料夾。
+        
+        Path:
+            folder_id: 資料夾 ID
+            
+        Body:
+            {
+                "name": "新名稱（可選）",
+                "description": "新描述（可選）"
+            }
+        """
+        _check_host(request)
+        
+        body = await request.json()
+        name = body.get("name", "").strip() or None
+        description = body.get("description", "").strip() or None
+        
+        config = request.app.state.config
+        try:
+            with db_mod.session(config) as conn:
+                with db_mod.transaction(conn):
+                    folder = repo_mod.update_folder(conn, folder_id, name, description)
+        except NotFoundError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except ValidationError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except ConflictError as e:
+            return JSONResponse({"error": str(e)}, status_code=409)
+        
+        return JSONResponse(
+            {
+                "id": folder.id,
+                "name": folder.name,
+                "description": folder.description,
+                "status": folder.status,
+                "created_at": folder.created_at,
+                "updated_at": folder.updated_at,
+            }
+        )
+    
+    @app.delete("/api/folders/{folder_id}")
+    async def delete_folder_endpoint(request: Request, folder_id: str) -> Response:
+        """刪除資料夾（資料夾內的紀錄移至未分類）。
+        
+        Path:
+            folder_id: 資料夾 ID
+        """
+        _check_host(request)
+        
+        config = request.app.state.config
+        try:
+            with db_mod.session(config) as conn:
+                with db_mod.transaction(conn):
+                    repo_mod.delete_folder(conn, folder_id)
+        except NotFoundError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        
+        return Response(status_code=204)
+    
+    @app.get("/api/folders/{folder_id}/items")
+    async def get_folder_items_endpoint(
+        request: Request,
+        folder_id: str,
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ) -> JSONResponse:
+        """列出資料夾內的紀錄。
+        
+        Path:
+            folder_id: 資料夾 ID
+            
+        Query:
+            limit: 每頁筆數（1-200，默認 50）
+            offset: 分頁偏移（默認 0）
+        """
+        _check_host(request)
+        
+        config = request.app.state.config
+        try:
+            with db_mod.session(config) as conn:
+                items, count = repo_mod.get_folder_items(conn, folder_id, limit, offset)
+        except NotFoundError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        
+        return JSONResponse(
+            {
+                "items": [to_out(ItemOut, item) for item in items],
+                "count": count,
+                "limit": limit,
+                "offset": offset,
+            }
+        )
+    
+    @app.patch("/api/items/{item_id}/folder")
+    async def move_item_to_folder_endpoint(request: Request, item_id: str) -> JSONResponse:
+        """移動紀錄至資料夾。
+        
+        Path:
+            item_id: 紀錄 ID
+            
+        Body:
+            {
+                "folder_id": "資料夾 ID（null = 移至未分類）",
+                "source": "操作來源（'manual'、'auto'、'rule'；默認 'manual'）"
+            }
+        """
+        _check_host(request)
+        
+        body = await request.json()
+        folder_id = body.get("folder_id")
+        source = body.get("source", "manual")
+        
+        config = request.app.state.config
+        try:
+            with db_mod.session(config) as conn:
+                with db_mod.transaction(conn):
+                    item = repo_mod.move_item_to_folder(conn, item_id, folder_id, source)
+        except NotFoundError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except ValidationError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        
+        return JSONResponse(to_out(ItemOut, item))
 
 
 def _register_ui(app: FastAPI) -> None:
@@ -1720,3 +1919,4 @@ def _minutes_between(earlier: str, later: str) -> float:
     return (
         datetime.fromisoformat(later) - datetime.fromisoformat(earlier)
     ).total_seconds() / 60
+

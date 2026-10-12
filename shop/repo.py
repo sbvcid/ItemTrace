@@ -56,6 +56,9 @@ from .models import (
     SUGGESTION_STATUSES,
     Event,
     FieldProvenance,
+    Folder,
+    FolderClassification,
+    FolderRule,
     Identifier,
     Item,
     Observation,
@@ -1884,6 +1887,56 @@ class Repository:
                 f"「{identifier.value}」（{row['id']}）"
             )
 
+    # ------------------------------------------------------------------
+    # Phase 4：資料夾管理
+    # ------------------------------------------------------------------
+
+    def create_folder(self, name: str, description: str | None = None) -> Folder:
+        """建立新資料夾。"""
+        return create_folder(self.conn, name, description)
+
+    def list_folders(self, status: str = "active") -> list[dict]:
+        """列出所有資料夾。"""
+        return list_folders(self.conn, status)
+
+    def get_folder(self, folder_id: str) -> Folder:
+        """取得單一資料夾。"""
+        return get_folder(self.conn, folder_id)
+
+    def update_folder(
+        self, folder_id: str, name: str | None = None, description: str | None = None
+    ) -> Folder:
+        """更新資料夾。"""
+        return update_folder(self.conn, folder_id, name, description)
+
+    def delete_folder(self, folder_id: str) -> None:
+        """刪除資料夾。"""
+        with db.transaction(self.conn):
+            return delete_folder(self.conn, folder_id)
+
+    def get_folder_items(
+        self, folder_id: str, limit: int = 50, offset: int = 0, status: str | None = None
+    ) -> tuple[list[Item], int]:
+        """列出資料夾內的紀錄。"""
+        return get_folder_items(self.conn, folder_id, limit, offset, status)
+
+    def move_item_to_folder(
+        self, item_id: str, folder_id: str | None = None, source: str = "manual"
+    ) -> Item:
+        """移動紀錄至資料夾。"""
+        with db.transaction(self.conn):
+            return move_item_to_folder(self.conn, item_id, folder_id, source)
+
+    def get_item_folder(self, item_id: str) -> Folder | None:
+        """取得紀錄所屬的資料夾。"""
+        return get_item_folder(self.conn, item_id)
+
+    def get_unclassified_items(
+        self, limit: int = 100, offset: int = 0
+    ) -> tuple[list[Item], int]:
+        """取得所有未分類的紀錄。"""
+        return get_unclassified_items(self.conn, limit, offset)
+
 
 # ----------------------------------------------------------------------
 # 模組層級輔助
@@ -2397,3 +2450,355 @@ def _validate_template(template: Template) -> None:
         raise ValidationError(f"templates.width 必須 > 0，得到 {template.width}")
     if template.height is not None and template.height <= 0:
         raise ValidationError(f"templates.height 必須 > 0，得到 {template.height}")
+
+
+# ============================================================================
+# Phase 4：資料夾管理
+# ============================================================================
+
+
+def create_folder(conn: sqlite3.Connection, name: str, description: str | None = None) -> Folder:
+    """建立新資料夾。
+    
+    Args:
+        conn: 資料庫連線
+        name: 資料夾名稱（必須唯一）
+        description: 資料夾描述（可選）
+        
+    Returns:
+        新建立的 Folder 物件
+        
+    Raises:
+        ValidationError: 名稱為空或已存在
+        ConflictError: 名稱重複
+    """
+    _check_required("folders.name", name)
+    
+    folder_id = ids.new_id()
+    now_str = db.now()
+    
+    try:
+        conn.execute(
+            """INSERT INTO folders (id, name, description, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (folder_id, name, description, now_str, now_str),
+        )
+    except sqlite3.IntegrityError as e:
+        if "UNIQUE constraint failed" in str(e):
+            raise ConflictError(f"資料夾名稱已存在：{name}")
+        raise ValidationError(f"建立資料夾失敗：{e}")
+    
+    return Folder(
+        id=folder_id,
+        name=name,
+        description=description,
+        created_at=now_str,
+        updated_at=now_str,
+        status="active",
+    )
+
+
+def list_folders(conn: sqlite3.Connection, status: str = "active") -> list[dict]:
+    """列出所有資料夾及其包含的紀錄數。
+    
+    Args:
+        conn: 資料庫連線
+        status: 資料夾狀態過濾（'active' 或 'archived'；默認為 'active'）
+        
+    Returns:
+        字典清單，包含 id, name, description, status, created_at, updated_at, item_count
+    """
+    rows = conn.execute(
+        """SELECT f.id, f.name, f.description, f.status, f.created_at, f.updated_at,
+                  COUNT(i.id) as item_count
+           FROM folders f
+           LEFT JOIN items i ON i.folder_id = f.id AND i.status != 'void'
+           WHERE f.status = ?
+           GROUP BY f.id
+           ORDER BY f.created_at DESC""",
+        (status,),
+    ).fetchall()
+    
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "description": row["description"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "item_count": row["item_count"],
+        }
+        for row in rows
+    ]
+
+
+def get_folder(conn: sqlite3.Connection, folder_id: str) -> Folder:
+    """取得單一資料夾詳情。
+    
+    Args:
+        conn: 資料庫連線
+        folder_id: 資料夾 ID
+        
+    Returns:
+        Folder 物件
+        
+    Raises:
+        NotFoundError: 資料夾不存在
+    """
+    row = conn.execute(
+        "SELECT * FROM folders WHERE id = ?", (folder_id,)
+    ).fetchone()
+    
+    if not row:
+        raise NotFoundError(f"資料夾不存在：{folder_id}")
+    
+    return Folder.from_row(row)
+
+
+def update_folder(
+    conn: sqlite3.Connection,
+    folder_id: str,
+    name: str | None = None,
+    description: str | None = None,
+) -> Folder:
+    """更新資料夾。
+    
+    Args:
+        conn: 資料庫連線
+        folder_id: 資料夾 ID
+        name: 新名稱（可選）
+        description: 新描述（可選）
+        
+    Returns:
+        更新後的 Folder 物件
+        
+    Raises:
+        NotFoundError: 資料夾不存在
+        ConflictError: 新名稱已存在
+    """
+    folder = get_folder(conn, folder_id)
+    
+    updates = {}
+    if name is not None:
+        _check_required("folders.name", name)
+        updates["name"] = name
+    if description is not None:
+        updates["description"] = description
+    
+    if not updates:
+        return folder
+    
+    now_str = db.now()
+    updates["updated_at"] = now_str
+    
+    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+    values = list(updates.values()) + [folder_id]
+    
+    try:
+        conn.execute(
+            f"UPDATE folders SET {set_clause} WHERE id = ?",
+            values,
+        )
+    except sqlite3.IntegrityError as e:
+        if "UNIQUE constraint failed" in str(e):
+            raise ConflictError(f"資料夾名稱已存在：{name}")
+        raise ValidationError(f"更新資料夾失敗：{e}")
+    
+    # 重新查詢並返回
+    return get_folder(conn, folder_id)
+
+
+def delete_folder(conn: sqlite3.Connection, folder_id: str) -> None:
+    """刪除資料夾及其內的所有紀錄（紀錄被移至未分類）。
+    
+    Args:
+        conn: 資料庫連線
+        folder_id: 資料夾 ID
+        
+    Raises:
+        NotFoundError: 資料夾不存在
+    """
+    folder = get_folder(conn, folder_id)
+    
+    # 先把該資料夾的所有紀錄的 folder_id 設為 NULL（未分類）
+    conn.execute(
+        "UPDATE items SET folder_id = NULL WHERE folder_id = ?",
+        (folder_id,),
+    )
+    
+    # 刪除資料夾
+    conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+
+
+def get_folder_items(
+    conn: sqlite3.Connection,
+    folder_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+) -> tuple[list[Item], int]:
+    """列出資料夾內的紀錄。
+    
+    Args:
+        conn: 資料庫連線
+        folder_id: 資料夾 ID
+        limit: 分頁限制
+        offset: 分頁偏移
+        status: 紀錄狀態過濾（可選）
+        
+    Returns:
+        (紀錄清單, 總數)
+        
+    Raises:
+        NotFoundError: 資料夾不存在
+    """
+    # 驗證資料夾存在
+    get_folder(conn, folder_id)
+    
+    query = "SELECT * FROM items WHERE folder_id = ?"
+    params = [folder_id]
+    
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    else:
+        query += " AND status != 'void'"
+    
+    # 計算總數
+    count_query = query.replace("SELECT *", "SELECT COUNT(*)")
+    count = conn.execute(count_query, params).fetchone()[0]
+    
+    # 查詢分頁數據
+    query += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    
+    rows = conn.execute(query, params).fetchall()
+    items = [Item.from_row(row) for row in rows]
+    
+    return items, count
+
+
+def move_item_to_folder(
+    conn: sqlite3.Connection,
+    item_id: str,
+    folder_id: str | None = None,
+    source: str = "manual",
+) -> Item:
+    """移動紀錄至資料夾。
+    
+    Args:
+        conn: 資料庫連線
+        item_id: 紀錄 ID
+        folder_id: 目標資料夾 ID（None = 未分類）
+        source: 操作來源 ('manual'、'auto'、'rule')
+        
+    Returns:
+        更新後的 Item 物件
+        
+    Raises:
+        NotFoundError: 紀錄或資料夾不存在
+    """
+    item = get_item(conn, item_id)
+    
+    if folder_id is not None:
+        # 驗證資料夾存在
+        get_folder(conn, folder_id)
+    
+    now_str = db.now()
+    
+    # 記錄分類歷史
+    classification_id = ids.ulid()
+    conn.execute(
+        """INSERT INTO folder_classifications (id, item_id, folder_id, source, created_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (classification_id, item_id, folder_id, source, now_str),
+    )
+    
+    # 更新 items 表
+    conn.execute(
+        "UPDATE items SET folder_id = ?, updated_at = ? WHERE id = ?",
+        (folder_id, now_str, item_id),
+    )
+    
+    # 記錄事件
+    conn.execute(
+        """INSERT INTO events (id, entity_type, entity_id, type, actor, 
+                              field, prev_value, next_value, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            ids.ulid(),
+            "item",
+            item_id,
+            "folder_changed",
+            "user",
+            "folder_id",
+            item.folder_id or "",
+            folder_id or "",
+            now_str,
+        ),
+    )
+    
+    return Item(
+        **{
+            **asdict(item),
+            "folder_id": folder_id,
+            "updated_at": now_str,
+        }
+    )
+
+
+def get_item_folder(conn: sqlite3.Connection, item_id: str) -> Folder | None:
+    """取得紀錄所屬的資料夾。
+    
+    Args:
+        conn: 資料庫連線
+        item_id: 紀錄 ID
+        
+    Returns:
+        Folder 物件或 None（未分類）
+        
+    Raises:
+        NotFoundError: 紀錄不存在
+    """
+    item = get_item(conn, item_id)
+    
+    if not item.folder_id:
+        return None
+    
+    return get_folder(conn, item.folder_id)
+
+
+def get_unclassified_items(
+    conn: sqlite3.Connection,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[list[Item], int]:
+    """取得所有未分類的紀錄。
+    
+    Args:
+        conn: 資料庫連線
+        limit: 分頁限制
+        offset: 分頁偏移
+        
+    Returns:
+        (紀錄清單, 總數)
+    """
+    # 計算總數
+    count = conn.execute(
+        "SELECT COUNT(*) FROM items WHERE folder_id IS NULL AND status = 'active'"
+    ).fetchone()[0]
+    
+    # 查詢分頁數據
+    rows = conn.execute(
+        """SELECT * FROM items 
+           WHERE folder_id IS NULL AND status = 'active'
+           ORDER BY updated_at DESC
+           LIMIT ? OFFSET ?""",
+        (limit, offset),
+    ).fetchall()
+    
+    items = [Item.from_row(row) for row in rows]
+    
+    return items, count
+

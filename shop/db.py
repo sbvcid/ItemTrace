@@ -128,40 +128,44 @@ def _migrate_phase4_folders(conn: sqlite3.Connection) -> None:
         return
     
     # items 表需要添加 folder_id，但 STRICT 表不支援 ALTER TABLE ADD COLUMN
-    # 改用重建表的方式（SQLite 標準做法）
-    conn.execute("""
-        CREATE TABLE items_new (
-            id          TEXT PRIMARY KEY,
-            name        TEXT NOT NULL DEFAULT '',
-            brand       TEXT NOT NULL DEFAULT '',
-            model       TEXT NOT NULL DEFAULT '',
-            category    TEXT NOT NULL DEFAULT '',
-            quantity    INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 1),
-            condition   TEXT NOT NULL DEFAULT '',
-            notes       TEXT NOT NULL DEFAULT '',
-            attributes  TEXT NOT NULL DEFAULT '{}',
-            folder_id   TEXT,
-            status      TEXT NOT NULL DEFAULT 'active'
-                        CHECK (status IN ('active','archived','void')),
-            created_at  TEXT NOT NULL,
-            updated_at  TEXT NOT NULL
-        ) STRICT
-    """)
-    
-    # 複製既有資料（folder_id 為 NULL）
-    conn.execute("""
-        INSERT INTO items_new 
-        (id, name, brand, model, category, quantity, condition, notes, 
-         attributes, folder_id, status, created_at, updated_at)
-        SELECT 
-        id, name, brand, model, category, quantity, condition, notes, 
-        attributes, NULL, status, created_at, updated_at
-        FROM items
-    """)
-    
-    # 移除舊表、重命名新表
-    conn.execute("DROP TABLE items")
-    conn.execute("ALTER TABLE items_new RENAME TO items")
+    # 改用重建表的方式（SQLite 標準做法）。需要暫時禁用外鍵因為要 DROP 有外鍵引用的表。
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("""
+            CREATE TABLE items_new (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL DEFAULT '',
+                brand       TEXT NOT NULL DEFAULT '',
+                model       TEXT NOT NULL DEFAULT '',
+                category    TEXT NOT NULL DEFAULT '',
+                quantity    INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 1),
+                condition   TEXT NOT NULL DEFAULT '',
+                notes       TEXT NOT NULL DEFAULT '',
+                attributes  TEXT NOT NULL DEFAULT '{}',
+                folder_id   TEXT,
+                status      TEXT NOT NULL DEFAULT 'active'
+                            CHECK (status IN ('active','archived','void')),
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            ) STRICT
+        """)
+        
+        # 複製既有資料（folder_id 為 NULL）
+        conn.execute("""
+            INSERT INTO items_new 
+            (id, name, brand, model, category, quantity, condition, notes, 
+             attributes, folder_id, status, created_at, updated_at)
+            SELECT 
+            id, name, brand, model, category, quantity, condition, notes, 
+            attributes, NULL, status, created_at, updated_at
+            FROM items
+        """)
+        
+        # 移除舊表、重命名新表
+        conn.execute("DROP TABLE items")
+        conn.execute("ALTER TABLE items_new RENAME TO items")
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def version(config: Config) -> str:
