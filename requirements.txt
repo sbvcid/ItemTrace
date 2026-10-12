@@ -14,3 +14,10 @@ segno>=1.6
 # - pywin32：列印佇列與 DEVMODE（GDI 部分用 ctypes，所以只需要這一個包）。
 pymupdf>=1.24
 pywin32>=306
+
+# HEIC／HEIF（iPhone 預設格式）解碼：選取後的預覽、AI 分析輸入與
+# 詳情頁預覽都靠它（shop/heif.py）。軟性依賴：缺少時 HEIC 預覽會明確
+# 失敗（400）並說明，其他格式的既有流程完全不受影響；原始檔永不轉換。
+# Windows Python 3.11／3.12 有官方預建 wheel（cp310–cp313、win_amd64），
+# 不需要本機編譯工具鏈。
+pillow-heif>=1.8

@@ -10,7 +10,7 @@
  *   and applied explicitly — nothing is overwritten silently.
  */
 
-import { api, getPhotoUrl } from '../core/api.js';
+import { api, getPhotoPreviewUrl } from '../core/api.js';
 import { escapeHtml } from '../core/dom.js';
 import { showToast } from '../core/router.js';
 import { t } from '../i18n/index.js';
@@ -691,14 +691,15 @@ export async function createRecordDetailView(params, router) {
     // 已在垃圾桶的紀錄：不再提供「移至垃圾桶」；還原／永久刪除在垃圾桶頁。
     moveTrashBtn.style.display = item.status === 'void' ? 'none' : '';
 
-    // Photos carousel
+    // Photos carousel（HEIC／HEIF 由 /api/photos/{id}/preview 解碼成
+    // JPEG；其他格式仍是 /files 原檔。預覽不會被登記成另一張照片。）
     let photosHtml = '';
     if (photos.length > 0) {
       const primaryPhoto = photos[0];
-      const primaryPhotoUrl = getPhotoUrl(primaryPhoto.filename);
+      const primaryPhotoUrl = getPhotoPreviewUrl(primaryPhoto);
 
       const thumbsHtml = photos.map((p, idx) => {
-        const photoUrl = getPhotoUrl(p.filename);
+        const photoUrl = getPhotoPreviewUrl(p);
         return `
           <div class="detail-thumb-item ${idx === 0 ? 'active' : ''}" data-url="${escapeHtml(photoUrl)}">
             <img src="${escapeHtml(photoUrl)}" alt="${escapeHtml(t('detail.photosTitle', { n: idx + 1 }))}" loading="lazy" />

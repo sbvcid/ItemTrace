@@ -6,7 +6,7 @@
  * 2. 🔍 找回來 (Retrieve / Search)
  */
 
-import { api, getPhotoUrl } from '../core/api.js';
+import { api, getItemThumbnailUrl } from '../core/api.js';
 import { escapeHtml } from '../core/dom.js';
 import { t } from '../i18n/index.js';
 
@@ -163,8 +163,8 @@ export async function createHomeView(params, router) {
     const rawTitle = item.name || item.model || t('home.cardUntitled');
     const title = escapeHtml(rawTitle);
 
-    // Standardized thumbnail URL resolver
-    const thumbUrl = item.thumbnail ? getPhotoUrl(item.thumbnail) : null;
+    // Standardized thumbnail URL resolver（HEIC／HEIF 走伺服器預覽端點）
+    const thumbUrl = item.thumbnail ? getItemThumbnailUrl(item) : null;
     const thumbHtml = thumbUrl
       ? `<img src="${escapeHtml(thumbUrl)}" alt="${title}" class="record-thumb" loading="lazy" />`
       : `<div class="record-thumb-placeholder">📷</div>`;

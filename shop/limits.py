@@ -15,9 +15,10 @@ Template 尺寸讓列印光柵爆記憶體。
 * **單檔上限**（`MAX_UPLOAD_BYTES`）：multipart 每個檔案邊讀邊累計，
   超過就 413，已存的檔案留在原處（不靜默丟掉合法證據）。
 * **每請求檔數上限**（`MAX_UPLOAD_FILES`）：超過直接 400，不做任何落盤。
-* **像素上限**（`MAX_IMAGE_PIXELS`）：JPEG／PNG 可由檔頭「零解碼」讀出
-  寬高；超過上限在**上傳時**就 400。其他格式在 AI 縮圖時由 Pillow 的
-  bomb 防護與同一個上限兜底（見 shop/ai_client.encode_photo）。
+* **像素上限**（`MAX_IMAGE_PIXELS`）：JPEG／PNG／HEIC／HEIF 可由檔頭
+  「零解碼」讀出寬高（HEIF 讀 metadata 的 ispe，不展開像素）；超過
+  上限在**上傳時**就 400。其他格式在 AI 縮圖時由 Pillow 的 bomb 防護
+  與同一個上限兜底（見 shop/ai_client.encode_photo）。
 * **列印光柵上限**（`MAX_PRINT_PIXELS`）：送進瀏覽器前與量到 PDF 實際
   尺寸後各檢查一次，超過就 400 —— 不讓一個超大 Template 把
   PyMuPDF 光柵化吃爆記憶體。
@@ -40,6 +41,7 @@ import time
 from collections import deque
 
 from .errors import PayloadTooLargeError, ValidationError
+from . import heif as heif_mod
 from .photos import read_jpeg_size
 
 #: 整個 HTTP 請求 body 的上限（32 MiB）。手機原圖一張 3~8 MB，
@@ -76,10 +78,12 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 def image_dimensions(data: bytes) -> tuple[int, int] | None:
-    """零解碼讀出 JPEG／PNG 的寬高；其他格式或讀不到回 None。
+    """零解碼讀出 JPEG／PNG／HEIC／HEIF 的寬高；其他格式或讀不到回 None。
 
     JPEG 走 shop.photos 既有的 SOF 解析（只讀檔頭幾百 bytes）；
-    PNG 讀 IHDR（固定位置）。兩者都不進 Pillow、不展開像素。
+    PNG 讀 IHDR（固定位置）；HEIF 讀 metadata 的 ispe（shop.heif，
+    pillow-heif 只解析 box 結構、不展開像素）。全都不進 Pillow、
+    不展開像素。
     """
     jpeg = read_jpeg_size(data)
     if jpeg:
@@ -92,6 +96,8 @@ def image_dimensions(data: bytes) -> tuple[int, int] | None:
         width, height = struct.unpack_from(">II", data, 16)
         if width and height:
             return (width, height)
+    if heif_mod.is_heif(data):
+        return heif_mod.heif_dimensions(data)
     return None
 
 

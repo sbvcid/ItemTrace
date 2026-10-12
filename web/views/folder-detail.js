@@ -7,7 +7,7 @@
  * - Back to folders list
  */
 
-import { api, getPhotoUrl } from '../core/api.js';
+import { api, getItemThumbnailUrl } from '../core/api.js';
 import { escapeHtml } from '../core/dom.js';
 import { showToast } from '../core/router.js';
 import { t } from '../i18n/index.js';
@@ -159,7 +159,7 @@ export async function createFolderDetailView(params, router) {
     const rawTitle = item.name || item.model || t('home.cardUntitled');
     const title = escapeHtml(rawTitle);
 
-    const thumbUrl = item.thumbnail ? getPhotoUrl(item.thumbnail) : null;
+    const thumbUrl = item.thumbnail ? getItemThumbnailUrl(item) : null;
     const thumbHtml = thumbUrl
       ? `<img src="${escapeHtml(thumbUrl)}" alt="${title}" class="record-thumb" loading="lazy" />`
       : `<div class="record-thumb-placeholder">📷</div>`;

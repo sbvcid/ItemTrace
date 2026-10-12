@@ -1,7 +1,8 @@
 """照片檔案的 metadata 讀取：EXIF、影像尺寸、SHA-256、時間退路。
 
-只用標準函式庫。專案從頭到尾都不要求 pip install（SPEC-v1 §9），
-所以 JPEG 的 APP1/Exif 與 SOF 標記在這裡自己解析。
+JPEG 的 APP1/Exif 與 SOF 標記在這裡自己解析（只用標準函式庫）。
+HEIC／HEIF 的尺寸與 EXIF 走 shop/heif.py（pillow-heif 軟性依賴）；
+讀不到就當作沒有，退回既有機制 —— 絕不推測。
 
 解析失敗一律不丟例外，只回傳 None —— 手機上傳常丟 EXIF，不能因此中斷
 整條入庫流程（SPEC-v1 §14.4）。時間退路依序為：
@@ -9,8 +10,10 @@
     EXIF DateTimeOriginal → DateTimeDigitized → IFD0 DateTime
     → 檔案 mtime → 檔名開頭的時間戳 → 留空
 
-所有時間一律轉成 ISO8601 秒精度（與 db.now() 同格式），因為
-photos.captured_at 與 observations.captured_at 都是 ISO8601。
+只有 EXIF 真的解析出可靠時間才會標示 captured_from = "exif"；
+HEIF 讀不到 EXIF 時沿用同一條退路。所有時間一律轉成 ISO8601 秒精度
+（與 db.now() 同格式），因為 photos.captured_at 與
+observations.captured_at 都是 ISO8601。
 """
 
 from __future__ import annotations
@@ -21,6 +24,8 @@ import struct
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+from . import heif
 
 #: 只讀檔案開頭這麼多 bytes 就足以涵蓋 EXIF 與 SOF（都在第一段 APP1 附近）。
 HEADER_BYTES = 128 * 1024
@@ -67,8 +72,15 @@ class PhotoMetadata:
 
 def read_metadata(path: Path) -> PhotoMetadata:
     head = _read_head(path)
-    captured_at, captured_from = _resolve_captured_at(path, head)
-    size = read_jpeg_size(head)
+    if heif.is_heif(head):
+        # HEIF 的尺寸與 EXIF 都要完整位元組才能可靠解析（metadata box
+        # 可能在檔案後段）；HEIC 一張數 MB，整檔讀入可接受。
+        data = path.read_bytes()
+        captured_at, captured_from = _resolve_captured_at_bytes(data, path)
+        size = heif.heif_dimensions(data)
+    else:
+        captured_at, captured_from = _resolve_captured_at(path, head)
+        size = read_jpeg_size(head)
     return PhotoMetadata(
         sha256=sha256_of(path),
         bytes=path.stat().st_size,
@@ -91,7 +103,10 @@ def parse_metadata(data: bytes, name: str) -> PhotoMetadata:
         from_name = parse_filename_timestamp(name)
         captured_at = from_name
         captured_from = FILENAME_SOURCE if from_name else NO_SOURCE
-    size = read_jpeg_size(data)
+    if heif.is_heif(data):
+        size = heif.heif_dimensions(data)
+    else:
+        size = read_jpeg_size(data)
     return PhotoMetadata(
         sha256=sha256_bytes(data),
         bytes=len(data),
@@ -104,7 +119,10 @@ def parse_metadata(data: bytes, name: str) -> PhotoMetadata:
 
 def read_captured_at(path: Path) -> tuple[str | None, str]:
     """只取拍攝時間，不做整檔雜湊。掃描 inbox 用這個。"""
-    return _resolve_captured_at(path, _read_head(path))
+    head = _read_head(path)
+    if heif.is_heif(head):
+        return _resolve_captured_at_bytes(path.read_bytes(), path)
+    return _resolve_captured_at(path, head)
 
 
 def sha256_of(path: Path) -> str:
@@ -163,10 +181,26 @@ def read_jpeg_size(data: bytes) -> tuple[int, int] | None:
 
 
 def read_exif_captured_at(data: bytes) -> str | None:
-    """從 JPEG 的 APP1/Exif 取出拍攝時間，轉成 ISO8601。"""
+    """取出拍攝時間，轉成 ISO8601。支援 JPEG APP1 與 HEIC／HEIF。
+
+    HEIF 的 EXIF 來自 shop/heif.py（pillow-heif 讀 metadata，不解碼
+    像素）；讀不到或解析失敗回 None，呼叫端走既有退路。
+    """
     tiff = _find_exif_tiff(data)
+    if tiff is None and heif.is_heif(data):
+        tiff = heif.read_exif_tiff(data)
     if tiff is None:
         return None
+    return captured_at_from_tiff(tiff)
+
+
+def captured_at_from_tiff(tiff: bytes) -> str | None:
+    """從 TIFF 區塊（II/MM 開頭）讀 DateTimeOriginal／Digitized／DateTime。
+
+    DateTimeOriginal（0x9003）標準上在 Exif IFD，但部分寫入器（含
+    Pillow 的最小 EXIF、某些 HEIF 編碼器）直接放在 IFD0；兩處都找，
+    順序仍是 Original → Digitized → IFD0 DateTime。
+    """
     try:
         order = "<" if tiff[:2] == b"II" else ">" if tiff[:2] == b"MM" else ""
         if not order:
@@ -177,10 +211,12 @@ def read_exif_captured_at(data: bytes) -> str | None:
         ifd0 = _read_ifd(tiff, ifd0_offset, order)
 
         pointer = ifd0.get(_TAG_EXIF_IFD)
-        if isinstance(pointer, int):
-            exif_ifd = _read_ifd(tiff, pointer, order)
-            for tag in (_TAG_DATETIME_ORIGINAL, _TAG_DATETIME_DIGITIZED):
-                found = iso_from_exif(exif_ifd.get(tag))
+        exif_ifd = (
+            _read_ifd(tiff, pointer, order) if isinstance(pointer, int) else {}
+        )
+        for tag in (_TAG_DATETIME_ORIGINAL, _TAG_DATETIME_DIGITIZED):
+            for ifd in (ifd0, exif_ifd):
+                found = iso_from_exif(ifd.get(tag))
                 if found:
                     return found
         return iso_from_exif(ifd0.get(_TAG_DATETIME))
@@ -207,6 +243,18 @@ def _resolve_captured_at(path: Path, head: bytes) -> tuple[str | None, str]:
     captured = read_exif_captured_at(head)
     if captured:
         return captured, EXIF_SOURCE
+    return _fallback_captured_at(path)
+
+
+def _resolve_captured_at_bytes(data: bytes, path: Path) -> tuple[str | None, str]:
+    """同上的退路，但 EXIF 從完整位元組讀（HEIF 用）。"""
+    captured = read_exif_captured_at(data)
+    if captured:
+        return captured, EXIF_SOURCE
+    return _fallback_captured_at(path)
+
+
+def _fallback_captured_at(path: Path) -> tuple[str | None, str]:
     mtime = _mtime_iso(path)
     if mtime:
         return mtime, MTIME_SOURCE

@@ -53,6 +53,7 @@ from .errors import (
     ValidationError,
 )
 from . import evidence as evidence_mod
+from . import heif as heif_mod
 from . import repo as repo_mod
 from . import security
 from .models import Identifier, Item, Observation, Photo
@@ -119,6 +120,12 @@ DEFAULT_GROUP_GAP_MINUTES = 30
 #: SR-2（F7）：API 文件路徑；未開啟時連 SPA 回退都不服務這幾個路徑，
 #: 免得「/openapi.json 回 index.html」這種看似可用實則誤導的回應。
 _DOC_PATHS = frozenset({"docs", "openapi.json", "redoc"})
+
+#: HEIC／HEIF 預覽（選取後的前端預覽＋詳情頁）解碼參數。
+#: 1600px 長邊足夠桌面全螢幕檢視，也是 derived/ 快取的大小；
+#: AI 分析的縮圖另用 ai_client.MAX_SIDE（1024），兩者用途不同。
+PREVIEW_MAX_SIDE = 1600
+PREVIEW_JPEG_QUALITY = 80
 
 
 class BodySizeLimitMiddleware:
@@ -811,6 +818,70 @@ def delete_photo(photo_id: str, repo: Repo) -> None:
     repo.delete_photo(photo_id)
 
 
+@router.get("/api/photos/{photo_id}/preview", tags=["photos"], response_class=Response)
+def photo_preview(
+    photo_id: str,
+    repo: Repo,
+    cfg: Annotated[Config, Depends(get_config)],
+) -> Response:
+    """照片的瀏覽器可顯示預覽（詳情頁與首頁縮圖）。
+
+    瀏覽器可原生顯示的格式（JPEG／PNG／WebP／…）直接回原檔，與
+    /files 相同政策；HEIC／HEIF 解碼成 JPEG——在不登記任何 photos
+    資料列的前提下，把衍生預覽快取在該商品的 ``derived/``，回傳的
+    是快取檔。**原始檔永遠不被修改**：雜湊、副檔名與 bytes 以原檔
+    為準，預覽不構成另一張證據照片（不會出現在 photos 清單）。
+
+    像素上限在解碼前以 metadata 檢查（50 MP 同一組政策）；缺
+    pillow-heif 或檔案損毀時回 400 並說明原因，不假裝成功。
+    """
+    photo = repo.get_photo(photo_id)
+    target = (cfg.data_root / photo.filename).resolve()
+    if not target.is_relative_to(cfg.files_dir.resolve()) or not target.is_file():
+        raise NotFoundError(f"找不到照片檔案：{photo.filename}")
+
+    if not _is_heif_file(target):
+        return _file_response(target)
+
+    data = target.read_bytes()
+    limits.check_image_pixels(
+        data, photo.orig_name or photo.filename, max_pixels=cfg.max_image_pixels
+    )
+
+    cached = _preview_cache_path(cfg, photo)
+    if cached.is_file():
+        return _file_response(cached)
+
+    jpeg = heif_mod.decode_to_jpeg(
+        data,
+        max_side=PREVIEW_MAX_SIDE,
+        quality=PREVIEW_JPEG_QUALITY,
+        max_pixels=cfg.max_image_pixels,
+    )
+    if jpeg is None:
+        raise ValidationError(
+            f"無法解碼這張 HEIC／HEIF 照片：{photo.orig_name or photo.filename}"
+            "（檔案可能損毀，或伺服器缺少 pillow-heif 支援）。原始檔未被修改。"
+        )
+
+    # 快取只是加速：寫不進去（權限、磁碟）照樣回這次解碼的 JPEG，
+    # 不讓快取問題擋住檢視；原始檔目錄完全不受影響。
+    try:
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        temp = cached.with_name(cached.name + ".tmp")
+        temp.write_bytes(jpeg)
+        temp.replace(cached)
+    except OSError:
+        temp = cached.with_name(cached.name + ".tmp")
+        temp.unlink(missing_ok=True)
+
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers=dict(PREVIEW_HEADERS),
+    )
+
+
 # ----------------------------------------------------------------------
 # Identifiers
 # ----------------------------------------------------------------------
@@ -1264,6 +1335,52 @@ async def upload_to_inbox(
         ],
         count=len(entries),
         staged=staged,
+    )
+
+
+@router.post("/api/inbox/preview", tags=["inbox"])
+async def preview_inbox_photo(
+    cfg: Annotated[Config, Depends(get_config)],
+    file: Annotated[UploadFile, File()] = None,
+) -> Response:
+    """選取後的前端預覽：把 HEIC／HEIF 解碼成 JPEG 回傳（不落盤）。
+
+    capture 在瀏覽器無法顯示 HEIC 時呼叫這裡；檔案**不寫入 inbox、
+    不寫資料庫**，只是解碼練習場。像素上限與上傳同一組政策，且在
+    解碼前以 metadata 檢查（50 MP）；超過、損毀或伺服器缺
+    pillow-heif 一律回 400 並說明原因 —— 前端據此明確拒絕該檔，
+    不讓它進入待整理清單（不靜默丟棄、也不假裝支援）。
+
+    原始位元組只存在於本次請求的記憶體；正式上傳仍走
+    /api/inbox/photos，兩者互不影響。
+    """
+    if file is None:
+        raise ValidationError("沒有收到檔案（multipart 欄位名要是 file）")
+    data = await limits.read_upload_limited(file, cfg.max_upload_bytes)
+    name = file.filename or "photo"
+    limits.check_image_pixels(data, name, max_pixels=cfg.max_image_pixels)
+
+    if not heif_mod.is_heif(data):
+        raise ValidationError(
+            f"這個端點只產生 HEIC／HEIF 的預覽（{name} 不是 HEIC／HEIF；"
+            "瀏覽器可直接顯示的格式不需要伺服器預覽）。"
+        )
+
+    jpeg = heif_mod.decode_to_jpeg(
+        data,
+        max_side=PREVIEW_MAX_SIDE,
+        quality=PREVIEW_JPEG_QUALITY,
+        max_pixels=cfg.max_image_pixels,
+    )
+    if jpeg is None:
+        raise ValidationError(
+            f"無法解碼這張 HEIC／HEIF 照片：{name}"
+            "（檔案可能損毀，或伺服器缺少 pillow-heif 支援）。"
+        )
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers=dict(PREVIEW_HEADERS),
     )
 
 
@@ -1781,6 +1898,30 @@ SAFE_INLINE_IMAGE_EXTENSIONS = frozenset(
 )
 #: 媒體回應的最嚴 CSP：就算有瀏覽器仍嘗試渲染，也不給任何資源／腳本能力。
 FILE_CSP = "default-src 'none'; sandbox"
+
+#: 預覽回應的標頭：與 /files 的私人媒體政策一致（不進共享快取）。
+PREVIEW_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": FILE_CSP,
+    "Cache-Control": "private, max-age=3600",
+}
+
+
+def _is_heif_file(target: Path) -> bool:
+    """只讀檔頭判斷是否為 HEIC／HEIF（完整驗證留給解碼器）。"""
+    with target.open("rb") as handle:
+        return heif_mod.is_heif(handle.read(32))
+
+
+def _preview_cache_path(cfg: Config, photo: Photo) -> Path:
+    """衍生預覽的快取位置：files/<item>/derived/preview-v1-<sha前16>.jpg。
+
+    以原始檔的 SHA-256 命名（原始檔不可變 → 快取內容確定）；檔名帶
+    v1 讓未來解碼參數改變時可以自然淘汰。這個檔案**不是** photos
+    資料列，不會出現在照片清單、證據包或列印。
+    """
+    digest = (photo.sha256 or photo.id)[:16]
+    return inbox_mod.derived_dir(cfg, photo.item_id) / f"preview-v1-{digest}.jpg"
 
 
 def _file_response(target: Path) -> FileResponse:

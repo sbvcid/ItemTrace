@@ -422,6 +422,39 @@ SECURITY-AUDIT.md「SR-2」節）：立即結束註解（`<!-->`）與實體編�
 
 ---
 
+## D13. HEIC／HEIF 支援：pillow-heif 解碼、衍生預覽與證據邊界（2026-10-12）
+
+### 背景
+iPhone 預設以 HEIC 拍攝；Chrome／Edge／Firefox 無法直接顯示，Pillow 也解不開。過去 capture 在選取時明確拒收 HEIC（格式分流、不假裝支援）。需求是讓 HEIC／HEIF 完整走完「選取預覽 → 上傳 → AI 分析 → 存檔 → 詳情檢視」，同時維持既有不變量：原始檔不可轉換／覆寫／遺失；JPEG 只作預覽與 AI 的衍生資料；50 MP 像素上限與上傳大小／檔數限制不得放寬。
+
+### 選項
+1. **前端轉檔（heic2any／WASM libheif）** —— 違反零建置、零外部 CDN 原則，且手機負擔大。
+2. **伺服器端 pillow-heif 解碼 ＋ 受控預覽端點** —— Windows 有預建 wheel（cp310–cp313），原始位元組不動，與現有 AI 縮圖（Pillow）同一路線。✓
+3. **只靠 Safari 原生解碼** —— 對 Chrome／Edge／Firefox（多數桌面與 Android）等於不支援。
+
+### 決定
+**採用 Option 2：**
+- **解碼集中**：`shop/heif.py` 統管 HEIF 偵測（ftyp brand）、零解碼尺寸（ispe metadata）、JPEG 解碼（含方向校正）與 EXIF 取出；pillow-heif 為**軟性依賴**（缺套件時 HEIC 預覽明確 400，其餘格式不受影響），但列入 `requirements.txt` 讓標準安裝直接可用。
+- **三條影像用途**：(1) 選取後前端預覽 `POST /api/inbox/preview`（不落盤、不建紀錄）；(2) AI 分析 `ai_client.encode_photo` 解成 JPEG data URL；(3) 詳情／縮圖 `GET /api/photos/{id}/preview`。
+- **衍生預覽邊界（補強 D6）**：預覽快取放 `files/{item}/derived/preview-v1-<sha前16>.jpg`，以原始檔 SHA-256 命名（原檔不可變 → 內容確定、可安全重生），**不登記 photos 資料列** —— 不進照片清單、證據包、列印或搜尋。瀏覽器可原生顯示的格式由 `/files` 直出原檔，不經過本端點重新編碼。尺寸統一長邊 1600px（D6 的雙尺寸設計未實作，統一尺寸即可涵蓋卡片縮圖與詳情大圖）。
+- **安全邊界不變**：上傳／預覽都先以 metadata 讀寬高再解碼（JPEG／PNG 零解碼；HEIF 讀 ispe），50 MP 上限、單檔 24 MiB、每請求 20 檔、body 32 MiB 全部沿用；解碼失敗與損毀檔一律 400 並說明，不假裝成功。
+- **metadata 與 EXIF**：HEIF 的尺寸與 EXIF 併入 `shop/photos` 既有讀取（`read_metadata`／`parse_metadata`／`read_captured_at`）；只有 EXIF 真解析出可靠時間才標 `captured_from="exif"`，否則沿用既有退路（mtime／檔名／留空）。TIFF 解析補強：DateTimeOriginal 允許在 IFD0（部分寫入器）或 Exif IFD。
+- **選取流程**：HEIC／HEIF 不再於選取時拒收；前端保留原始 `File` 供正式上傳，向受保護 API 取得 JPEG 預覽 blob 作托盤縮圖。**預覽失敗 → 明確提示並阻止該檔進入待整理清單**；預覽未完成前停用「AI 開始整理」，不讓檔案被上傳流程漏掉。
+
+### 取捨
+- **優勢**：iPhone 照片零摩擦匯入；原檔逐位元組保存；無前端函式庫、無 CDN。
+- **成本**：新增一個原生擴充依賴（pillow-heif ＋ libheif bundled，約 7 MB wheel）；HEIC 首次詳情檢視需伺服器解碼（後續走 derived 快取）。
+- **風險**：解碼器漏洞面（libheif）；以「metadata 先驗尺寸 ＋ Pillow bomb 防護 ＋ 本機信任邊界」緩解；真機 iOS／Android 流程未在自動化環境驗證（需人工驗收）。
+
+### 驗證方式
+- `tests/test_heic.py`（25 項）：偵測、零解碼尺寸、JPEG 解碼與方向、EXIF 時間（含缺失時不推測）、50 MP（含真實 54 MP 檔）、損毀檔、上傳／intake 原檔 bytes＋SHA-256＋副檔名不變、詳情預覽與 derived 快取不成為第二張證據、AI 輸入為 JPEG、重複匯入 skipped、取消無殘留。
+- `tests/test_capture_inputs.py`：Node 實跑 `capture.js` 驗證 HEIC 預覽成功／失敗／等待中三情境（失敗不入托盤＋雙語提示；等待中停用開始按鈕）。
+- 全套 1228 測試通過；瀏覽器 E2E（隔離資料目錄）走完選取→預覽→存檔→詳情。
+
+**狀態**：✓ Accepted（2026-10-12）
+
+---
+
 ## 開放問題
 
 | 編號 | 問題 | 優先級 | 狀態 |
@@ -442,5 +475,6 @@ SECURITY-AUDIT.md「SR-2」節）：立即結束註解（`<!-->`）與實體編�
 - **2026-10-10**：新增 D10（SR-2：資源上限、輸出衛生、列印管線硬化）
 - **2026-10-11**：D2／D3／D4／D5 狀態校準（attributes 已實作；FTS5／繁簡轉換未採納未排程；垃圾桶生命週期以 Phase 3 實作為準，30 天自動清除未採納）；O1／O5 結案；新增 D11（文件效力範圍與已取消 UI 清單）
 - **2026-10-11**：新增 D12（AI 重新分析完整歷史上下文、證據時間軸與新證據自動套用決策）
+- **2026-10-12**：新增 D13（HEIC／HEIF 支援：pillow-heif 伺服器端解碼、受控預覽端點與 derived 快取邊界；補強 D6 的衍生預覽實作方式）
 
 

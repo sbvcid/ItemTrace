@@ -329,9 +329,14 @@ class Repository:
         列表頁要顯示縮圖，但 GET /api/items 不含照片欄位；逐筆呼叫詳情會變成
         N+1 次請求，所以這裡一次撈完。代表照片取最早的 original —— 那是進貨
         當下的證據，比後來補拍的更能代表這件商品。
+
+        thumbnail_id 是同一張照片的 id：HEIC／HEIF 的縮圖要走
+        GET /api/photos/{id}/preview（伺服器端解碼），前端才知道要換
+        URL；其他格式仍直接用 filename。
         """
         summaries: dict[str, dict[str, Any]] = {
-            item_id: {"photo_count": 0, "thumbnail": None} for item_id in item_ids
+            item_id: {"photo_count": 0, "thumbnail": None, "thumbnail_id": None}
+            for item_id in item_ids
         }
         if not item_ids:
             return summaries
@@ -342,7 +347,10 @@ class Repository:
                    s.n AS photo_count,
                    (SELECT p.filename FROM photos p
                      WHERE p.item_id = s.item_id AND p.role = 'original'
-                     ORDER BY p.id LIMIT 1) AS thumbnail
+                     ORDER BY p.id LIMIT 1) AS thumbnail,
+                   (SELECT p.id FROM photos p
+                     WHERE p.item_id = s.item_id AND p.role = 'original'
+                     ORDER BY p.id LIMIT 1) AS thumbnail_id
               FROM (SELECT item_id, count(*) AS n
                       FROM photos
                      WHERE item_id IN ({marks})
@@ -354,6 +362,7 @@ class Repository:
             summaries[row["item_id"]] = {
                 "photo_count": row["photo_count"],
                 "thumbnail": row["thumbnail"],
+                "thumbnail_id": row["thumbnail_id"],
             }
         return summaries
 

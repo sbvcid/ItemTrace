@@ -60,6 +60,25 @@ function deviceAuthHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+async function errorFromResponse(response) {
+  // 權杖無效或已被撤銷：清除本機憑證，讓下次載入回到配對引導。
+  if (response.status === 401) {
+    clearDeviceSession();
+  }
+  let errorDetail = `HTTP ${response.status}`;
+  try {
+    const data = await response.json();
+    if (data && data.detail) {
+      errorDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+    }
+  } catch (_) {
+    // Non-JSON error
+  }
+  const err = new Error(errorDetail);
+  err.status = response.status;
+  return err;
+}
+
 async function request(path, options = {}) {
   const url = path.startsWith('/') ? path : `/${path}`;
   // SR-1（F3）：所有請求統一套上自訂標頭。變更類請求在後端據此擋掉
@@ -74,22 +93,7 @@ async function request(path, options = {}) {
   const response = await fetch(url, { ...options, headers });
 
   if (!response.ok) {
-    // 權杖無效或已被撤銷：清除本機憑證，讓下次載入回到配對引導。
-    if (response.status === 401) {
-      clearDeviceSession();
-    }
-    let errorDetail = `HTTP ${response.status}`;
-    try {
-      const data = await response.json();
-      if (data && data.detail) {
-        errorDetail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
-      }
-    } catch (_) {
-      // Non-JSON error
-    }
-    const err = new Error(errorDetail);
-    err.status = response.status;
-    throw err;
+    throw await errorFromResponse(response);
   }
 
   // Handle 204 or empty responses
@@ -169,6 +173,26 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ files: relativeFiles }),
     });
+  },
+
+  // HEIC／HEIF 選取後的前端預覽：伺服器解碼成 JPEG（不落盤）。
+  // 原始 File 保留給正式上傳（位元組原樣歸檔）；這裡只取得預覽 blob。
+  async previewInboxPhoto(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const headers = {
+      'X-Requested-With': 'ItemTrace',
+      ...deviceAuthHeaders(),
+    };
+    const response = await fetch('/api/inbox/preview', {
+      method: 'POST',
+      body: formData,
+      headers,
+    });
+    if (!response.ok) {
+      throw await errorFromResponse(response);
+    }
+    return response.blob();
   },
 
   // 草稿分析（capture 審閱用）：不建立任何紀錄。
@@ -377,5 +401,40 @@ export function getPhotoUrl(path) {
     return `/${clean}`;
   }
   return `/files/${clean}`;
+}
+
+/**
+ * 是否為 HEIC／HEIF 檔名：這些格式瀏覽器多半無法直接顯示，
+ * 需要走伺服器端預覽端點（JPEG）。
+ */
+export function isHeicPath(path) {
+  return /\.(heic|heif)$/i.test(String(path || ''));
+}
+
+/**
+ * 單張照片的可顯示 URL（詳情頁用）。
+ * HEIC／HEIF → /api/photos/{id}/preview（伺服器解碼成 JPEG，含 derived/
+ * 快取；不是另一張原始證據照片）；其他格式沿用 /files 原檔。
+ */
+export function getPhotoPreviewUrl(photo) {
+  if (!photo) return '';
+  const filename = photo.filename || '';
+  if (photo.id && isHeicPath(filename)) {
+    return `/api/photos/${encodeURIComponent(photo.id)}/preview`;
+  }
+  return getPhotoUrl(filename);
+}
+
+/**
+ * 列表頁縮圖 URL。HEIC／HEIF 的 thumbnail 需要 thumbnail_id 才能
+ * 走預覽端點；沒有 id（舊回應）就維持原檔路徑（破圖會由既有
+ * onerror/預留樣式兜底）。
+ */
+export function getItemThumbnailUrl(item) {
+  if (!item || !item.thumbnail) return '';
+  if (item.thumbnail_id && isHeicPath(item.thumbnail)) {
+    return `/api/photos/${encodeURIComponent(item.thumbnail_id)}/preview`;
+  }
+  return getPhotoUrl(item.thumbnail);
 }
 

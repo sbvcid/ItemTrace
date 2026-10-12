@@ -2,11 +2,11 @@
 
 最後更新：2026-10-12
 
-**當前狀態：拍照／匯入雙入口 UX 完成，裝置文案掛載修正完成（零 schema／API 變更），1199 測試無失敗**
+**當前狀態：HEIC／HEIF 完整支援完成（選取預覽、AI 分析、存檔與詳情檢視；原檔逐位元組保存），1228 測試無失敗**
 
 遠端狀態：`main` 與 `origin/main` 同步（含本階段 commit）
 
-測試驗證：`pytest` 完全通過，全 **1199 測試**無失敗、無跳過（1196 基線 +3）
+測試驗證：`pytest` 完全通過，全 **1228 測試**無失敗、無跳過（1199 基線 +29）
 
 ## 📱 MVP 交付檢查清單
 
@@ -36,6 +36,54 @@
 ---
 
 ## 當前階段
+
+### HEIC／HEIF 完整支援（選取→預覽→AI→存檔→詳情）← **COMPLETED**
+
+完成時間：2026-10-12（有限範圍：新增解碼器與受控預覽端點；零 DB schema 變更）
+
+- ✓ **依賴**：`pillow-heif>=1.8` 加入 `requirements.txt`（軟性依賴：缺少時
+  HEIC 預覽明確 400，其他格式不受影響）。已實證 Windows 預建 wheel：
+  cp311／cp312 win_amd64 皆可直接下載安裝，無需本機編譯。解碼集中在
+  `shop/heif.py`（偵測、ispe 零解碼尺寸、JPEG 解碼含方向校正、EXIF 取出）
+- ✓ **三條影像用途**：
+  - 選取後前端預覽：`POST /api/inbox/preview`（multipart 單檔、不落盤、不建
+    紀錄）；HEIC／HEIF 解碼成 JPEG（長邊 1600）
+  - AI 分析：`shop/ai_client.encode_photo` 對 HEIF 走專用解碼 → JPEG data
+    URL（長邊 1024，與既有管線一致）；解不開時原樣 passthrough（與其他壞
+    檔語意一致；正常流程已在前端與上傳關卡擋掉）
+  - 已存紀錄：`GET /api/photos/{photo_id}/preview` —— 瀏覽器可原生顯示的
+    格式直出原檔；HEIC／HEIF 解碼成 JPEG，快取在
+    `files/{item}/derived/preview-v1-<sha前16>.jpg`（補 D6；**不登記
+    photos 資料列**，不進照片清單／證據包／列印）
+- ✓ **原始檔保存語意不變**：入庫 bytes 逐位元組相同、SHA-256／原檔名／
+  副檔名以原檔為準；預覽與 AI 只吃衍生 JPEG
+- ✓ **前端**（`web/core/photoFiles.js`、`web/views/capture.js`）：HEIC／HEIF
+  不再於選取時拒收；accept 明列 `.heic,.heif`；原始 `File` 保留給正式上傳，
+  另取得受保護 API 的 JPEG 預覽 blob 作托盤縮圖。**預覽失敗 → 明確提示
+  （雙語、含檔名）並阻止該檔進入待整理清單**；預覽未完成前停用「AI 開始
+  整理」（避免漏檔）；清空／離開會丟棄仍在飛行的預覽結果
+- ✓ **安全限制不放寬**：上傳／預覽都先以 metadata 讀寬高再解碼（HEIF 讀
+  ispe），單張 50 MP、單檔 24 MiB、每請求 20 檔、body 32 MiB 全部沿用；
+  損毀檔、解碼器錯誤、超限一律 400／413 並附可操作訊息
+- ✓ **metadata 與 EXIF**：HEIF 尺寸與 EXIF 併入 `shop/photos` 既有退路；
+  只有解析出可靠 EXIF 時間才標 `captured_from="exif"`，否則 mtime／檔名／
+  留空（不推測）；TIFF 解析補強 IFD0 的 DateTimeOriginal（部分寫入器）
+- ✓ **測試 +29**：`tests/test_heic.py` 25 項（偵測／零解碼尺寸／方向校正／
+  EXIF 含缺失不推測／真實 54 MP 與 metadata 超限／損毀／原檔 bytes＋SHA＋
+  副檔名不變／derived 不成為第二張證據／AI 為 JPEG／重複匯入 skipped／
+  取消零殘留）＋`tests/test_capture_inputs.py` 4 增（Node 實跑 capture.js：
+  HEIC 預覽成功、失敗不入托盤＋提示、等待中停用開始按鈕、partition／URL
+  解析）；全 1228 pytest 通過、16 個 web JS `node --check` 通過、
+  `git diff --check` 乾淨
+- ✓ **瀏覽器 E2E**（隔離暫存資料目錄、獨立 serve、真實 Chromium）：HEIC
+  選取→伺服器預覽縮圖→AI 草稿（測試環境無 key，優雅降級）→手動填寫→
+  存檔→首頁縮圖（新分頁預覽端點）→詳情頁 JPEG 預覽；原始檔 bytes／SHA 與
+  副檔名不變、photos 僅 1 張 original、derived 不在清單；JPEG 流程照舊；
+  0 console error
+- ⚠️ **限制**：真機 iOS／Android 未在自動化環境驗證（需人工驗收）；
+  pillow-heif 為原生擴充（解碼器漏洞面以 metadata 先驗＋Pillow bomb 防護
+  降低）；列印／證據包仍以原檔為準（HEIC 原檔在列印排版中的呈現不在本輪
+  範圍）
 
 ### 匯入按鈕裝置文案切換修正（capture）← **COMPLETED**
 
@@ -461,11 +509,11 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 
 | 項目 | 數值 | 備註 |
 |---|---|---|
-| 測試檔案數 | 41 | conftest＋39 個 test_*.py＋__init__（本階段新增 test_capture_inputs.py） |
-| 總測試數 | 1199 | 1196 基線；裝置文案掛載修正 +3 |
-| 通過 | 1199 ✓ | 100% pass rate |
+| 測試檔案數 | 42 | conftest＋40 個 test_*.py＋__init__（本階段新增 test_heic.py） |
+| 總測試數 | 1228 | 1199 基線；HEIC／HEIF 支援 +29 |
+| 通過 | 1228 ✓ | 100% pass rate |
 | 失敗 | 0 | 零失敗 |
-| 跳過 | 0 | 無跳過（本機有 Chromium／PyMuPDF／node，列印、canary 與 JS 邏輯測試皆實跑） |
+| 跳過 | 0 | 無跳過（本機有 Chromium／PyMuPDF／node，列印、canary 與 JS 邏輯測試皆實跑；pillow-heif 已安裝） |
 | 覆蓋率 | 未測 | 建議後續補充 |
 
 **測試框架**：pytest（可選 pytest-cov 補充覆蓋率）
@@ -477,11 +525,12 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 - 前端與 UI：test_capture_ui.py (6), test_inbox_ui.py (35)
 - 列印：test_print.py (31), test_print_settings_api.py (20)
 - **V3 核心驗收**：test_v3_core_slice.py (20) —— 原始 5 情境 + 各階段驗收（1B-A／2A／2B／2C-B／2C-D／Phase 2 編輯介面／Phase 3）
+- **HEIC／HEIF**：test_heic.py (25) —— 偵測／零解碼尺寸／方向／EXIF（缺失不推測）／50 MP（真實 54 MP）／損毀／原檔 bytes＋SHA＋副檔名不變／derived 不成為第二張證據／AI JPEG／重複匯入／取消
 - **評測 harness**：test_evaluate_models.py (7)、test_validate_autonomy_live.py (2) —— 離線守門（不碰網路）
 - **安全（SR-1）**：test_security.py (17) —— Host／Origin／自訂標頭、key 不轉送（canary＋接收器）、綁定 opt-in、媒體標頭、CSP/escaping 靜態守門
 - **安全（SR-2）**：test_security_sr2.py (30) —— body／單檔／檔數／像素／列印尺寸上限、AI 節流、docs 開關、快取政策、錯誤訊息去路徑化、註解／實體 mXSS、render-time 驗證、sandbox 命令、raster MIME、真實 Chromium canary PDF
 
-**最近運行**：2026-10-12，`pytest` → 1199 passed，failures=0，exit=0（本階段：裝置文案掛載修正 +3）
+**最近運行**：2026-10-12，`pytest` → 1228 passed，failures=0，exit=0（本階段：HEIC／HEIF 支援 +29）
 
 ---
 
@@ -498,7 +547,8 @@ Commit：`24d1909` feat: sr-1 host/origin guard, key forwarding fix, lan opt-in,
 
 ### 核心產品體驗
 - ✓ 手機隨手拍照 (Capture) — **Implemented, Tested, Committed, Pushed**
-- ✓ 拍照與相簿／檔案匯入雙入口（含 HEIC 明確提示） — **Implemented, Tested, Committed, Pushed**
+- ✓ 拍照與相簿／檔案匯入雙入口 — **Implemented, Tested, Committed, Pushed**
+- ✓ HEIC／HEIF 完整支援（選取預覽、AI 分析、詳情預覽；原檔逐位元組保存） — **Implemented, Tested, Committed, Pushed**
 - ✓ AI 自動整理與建議 — **Implemented, Tested, Committed, Pushed**
 - ✓ 超低摩擦確認（一鍵存起來） — **Implemented, Tested, Committed, Pushed**
 - ✓ 紀錄詳細檢視與大圖展示 — **Implemented, Tested, Committed, Pushed**

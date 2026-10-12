@@ -7,7 +7,7 @@
 
 import { api } from '../core/api.js';
 import { escapeHtml } from '../core/dom.js';
-import { partitionImageFiles } from '../core/photoFiles.js';
+import { isHeicImageFile, partitionImageFiles } from '../core/photoFiles.js';
 import { showToast } from '../core/router.js';
 import { t } from '../i18n/index.js';
 
@@ -43,12 +43,14 @@ export async function createCaptureView(params, router) {
           </div>
           <div class="capture-zone-drophint">${t('capture.zoneDropHint')}</div>
           <!-- 拍照：capture="environment" 提示行動瀏覽器開啟後置相機（不保證所有裝置；
-               桌面上就是一個檔案選擇器）。單張一拍，追加就再按一次。 -->
+               桌面上就是一個檔案選擇器）。單張一拍，追加就再按一次。
+               accept 明確列出 .heic／.heif：部分桌面系統的照片選擇器光靠
+               image/* 不會顯示 iPhone 的 HEIC。 -->
           <input
             type="file"
             id="capture-input"
             class="file-input-hidden"
-            accept="image/*"
+            accept="image/*,.heic,.heif"
             capture="environment"
           />
           <!-- 匯入：不設 capture，交給系統的照片／檔案選擇器；支援一次選多張。 -->
@@ -56,7 +58,7 @@ export async function createCaptureView(params, router) {
             type="file"
             id="import-input"
             class="file-input-hidden"
-            accept="image/*"
+            accept="image/*,.heic,.heif"
             multiple
           />
         </div>
@@ -340,10 +342,22 @@ export async function createCaptureView(params, router) {
     importInput.value = '';
   });
 
-  function appendFiles(newFiles, origin = 'import') {
+  // 選取中的伺服器預覽請求數（HEIC／HEIF 需要伺服器解碼成 JPEG）。
+  // >0 時不允許開始 AI 整理 —— 避免這批檔案還沒進托盤就被上傳流程漏掉。
+  let previewPending = 0;
+  // 清空／離開頁面時遞增：仍在飛行的預覽結果一律丟棄，不復活已清掉的選取。
+  let appendEpoch = 0;
+
+  function updateOrganizeAvailability() {
+    btnStartOrganize.disabled = organizeBusy || previewPending > 0;
+  }
+
+  async function appendFiles(newFiles, origin = 'import') {
     if (!newFiles || newFiles.length === 0) return;
-    // 格式分流（web/core/photoFiles.js）：HEIC／HEIF 等無法走完
-    // 預覽→上傳→AI 的格式在選取當下就明確提示，不假裝成功。
+    // 格式分流（web/core/photoFiles.js）：HEIC／HEIF 不再於選取時一律
+    // 拒收 —— 先向伺服器取得 JPEG 預覽（原始 File 保留給正式上傳），
+    // 取不到預覽就明確拒絕該檔、不讓它進入待整理清單（不靜默丟棄、
+    // 不假裝支援）；其餘格式沿用既有本機 object URL 流程。
     const { valid, unsupported } = partitionImageFiles(newFiles);
     if (unsupported.length > 0) {
       showToast(t('capture.unsupportedFormat'));
@@ -352,11 +366,31 @@ export async function createCaptureView(params, router) {
 
     // 追加：保留既有照片（不整批清空），新照片接在後面。
     for (const file of valid) {
-      const url = URL.createObjectURL(file);
-      capturedFiles.push({ file, url, origin });
-    }
+      if (!isHeicImageFile(file)) {
+        const url = URL.createObjectURL(file);
+        capturedFiles.push({ file, url, origin });
+        renderTray();
+        continue;
+      }
 
-    renderTray();
+      const epoch = appendEpoch;
+      previewPending += 1;
+      updateOrganizeAvailability();
+      try {
+        const blob = await api.previewInboxPhoto(file);
+        if (epoch !== appendEpoch) return;  // 期間已清空／離開：丟棄結果
+        const url = URL.createObjectURL(blob);
+        // 正式上傳用的原始 File 原封不動；url 只是伺服器產生的 JPEG 預覽。
+        capturedFiles.push({ file, url, origin });
+      } catch (err) {
+        console.warn('HEIC preview failed:', file.name, err);
+        showToast(t('capture.heicPreviewFailed', { name: file.name }));
+      } finally {
+        previewPending -= 1;
+        updateOrganizeAvailability();
+      }
+      renderTray();
+    }
   }
 
   function renderTray() {
@@ -406,6 +440,7 @@ export async function createCaptureView(params, router) {
   }
 
   btnClearAll.addEventListener('click', () => {
+    appendEpoch += 1;  // 丟棄仍在飛行的 HEIC 預覽結果
     capturedFiles.forEach(f => URL.revokeObjectURL(f.url));
     capturedFiles = [];
     renderTray();
@@ -426,10 +461,12 @@ export async function createCaptureView(params, router) {
 
   // Start Organize Flow
   btnStartOrganize.addEventListener('click', async () => {
-    if (capturedFiles.length === 0 || organizeBusy) return;
+    // previewPending：HEIC／HEIF 的伺服器預覽還在產生時不得開始 ——
+    // 否則那些檔案還沒進 capturedFiles 就被這輪上傳漏掉。
+    if (capturedFiles.length === 0 || organizeBusy || previewPending > 0) return;
 
     organizeBusy = true;
-    btnStartOrganize.disabled = true;
+    updateOrganizeAvailability();
 
     // Switch to Loading View
     stepCamera.style.display = 'none';
@@ -479,7 +516,7 @@ export async function createCaptureView(params, router) {
       stepCamera.style.display = 'block';
     } finally {
       organizeBusy = false;
-      btnStartOrganize.disabled = false;
+      updateOrganizeAvailability();
     }
   });
 
@@ -1483,6 +1520,7 @@ export async function createCaptureView(params, router) {
   return {
     element: el,
     destroy() {
+      appendEpoch += 1;  // 丟棄仍在飛行的 HEIC 預覽結果（不在已卸載的 DOM 上復活）
       // 離開頁面：清掉還沒被 intake 消化的暫存檔。審閱階段沒有任何
       // 正式紀錄；已按過「存起來」的紀錄（含部分失敗）不在此清理 ——
       // 那是使用者按下儲存的意圖，明確取消才捨棄。

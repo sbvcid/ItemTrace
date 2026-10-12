@@ -9,7 +9,7 @@
  * 這裡只操作 void 的紀錄；一般紀錄要先在詳情頁「移至垃圾桶」。
  */
 
-import { api, getPhotoUrl } from '../core/api.js';
+import { api, getItemThumbnailUrl } from '../core/api.js';
 import { escapeHtml } from '../core/dom.js';
 import { showToast } from '../core/router.js';
 import { t } from '../i18n/index.js';
@@ -92,7 +92,7 @@ export async function createTrashView(params, router) {
       row.setAttribute('data-id', item.id);
 
       const name = displayName(item);
-      const thumbUrl = item.thumbnail ? getPhotoUrl(item.thumbnail) : null;
+      const thumbUrl = item.thumbnail ? getItemThumbnailUrl(item) : null;
       const thumbHtml = thumbUrl
         ? `<img src="${escapeHtml(thumbUrl)}" alt="${escapeHtml(name)}" loading="lazy" />`
         : '<div class="trash-thumb-placeholder">📷</div>';

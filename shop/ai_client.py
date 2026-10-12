@@ -4,10 +4,11 @@ server 端的 `/api/items/{id}/ai/analyze` 與外部工具 `tools/analyze_item.p
 共用這一份 —— 請求怎麼組、照片怎麼編碼、模型輸出怎麼驗證，只有一份規則，
 兩邊不會漂移。
 
-刻意只用標準函式庫（urllib），不引入 OpenAI SDK 或其他 dependency：
-專案從頭到尾不要求 pip install 額外套件（SPEC-v1 §9）。任何
-OpenAI Chat Completions 相容端點（OpenRouter、Google Gemini、Custom）
-都用同一條程式碼路徑，差別只在 base_url 與是否送 response_format。
+刻意不用 OpenAI SDK：請求與回應只用標準函式庫（urllib）組裝，
+照片縮圖用 Pillow（軟性依賴），HEIC／HEIF 用 pillow-heif
+（見 shop/heif.py）。任何 OpenAI Chat Completions 相容端點
+（OpenRouter、Google Gemini、Custom）都用同一條程式碼路徑，差別只在
+base_url 與是否送 response_format。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from typing import Any
 import urllib.error
 import urllib.request
 
+from . import heif as heif_mod
 from .ai_config import (
     DEFAULT_BASE_URL,
     PROVIDER,
@@ -210,7 +212,21 @@ RESPONSE_SCHEMA = {
 
 
 def encode_photo(data: bytes, filename: str) -> tuple[bytes, str]:
-    """縮到 MAX_SIDE 並轉 JPEG。沒有 Pillow 就原封不動送出去。"""
+    """縮到 MAX_SIDE 並轉 JPEG。沒有 Pillow 就原封不動送出去。
+
+    HEIC／HEIF 走 shop.heif 專用解碼（pillow-heif）：成功一律回
+    JPEG；解不開（損毀、缺 pillow-heif）時原樣 passthrough，讓模型
+    自己判斷 —— 與其他壞檔的既有語意一致。呼叫端應在更早的關卡
+    （選取預覽、上傳像素檢查）就把壞檔擋掉。
+    """
+    if heif_mod.is_heif(data):
+        jpeg = heif_mod.decode_to_jpeg(
+            data, max_side=MAX_SIDE, quality=JPEG_QUALITY
+        )
+        if jpeg is not None:
+            return jpeg, "image/jpeg"
+        return data, "image/heic"
+
     try:
         from PIL import Image
     except ImportError:

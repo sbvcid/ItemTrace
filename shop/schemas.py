@@ -39,10 +39,13 @@ class ItemListOut(ItemOut):
     """列表用：多帶照片數量與代表照片，讓 UI 不用為每筆各打一次詳情。
 
     這是加出來的欄位，不改 ItemOut，所以既有的詳情／PATCH 回應完全不受影響。
+    thumbnail_id 與 thumbnail 指向同一張照片：HEIC／HEIF 的縮圖需要
+    走 /api/photos/{id}/preview 由伺服器解碼，前端靠 id 組 URL。
     """
 
     photo_count: int = 0
     thumbnail: str | None = None
+    thumbnail_id: str | None = None
 
 
 class ItemPurgeOut(BaseModel):
