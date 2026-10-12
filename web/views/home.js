@@ -54,13 +54,13 @@ export async function createHomeView(params, router) {
          <button type="button" class="search-clear" id="search-clear" aria-label="Clear search">✕</button>
        </section>
 
-       <!-- 紀錄列表 -->
-       <section class="records-section">
-         <div class="records-header">
-           <div class="records-title" id="records-heading">${t('home.recordsTitle')}</div>
-           <div class="records-count" id="records-count">${t('app.loading')}</div>
-           <a href="/trash" class="records-trash-link" title="${t('trash.title')}" data-link>${t('trash.title')}</a>
-         </div>
+        <!-- 紀錄列表 -->
+        <section class="records-section">
+          <div class="records-header">
+            <div class="records-title" id="records-heading">${t('home.recordsTitle')}</div>
+            <div class="records-count" id="records-count">${t('app.loading')}</div>
+            <a href="/trash" class="records-trash-link" title="${t('trash.title')}" data-link>🗑 ${t('trash.title')}</a>
+          </div>
 
          <div class="card-grid" id="card-grid">
            <!-- Dynamically populated -->
