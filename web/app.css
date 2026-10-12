@@ -895,6 +895,37 @@ body {
   gap: 4px;
 }
 
+/* 未選取的描述候選（未採用）：低視覺權重，但仍完整可見 */
+.badge-muted {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.is-muted .ai-field-value {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* 描述候選的選擇提示（多筆候選尚未選擇時） */
+.description-choice-hint {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
 /* 補充屬性等欄位群組的小標題 */
 .ai-field-section-label {
   font-size: 0.82rem;

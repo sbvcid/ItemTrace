@@ -87,12 +87,80 @@ def test_capture_review_surfaces_all_generated_suggestions():
     """
     source = (ROOT / "web" / "views" / "capture.js").read_text(encoding="utf-8")
     assert "attribute:" in source, "審閱必須認得 attribute:<key> 建議"
-    assert "edit-description" in source, "描述必須有可編輯輸入"
+    assert "edit-description-list" in source, "描述候選列必須有編輯區塊"
     assert "edit-attributes-list" in source, "動態屬性必須有編輯列"
     assert "btn-add-attribute" in source, "使用者必須能自行新增屬性"
     assert "edit-identifiers-list" in source, "識別碼必須有可編輯列"
     assert "btn-toggle-edit" in source, "修改入口必須存在"
     assert "draft-actions" in source, "操作區必須存在（存起來／修改／取消）"
+
+
+def test_capture_description_candidates_are_visible_and_resolvable():
+    """多筆 attribute:description 候選（不同照片、不同值）必須全部可操作。
+
+    迴歸目標（本修正的核心缺陷）：舊版只把第一筆描述讀進單一輸入框、
+    其餘描述列被排除在編輯 UI 之外，但存檔驗證又檢查重複的 attribute
+    key —— 使用者被阻止存檔，卻找不到也無法移除那筆多出來的候選
+    （驗證會檢查、介面卻無法操作的隱藏列死結）。
+    """
+    source = (ROOT / "web" / "views" / "capture.js").read_text(encoding="utf-8")
+
+    # 描述候選專屬區塊：渲染「全部」描述列（不再只讀第一筆、也不再排除其餘）
+    assert "edit-description-list" in source
+    assert "renderDescriptionEditRows" in source
+    assert "attributeRows.filter(r => r.key === 'description')" in source
+
+    # 明確選擇機制：多筆候選時以 radio 選取要保存的一筆（不沉默擇一）
+    assert "isPrimary" in source
+    assert "chosenDescriptionRow" in source
+    assert "description-primary" in source
+    assert "descriptionChooseRequired" in source
+
+    # 未選取候選的呈現與保存語意：看得見、標「未採用」、不寫入主表
+    assert "descriptionNotUsed" in source
+    assert "descriptionMultiHint" in source
+    assert "addDescription" in source
+    assert "removeDescription" in source
+
+    # 重試：曾寫入的舊描述值 value-aware 清除，不誤刪新選取的值
+    assert "descriptionRemovals" in source
+    assert "descriptionDeletes" in source
+
+    # 每一列都能：修改（textarea 寫回）、移除（✕）、選擇（radio）、
+    # 辨識來源照片（inspectPhoto 按鈕）
+    body = _function_body(source, "function renderDescriptionEditRows()")
+    assert "row.value = valueInput.value" in body
+    assert "✕" in body
+    assert "radio" in body
+    assert "inspectPhoto" in body
+
+    # 存檔決策：未選取的描述候選一律未採用（不會被後面的 accept 覆蓋）
+    save_body = _function_body(
+        source, "btnSaveConfirm.addEventListener", end_marker="\n  });")
+    assert "chosenDescription" in save_body
+    assert "unchosenDescription" in save_body
+
+    # 驗證訊息與新文案：雙語齊全
+    for name in ("zh-TW.js", "en.js"):
+        text = (WEB / "i18n" / name).read_text(encoding="utf-8")
+        for key in (
+            "descriptionPrimary",
+            "descriptionNotUsed",
+            "descriptionMultiHint",
+            "descriptionChoiceHint",
+            "descriptionChooseRequired",
+            "descriptionSetPrimary",
+            "addDescription",
+            "removeDescription",
+        ):
+            assert re.search(rf"\b{key}\s*:", text), f"{name} 缺少 {key}"
+
+
+def _function_body(source: str, signature: str, end_marker: str = "\n  }\n") -> str:
+    """抓兩格縮排函式（到同層收尾）的原始碼片段。"""
+    start = source.index(signature)
+    end = source.index(end_marker, start)
+    return source[start:end]
 
 
 def test_capture_validates_before_intake():

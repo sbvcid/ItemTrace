@@ -455,3 +455,267 @@ def test_removed_after_accept_identifier_is_really_deleted(client):
     )
     assert deleted.status_code == 204
     assert client.get(f"/api/items/{item_id}").json()["identifiers"] == []
+
+
+# ----------------------------------------------------------------------
+# 重複描述候選（來自不同照片、值不同）：每一筆都看得見，必須明確選擇。
+#
+# 修正前 capture.js 只顯示第一筆描述、其餘描述列被排除在編輯 UI 之外，
+# 但存檔驗證又檢查重複的 attribute key —— 使用者被阻止存檔卻無法在
+# 介面上找到並移除多餘的列（死結）。以下模擬修正後 capture.js 的存檔
+# 順序：所有 description 建議先落成正式建議（保留 AI 原值／model／
+# confidence／來源照片）；選取的一筆原值未改 → accept；被移除／未選取
+# ／修改的 → reject（使用者修改走 PATCH，不冒充 AI 判讀）。
+# ----------------------------------------------------------------------
+
+TWO_DESCRIPTIONS = [
+    {"field": "name", "value": "早餐桌", "confidence": 0.9,
+     "source_photo_index": 0},
+    {"field": "attribute:description", "value": "桌上有一杯熱咖啡。",
+     "confidence": 0.8, "source_photo_index": 0},
+    {"field": "attribute:description", "value": "窗外正在下雨。",
+     "confidence": 0.7, "source_photo_index": 1},
+]
+
+
+def two_description_draft(client, monkeypatch):
+    """兩筆來自不同照片、值不同的 attribute:description 草稿。"""
+    install_ai(monkeypatch, TWO_DESCRIPTIONS)
+    staged, _entries = upload_staged(client, ["coffee.jpg", "window.jpg"])
+    draft = client.post("/api/inbox/analyze", json={"files": staged}).json()
+    return staged, draft
+
+
+def create_draft_suggestions(client, staged, draft):
+    """intake ＋ 草稿全部落成正式建議（與 capture.js 相同的追溯欄位）。"""
+    done = client.post(
+        "/api/inbox/intake", json={"files": staged, "kind": "intake"}
+    ).json()
+    item_id = done["item_id"]
+    photo_id_by_orig_name = {p["orig_name"]: p["id"] for p in done["archived"]}
+    created = []
+    for suggestion in draft["suggestions"]:
+        index = suggestion["source_photo_index"]
+        response = client.post(
+            f"/api/items/{item_id}/suggestions",
+            json={
+                "field": suggestion["field"],
+                "value": suggestion["value"],
+                "confidence": suggestion["confidence"],
+                "source": "external",
+                "model_name": draft["model"],
+                "source_photo_id": (
+                    photo_id_by_orig_name.get(staged[index].split("/")[-1])
+                    if index is not None else None
+                ),
+                "actor": "external",
+            },
+        )
+        assert response.status_code == 201, response.text
+        created.append(response.json()["id"])
+    return item_id, created
+
+
+def test_two_description_candidates_remove_one_and_edit_the_other(
+        client, monkeypatch):
+    """核心情境：辨識兩筆候選（來自不同照片）→ 移除一筆 → 修改留下的
+    一筆 → 保存；詳情頁與搜尋呈現最終值，AI 原值與來源追溯完整保留。"""
+    staged, draft = two_description_draft(client, monkeypatch)
+    descriptions = [s for s in draft["suggestions"]
+                    if s["field"] == "attribute:description"]
+    assert [s["value"] for s in descriptions] == [
+        "桌上有一杯熱咖啡。", "窗外正在下雨。"]
+    assert [s["source_photo_index"] for s in descriptions] == [0, 1]
+    # 草稿階段仍是零正式紀錄
+    assert client.get("/api/items").json() == []
+
+    item_id, created = create_draft_suggestions(client, staged, draft)
+
+    # 使用者辨識後移除「窗外正在下雨。」那一筆（未採用），並修改留下的
+    # 描述（使用者內容走 PATCH；建議維持 AI 原值，不冒充判讀）。
+    assert client.post(
+        f"/api/suggestions/{created[2]}/reject").status_code == 200
+    assert client.post(
+        f"/api/suggestions/{created[1]}/reject").status_code == 200
+    final_value = "雨中的咖啡桌。"
+    current = client.get(f"/api/items/{item_id}").json()["item"]["attributes"]
+    merged = {**current, "description": final_value}
+    assert client.patch(
+        f"/api/items/{item_id}", json={"attributes": merged, "actor": "user"}
+    ).status_code == 200
+    assert client.patch(
+        f"/api/items/{item_id}", json={"name": "早餐桌", "actor": "user"}
+    ).status_code == 200
+
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert detail["item"]["attributes"]["description"] == final_value
+
+    # 兩筆建議都保留 AI 原值、model、信心與各自的來源照片；使用者修改
+    # 後的最終值沒有被寫回任何建議
+    by_value = {s["value"]: s for s in detail["suggestions"]}
+    coffee = by_value["桌上有一杯熱咖啡。"]
+    rain = by_value["窗外正在下雨。"]
+    assert {coffee["status"], rain["status"]} == {"rejected"}
+    assert final_value not in by_value
+    assert coffee["confidence"] == 0.8 and rain["confidence"] == 0.7
+    assert coffee["model_name"] == "test/model:free"
+    assert rain["model_name"] == "test/model:free"
+    photos = {p["orig_name"]: p["id"] for p in detail["photos"]}
+    assert coffee["source_photo_id"] == photos["coffee.jpg"]
+    assert rain["source_photo_id"] == photos["window.jpg"]
+    assert coffee["source_photo_id"] != rain["source_photo_id"]
+
+    # 詳情頁與搜尋呈現最終值；被移除的候選不進搜尋
+    assert [i["id"] for i in client.get("/api/items?q=咖啡桌").json()] == [item_id]
+    assert client.get("/api/items?q=熱咖啡").json() == []
+    assert client.get("/api/items?q=正在下雨").json() == []
+
+
+def test_two_description_candidates_keep_one_unchanged(client, monkeypatch):
+    """選取的一筆原值未改 → accept（AI 值落地，來源追溯成立）；
+    未選取的一筆未採用；搜尋只命中保存的值。"""
+    staged, draft = two_description_draft(client, monkeypatch)
+    item_id, created = create_draft_suggestions(client, staged, draft)
+
+    assert client.post(
+        f"/api/suggestions/{created[1]}/reject").status_code == 200   # 熱咖啡
+    assert client.post(
+        f"/api/suggestions/{created[2]}/accept").status_code == 200   # 窗外正在下雨
+    assert client.patch(
+        f"/api/items/{item_id}", json={"name": "早餐桌", "actor": "user"}
+    ).status_code == 200
+
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert detail["item"]["attributes"]["description"] == "窗外正在下雨。"
+    accepted = [s for s in detail["suggestions"]
+                if s["field"] == "attribute:description"
+                and s["status"] == "accepted"]
+    rejected = [s for s in detail["suggestions"]
+                if s["field"] == "attribute:description"
+                and s["status"] == "rejected"]
+    assert [s["value"] for s in accepted] == ["窗外正在下雨。"]
+    assert [s["value"] for s in rejected] == ["桌上有一杯熱咖啡。"]  # AI 原值
+    assert accepted[0]["confidence"] == 0.7
+    assert accepted[0]["model_name"] == "test/model:free"
+    photos = {p["orig_name"]: p["id"] for p in detail["photos"]}
+    assert accepted[0]["source_photo_id"] == photos["window.jpg"]
+
+    assert [i["id"] for i in client.get("/api/items?q=正在下雨").json()] == [item_id]
+    assert client.get("/api/items?q=熱咖啡").json() == []
+
+
+def test_all_description_candidates_removed_saves_without_description(
+        client, monkeypatch):
+    """描述全部移除：兩筆都未採用、正式紀錄沒有 description、沒有值進搜尋；
+    紀錄本身照常保存（照片與標題都在）。"""
+    staged, draft = two_description_draft(client, monkeypatch)
+    item_id, created = create_draft_suggestions(client, staged, draft)
+
+    for index in (1, 2):
+        assert client.post(
+            f"/api/suggestions/{created[index]}/reject"
+        ).status_code == 200
+    assert client.patch(
+        f"/api/items/{item_id}", json={"name": "早餐桌", "actor": "user"}
+    ).status_code == 200
+
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert "description" not in detail["item"]["attributes"]
+    assert detail["item"]["attributes"] == {}
+    assert all(
+        s["status"] == "rejected"
+        for s in detail["suggestions"]
+        if s["field"] == "attribute:description"
+    )
+    assert [s["value"] for s in detail["suggestions"]
+            if s["field"] == "attribute:description"] == [
+        "桌上有一杯熱咖啡。", "窗外正在下雨。"]
+    assert client.get("/api/items?q=熱咖啡").json() == []
+    assert client.get("/api/items?q=正在下雨").json() == []
+    assert detail["item"]["name"] == "早餐桌"
+    assert len(detail["photos"]) == 2
+    assert [i["id"] for i in client.get("/api/items?q=早餐桌").json()] == [item_id]
+
+
+def test_single_description_candidate_flows_without_choice(client, monkeypatch):
+    """一般只有一筆描述：不需要選擇，accept 後直接呈現與可搜尋。"""
+    install_ai(monkeypatch, [
+        {"field": "name", "value": "桌面一角", "confidence": 0.9,
+         "source_photo_index": 0},
+        {"field": "attribute:description", "value": "桌上有一杯咖啡與筆記本。",
+         "confidence": 0.8, "source_photo_index": 0},
+    ])
+    staged, _entries = upload_staged(client, ["desk.jpg"])
+    draft = client.post("/api/inbox/analyze", json={"files": staged}).json()
+    item_id, created = create_draft_suggestions(client, staged, draft)
+
+    for suggestion_id in created:
+        assert client.post(
+            f"/api/suggestions/{suggestion_id}/accept").status_code == 200
+
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert detail["item"]["attributes"]["description"] == "桌上有一杯咖啡與筆記本。"
+    assert [i["id"] for i in client.get("/api/items?q=筆記本").json()] == [item_id]
+
+
+def test_description_reverted_to_original_after_reject_lands_via_patch(client):
+    """重試情境：選取的描述先前被改過（建議已 rejected），重試前又改回
+    原值 —— accept 已不可能；修正後 capture.js 以 PATCH 讓最終值落地，
+    不得停留在先前寫入的修改值。"""
+    item_id = _new_item(client)
+    suggestion_id = _create_suggestion(
+        client, item_id, "attribute:description", "原本的描述")
+
+    # 第一次嘗試：修改 → reject ＋ PATCH 修改值
+    assert client.post(
+        f"/api/suggestions/{suggestion_id}/reject").status_code == 200
+    assert client.patch(
+        f"/api/items/{item_id}",
+        json={"attributes": {"description": "修改後的描述"}},
+    ).status_code == 200
+    assert client.get(f"/api/items/{item_id}").json()[
+        "item"]["attributes"]["description"] == "修改後的描述"
+
+    # 重試：改回原值 → PATCH 落地（對應 capture.js「已拒絕 → 走 PATCH」）
+    current = client.get(f"/api/items/{item_id}").json()["item"]["attributes"]
+    merged = {**current, "description": "原本的描述"}
+    assert client.patch(
+        f"/api/items/{item_id}", json={"attributes": merged}
+    ).status_code == 200
+
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert detail["item"]["attributes"]["description"] == "原本的描述"
+    assert detail["suggestions"][0]["status"] == "rejected"
+    assert detail["suggestions"][0]["value"] == "原本的描述"  # AI 原值不受影響
+    assert [i["id"] for i in client.get("/api/items?q=原本的描述").json()] == [
+        item_id
+    ]
+
+
+def test_switching_choice_after_partial_save_overwrites_cleanly(
+        client, monkeypatch):
+    """部分保存後改選另一筆：先前已接受的描述被新選取的覆蓋（同一
+    attribute key 單鍵合併），兩筆建議歷史都保留 —— 這是修正後
+    capture.js 重試流程依賴的後端語意；前端另有 value-aware 清除，
+    不會在清理舊值時誤刪剛選取的新描述。"""
+    staged, draft = two_description_draft(client, monkeypatch)
+    item_id, created = create_draft_suggestions(client, staged, draft)
+
+    # 第一次嘗試：選 A 並接受（部分失敗前的成功步驟）→ 描述＝A
+    assert client.post(
+        f"/api/suggestions/{created[1]}/accept").status_code == 200
+    assert client.get(f"/api/items/{item_id}").json()[
+        "item"]["attributes"]["description"] == "桌上有一杯熱咖啡。"
+
+    # 重試前改選 B（A 已是歷史，不可回退）：B accept 覆蓋為最終值
+    assert client.post(
+        f"/api/suggestions/{created[2]}/accept").status_code == 200
+
+    detail = client.get(f"/api/items/{item_id}").json()
+    assert detail["item"]["attributes"]["description"] == "窗外正在下雨。"
+    descriptions = [s for s in detail["suggestions"]
+                    if s["field"] == "attribute:description"]
+    assert sorted(s["status"] for s in descriptions) == ["accepted", "accepted"]
+    # 舊的 accepted 建議值仍經建議索引可搜尋（既有設計：舊詮釋的詞彙還在）
+    assert [i["id"] for i in client.get("/api/items?q=熱咖啡").json()] == [item_id]
+    assert [i["id"] for i in client.get("/api/items?q=正在下雨").json()] == [item_id]

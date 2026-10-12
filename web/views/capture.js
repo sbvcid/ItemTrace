@@ -117,7 +117,9 @@ export async function createCaptureView(params, router) {
             </div>
             <div class="ai-field-row">
               <label class="ai-field-label">${t('capture.descriptionLabel')}</label>
-              <textarea class="ai-edit-input" id="edit-description" rows="2" style="resize: vertical;" placeholder="${t('capture.descriptionPlaceholder')}"></textarea>
+              <div id="edit-description-list"></div>
+              <div id="description-choice-hint" class="description-choice-hint" style="display: none;"></div>
+              <button type="button" class="btn-secondary" id="btn-add-description" style="width: auto; margin-top: 8px; font-size: 0.82rem;">${t('capture.addDescription')}</button>
             </div>
             <div class="ai-field-row">
               <label class="ai-field-label">${t('capture.identifiersSection')}</label>
@@ -210,6 +212,9 @@ export async function createCaptureView(params, router) {
   const identifierDeletes = [];
   // 已確實寫入正式 attributes 的鍵；重試時判斷「移除」是否需要真的刪。
   const attributeAppliedKeys = new Set();
+  // 曾被寫入正式紀錄、但描述列已被整列移除的舊值：重試時 value-aware
+  // 清除（只刪確實是我們寫入的值，不會誤刪後來選用的描述）。
+  const descriptionDeletes = [];
 
   // Elements
   const dropZone = el.querySelector('#drop-zone');
@@ -242,7 +247,9 @@ export async function createCaptureView(params, router) {
   const editModel = el.querySelector('#edit-model');
   const editCategory = el.querySelector('#edit-category');
   const editCondition = el.querySelector('#edit-condition');
-  const editDescription = el.querySelector('#edit-description');
+  const editDescriptionList = el.querySelector('#edit-description-list');
+  const descriptionChoiceHint = el.querySelector('#description-choice-hint');
+  const btnAddDescription = el.querySelector('#btn-add-description');
   const editIdentifiersList = el.querySelector('#edit-identifiers-list');
 
   const inspectorModal = el.querySelector('#inspector-modal');
@@ -430,7 +437,8 @@ export async function createCaptureView(params, router) {
     // attributeRows；識別碼（serial／imei／barcode）全部收進 identifierRows。
     // 舊版只認固定欄位，這些已經產生的建議會在使用者看不到的情況下被
     // 存檔流程默默套用 —— 現在全部先呈現、可修改、可移除，再依使用者
-    // 最後確認的內容保存。
+    // 最後確認的內容保存。描述（description）可能有多筆候選（同一欄位
+    // 在不同照片讀到不同值），由使用者在審閱時明確選擇要保存的一筆。
     attributeRows = [];
     identifierRows = [];
 
@@ -443,6 +451,10 @@ export async function createCaptureView(params, router) {
           confidence: s.confidence,
           sourcePhotoIndex: s.source_photo_index,
           draftIndex: index,
+          // 描述候選的明確選擇（radio）；其他屬性不使用。
+          isPrimary: false,
+          // 曾實際寫入正式紀錄的值（重試時要真的清除用）；accept／PATCH 後更新。
+          appliedValue: null,
         });
       } else if (s.field.startsWith('identifier:')) {
         identifierRows.push({
@@ -485,13 +497,20 @@ export async function createCaptureView(params, router) {
       });
     }
 
+    // 描述候選：只有一筆時即為要保存的描述（免選擇）；多筆時不預先選擇 ——
+    // 不沉默擇一，由使用者明確指定（未選取的不會保存，建議保留原值追溯）。
+    const descriptionRows = attributeRows.filter(r => r.key === 'description');
+    if (descriptionRows.length === 1) {
+      descriptionRows[0].isPrimary = true;
+    }
+
     // Set initial edit inputs
     editName.value = extracted.name || '';
     editBrand.value = extracted.brand || '';
     editModel.value = extracted.model || '';
     editCategory.value = extracted.category || '';
     editCondition.value = extracted.condition || '';
-    syncDescriptionInput();
+    renderDescriptionEditRows();
 
     renderAttributeEditRows();
     renderIdentifierEditRows();
@@ -539,12 +558,42 @@ export async function createCaptureView(params, router) {
         fixedBadge(values.name, extracted.name, confidences.name)));
     }
 
-    // 2. 描述（閱讀主入口）
-    const descriptionRow = attributeRows.find(r => r.key === 'description' && r.value.trim());
-    if (descriptionRow) {
+    // 2. 描述（閱讀主入口）：一筆時直接呈現；多筆候選時全部列出 ——
+    //    已選取的標「主要描述」、未選取的標「未採用（不會保存）」，
+    //    尚未選擇時提示到「修改」中選擇（不得沉默擇一）。
+    const descriptionRows = attributeRows.filter(
+      r => r.key === 'description' && r.value.trim());
+    if (descriptionRows.length === 1) {
       fieldsDisplayContainer.appendChild(createFieldRow(
-        t('capture.descriptionLabel'), descriptionRow.value.trim(),
-        { confidence: descriptionRow.confidence, custom: isRowCustom(descriptionRow), paragraph: true }));
+        t('capture.descriptionLabel'), descriptionRows[0].value.trim(),
+        { confidence: descriptionRows[0].confidence,
+          custom: isRowCustom(descriptionRows[0]), paragraph: true }));
+    } else if (descriptionRows.length > 1) {
+      const chosen = chosenDescriptionRow();
+      descriptionRows.forEach((row, index) => {
+        const isChosen = row === chosen;
+        const tags = [];
+        if (row.sourcePhotoIndex !== null && row.sourcePhotoIndex !== undefined) {
+          tags.push({ text: `📷 ${row.sourcePhotoIndex + 1}` });
+        }
+        if (isChosen) {
+          tags.push({ text: t('capture.descriptionPrimary') });
+        } else if (chosen) {
+          tags.push({ text: t('capture.descriptionNotUsed'), muted: true });
+        } else {
+          tags.push({ text: t('capture.descriptionCandidate'), muted: true });
+        }
+        fieldsDisplayContainer.appendChild(createFieldRow(
+          `${t('capture.descriptionLabel')} ${index + 1}`, row.value.trim(),
+          { confidence: row.confidence, custom: isRowCustom(row),
+            paragraph: true, tags, muted: !isChosen }));
+      });
+      if (!chosen) {
+        const hint = document.createElement('div');
+        hint.className = 'description-choice-hint';
+        hint.textContent = t('capture.descriptionMultiHint', { n: descriptionRows.length });
+        fieldsDisplayContainer.appendChild(hint);
+      }
     }
 
     // 3. 品牌 / 型號
@@ -677,12 +726,113 @@ export async function createCaptureView(params, router) {
     });
   }
 
-  function syncDescriptionInput() {
-    const row = attributeRows.find(r => r.key === 'description');
-    editDescription.value = row ? row.value : '';
+  // 目前會被保存的描述列：多筆有內容的候選時，必須是使用者明確選取的一筆；
+  // 只有一筆候選時即為該筆。null 表示沒有要保存的描述。
+  function chosenDescriptionRow() {
+    const candidates = attributeRows.filter(
+      r => r.key === 'description' && r.value.trim());
+    if (candidates.length === 0) return null;
+    return candidates.find(r => r.isPrimary)
+      || (candidates.length === 1 ? candidates[0] : null);
   }
 
-  // 編輯模式：動態屬性的可編輯列（description 有專屬輸入框，不重複列出）。
+  // 編輯模式：描述候選列。每一筆 AI 描述建議都必須看得見、可修改、可移除
+  // —— 舊版只顯示第一筆、其餘被排除在介面外，驗證卻檢查它們（存檔被
+  // 阻止又無法在介面上修正的死結）。多筆候選時以 radio 明確選擇要保存
+  // 的一筆；未選取的不會保存（存檔時標為未採用，保留 AI 原值、來源照片、
+  // 模型與信心的追溯）。
+  function renderDescriptionEditRows() {
+    editDescriptionList.innerHTML = '';
+    const rows = attributeRows.filter(r => r.key === 'description');
+    const showChoice = rows.length > 1;
+
+    rows.forEach((row, index) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'description-candidate-row';
+      wrap.style.cssText = 'display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px;';
+
+      if (showChoice) {
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'description-primary';
+        radio.className = 'description-primary-radio';
+        radio.checked = Boolean(row.isPrimary);
+        radio.title = t('capture.descriptionSetPrimary');
+        radio.setAttribute('aria-label', t('capture.descriptionSetPrimary'));
+        radio.style.cssText = 'margin-top: 12px; flex: 0 0 auto;';
+        radio.addEventListener('change', () => {
+          rows.forEach(entry => { entry.isPrimary = (entry === row); });
+          renderDescriptionEditRows();
+        });
+        wrap.appendChild(radio);
+      }
+
+      const labelGroup = document.createElement('div');
+      labelGroup.style.cssText = 'flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; max-width: 30%;';
+      const label = document.createElement('span');
+      label.className = 'ai-field-label';
+      label.textContent = showChoice
+        ? `${t('capture.descriptionLabel')} ${index + 1}`
+        : t('capture.descriptionLabel');
+      labelGroup.appendChild(label);
+      if (row.sourcePhotoIndex !== null && row.sourcePhotoIndex !== undefined) {
+        const inspectBtn = document.createElement('button');
+        inspectBtn.type = 'button';
+        inspectBtn.className = 'icon-btn';
+        inspectBtn.style.cssText = 'padding: 2px 8px; font-size: 0.78rem; width: fit-content; background: var(--bg-subtle); color: var(--text-secondary);';
+        inspectBtn.title = t('capture.inspectPhoto');
+        inspectBtn.setAttribute('aria-label', t('capture.inspectPhoto'));
+        inspectBtn.textContent = `🔍 📷 ${row.sourcePhotoIndex + 1}`;
+        inspectBtn.addEventListener('click', () => {
+          const targetPhoto = photoUrlById.get(row.sourcePhotoIndex)
+            || capturedFiles[0]?.url;
+          if (targetPhoto) {
+            inspectorImg.src = targetPhoto;
+            inspectorModal.style.display = 'flex';
+          }
+        });
+        labelGroup.appendChild(inspectBtn);
+      }
+      wrap.appendChild(labelGroup);
+
+      const valueInput = document.createElement('textarea');
+      valueInput.className = 'ai-edit-input';
+      valueInput.rows = 2;
+      valueInput.style.cssText = 'flex: 1; resize: vertical;';
+      valueInput.placeholder = t('capture.descriptionPlaceholder');
+      valueInput.value = row.value;
+      valueInput.addEventListener('input', () => { row.value = valueInput.value; });
+      wrap.appendChild(valueInput);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'icon-btn';
+      removeBtn.style.marginTop = '12px';
+      removeBtn.title = t('capture.removeDescription');
+      removeBtn.innerHTML = '✕';
+      removeBtn.addEventListener('click', () => {
+        // 曾寫入正式紀錄的舊值：記下來，重試存檔時真的從紀錄清除
+        // （只清除確實是我們寫入的值，不會誤刪後來選用的新描述）。
+        if (row.appliedValue) descriptionDeletes.push(row.appliedValue);
+        attributeRows = attributeRows.filter(entry => entry !== row);
+        renderDescriptionEditRows();
+      });
+      wrap.appendChild(removeBtn);
+
+      editDescriptionList.appendChild(wrap);
+    });
+
+    const candidates = rows.filter(r => r.value.trim());
+    const unresolved = candidates.length > 1
+      && !candidates.some(r => r.isPrimary);
+    descriptionChoiceHint.style.display = unresolved ? 'block' : 'none';
+    descriptionChoiceHint.textContent = unresolved
+      ? t('capture.descriptionChoiceHint')
+      : '';
+  }
+
+  // 編輯模式：動態屬性的可編輯列（description 有專屬的候選列區塊，
+  // 不重複列出）。
   function renderAttributeEditRows() {
     editAttributesList.innerHTML = '';
     attributeRows
@@ -736,22 +886,23 @@ export async function createCaptureView(params, router) {
     return wrap;
   }
 
-  // 描述輸入框：直接寫回對應的屬性列；沒有 AI 描述時才建立使用者列。
-  editDescription.addEventListener('input', () => {
-    const value = editDescription.value;
-    let row = attributeRows.find(r => r.key === 'description');
-    if (!row) {
-      row = {
-        key: 'description',
-        value: '',
-        original: '',
-        confidence: null,
-        sourcePhotoIndex: null,
-        draftIndex: null,
-      };
-      attributeRows.push(row);
-    }
-    row.value = value;
+  // 使用者自行新增描述列（沒有 AI 描述時也能自行填寫；新列即為選取狀態，
+  // 原有描述列的選取會讓給新列）。
+  btnAddDescription.addEventListener('click', () => {
+    attributeRows.forEach(entry => {
+      if (entry.key === 'description') entry.isPrimary = false;
+    });
+    attributeRows.push({
+      key: 'description',
+      value: '',
+      original: '',
+      confidence: null,
+      sourcePhotoIndex: null,
+      draftIndex: null,
+      isPrimary: true,
+      appliedValue: null,
+    });
+    renderDescriptionEditRows();
   });
 
   btnAddAttribute.addEventListener('click', () => {
@@ -766,9 +917,9 @@ export async function createCaptureView(params, router) {
     renderAttributeEditRows();
   });
 
-  function createFieldRow(label, value, { confidence = null, mono = false, custom = false, paragraph = false } = {}) {
+  function createFieldRow(label, value, { confidence = null, mono = false, custom = false, paragraph = false, tags = [], muted = false } = {}) {
     const row = document.createElement('div');
-    row.className = 'ai-field-row';
+    row.className = `ai-field-row${muted ? ' is-muted' : ''}`;
 
     // 規則：區分看見 (>= 0.85) 與推測 (< 0.85)；使用者改過的值標「自訂」。
     const isCertain = confidence !== undefined && confidence !== null && confidence >= 0.85;
@@ -777,6 +928,9 @@ export async function createCaptureView(params, router) {
       : isCertain
         ? `<span class="badge-seen">✓ ${t('capture.badgeSeen')}</span>`
         : `<span class="badge-guess">~ ${t('capture.badgeInferred')}</span>`;
+    const tagsHtml = tags
+      .map(tag => `<span class="${tag.muted ? 'badge-muted' : 'badge-custom'}">${escapeHtml(tag.text)}</span>`)
+      .join('');
 
     const valueStyle = paragraph
       ? 'font-weight: normal; font-size: 0.95rem; line-height: 1.6; white-space: pre-wrap;'
@@ -785,6 +939,7 @@ export async function createCaptureView(params, router) {
       <div class="ai-field-label-group">
         <span class="ai-field-label">${escapeHtml(label)}</span>
         ${badgeHtml}
+        ${tagsHtml}
       </div>
       <div class="ai-field-value ${mono ? 'mono' : ''}" style="${valueStyle}">${escapeHtml(value)}</div>
     `;
@@ -797,7 +952,7 @@ export async function createCaptureView(params, router) {
     fieldsEditContainer.style.display = isEditMode ? 'flex' : 'none';
     fieldsDisplayContainer.style.display = isEditMode ? 'none' : 'flex';
     if (isEditMode) {
-      syncDescriptionInput();
+      renderDescriptionEditRows();
       renderAttributeEditRows();
       renderIdentifierEditRows();
     } else {
@@ -839,11 +994,23 @@ export async function createCaptureView(params, router) {
         return t('capture.attributeKeyInvalid', { key });
       }
     }
-    // 3. 最終要保存的屬性不得有重複 key（含 description 與 AI 已有的列）。
+    // 3. 描述候選：多筆有內容的候選時必須明確選擇要保存的一筆 ——
+    //    不得沉默擇一，也不得讓使用者在看不見的列上被卡住（每一列都能
+    //    在編輯模式中操作，見 renderDescriptionEditRows）。未選取的候選
+    //    保存時標為未採用，AI 原值與來源追溯完整保留。
+    const descriptionCandidates = attributeRows.filter(
+      r => r.key.trim() === 'description' && r.value.trim());
+    if (descriptionCandidates.length > 1
+        && descriptionCandidates.filter(r => r.isPrimary).length !== 1) {
+      return t('capture.descriptionChooseRequired');
+    }
+    // 4. 其餘屬性不得有重複 key（description 由上面的選擇機制解析；
+    //    含使用者自行新增、與 AI 既有列同名的情況）。
     const seen = new Set();
     for (const row of attributeRows) {
       const key = row.key.trim();
       if (!key || !row.value.trim()) continue;
+      if (key === 'description') continue;
       if (seen.has(key)) {
         return t('capture.attributeKeyDuplicate', { key });
       }
@@ -882,7 +1049,13 @@ export async function createCaptureView(params, router) {
     if (validationError) {
       showToast(validationError);
       setEditMode(true);  // 直接進編輯模式讓使用者修正
-      if (!editName.value.trim()) editName.focus();
+      if (!editName.value.trim()) {
+        editName.focus();
+      } else if (validationError === t('capture.descriptionChooseRequired')) {
+        // 多筆描述候選尚未選擇：把候選列帶到眼前（每一列都可修改／移除／選擇）。
+        editDescriptionList.scrollIntoView({ block: 'center' });
+        editDescriptionList.querySelector('input[type="radio"]')?.focus();
+      }
       return;
     }
 
@@ -891,6 +1064,9 @@ export async function createCaptureView(params, router) {
     btnSaveConfirm.innerHTML = `<span>${t('app.loading')}</span>`;
 
     const failures = [];
+    // 描述候選的選擇快照：只有使用者選取的一筆會寫入主表；未選取的候選
+    // 一律標為未採用（建議保留 AI 原值／來源照片／模型／信心追溯）。
+    const chosenDescription = chosenDescriptionRow();
 
     try {
       // 0. 這一刻才建立正式紀錄（重試時跳過 —— intake 是全有全無，
@@ -921,9 +1097,15 @@ export async function createCaptureView(params, router) {
         const draft = currentSuggestions[index];
         let decision;
         if (draft.field.startsWith('attribute:')) {
+          const key = draft.field.slice('attribute:'.length);
           const row = attributeRows.find(r => r.draftIndex === index);
           const finalValue = row ? row.value.trim() : '';
-          decision = finalValue && finalValue === (row.original || '').trim()
+          // 描述多筆候選：只有使用者選取的一筆可能被接受；未選取的一律
+          // 標為未採用，絕不讓後面的候選默默覆蓋選取的值。
+          const unchosenDescription = key === 'description' && finalValue
+            && row !== chosenDescription;
+          decision = !unchosenDescription && finalValue
+            && finalValue === (row.original || '').trim()
             ? 'accept' : 'reject';
         } else if (draft.field.startsWith('identifier:')) {
           const row = identifierRows.find(r => r.draftIndex === index);
@@ -958,7 +1140,7 @@ export async function createCaptureView(params, router) {
             appliedSuggestionIds.add(index);
             const row = draft.field.startsWith('identifier:')
               ? identifierRows.find(r => r.draftIndex === index)
-              : null;
+              : attributeRows.find(r => r.draftIndex === index);
             if (row) row.appliedValue = row.original;
           } else {
             await api.rejectSuggestion(suggestionId);
@@ -1030,8 +1212,23 @@ export async function createCaptureView(params, router) {
       // 4. 動態屬性：把「使用者改過／移除／新增」的差異併進 GET 到的現值
       //    後寫回。PATCH 是整包取代語意，但內容是現值加減差異 —— 不動
       //    看不見的鍵、不用新值偷覆蓋；被移除的鍵是真的從紀錄刪除。
+      //
+      //    描述（attribute:description）另外處理：只有使用者選取的一筆
+      //    算數，未選取的候選絕不寫入。先前部分保存曾寫入、但最後不被
+      //    選取的描述，只在「現值確實是我們寫入的舊值」時清除（value-
+      //    aware，不會誤刪剛選取的新描述）。
       const attributeSet = new Map();
       const attributeRemove = new Set();
+      const finalDescription = chosenDescription
+        ? chosenDescription.value.trim() : '';
+      const descriptionRemovals = new Set();
+      const noteDescriptionRemoval = (value) => {
+        const stale = String(value || '').trim();
+        if (stale && stale !== finalDescription) {
+          descriptionRemovals.add(stale);
+        }
+      };
+
       for (let index = 0; index < currentSuggestions.length; index++) {
         const draft = currentSuggestions[index];
         if (!draft.field.startsWith('attribute:')) continue;
@@ -1039,17 +1236,47 @@ export async function createCaptureView(params, router) {
         const row = attributeRows.find(r => r.draftIndex === index);
         const finalValue = row ? row.value.trim() : '';
         const original = (row ? (row.original || '') : String(draft.value || '')).trim();
-        if (finalValue && finalValue === original) continue;  // 等值：由 accept 處理
+
+        if (key === 'description') {
+          if (row && row === chosenDescription) {
+            // 選取的一筆：等值且仍可接受 → 由 accept 處理；否則 PATCH 落地
+            //（使用者改過，或先前已遭拒絕、不可能再接受）。
+            if (finalValue && finalValue === original
+                && !rejectedSuggestionIds.has(index)) {
+              continue;
+            }
+            attributeSet.set(key, finalValue);
+          } else if (row && row.appliedValue) {
+            // 未選取的候選（或已被清空）：曾寫入的舊值必須清除。
+            noteDescriptionRemoval(row.appliedValue);
+          }
+          continue;
+        }
+
+        if (finalValue && finalValue === original) {
+          // 等值：正常由 accept 處理；但若這筆建議已不可能再接受（例如
+          // 先前因修改被拒絕、重試前又改回原值），最終值仍必須落地。
+          if (rejectedSuggestionIds.has(index)) attributeSet.set(key, finalValue);
+          continue;
+        }
         if (finalValue) {
           attributeSet.set(key, finalValue);
         } else if (appliedSuggestionIds.has(index) || attributeAppliedKeys.has(key)) {
           attributeRemove.add(key);
         }
       }
+      // 已被整列移除、但曾寫入正式紀錄的描述舊值（移除時記下的）。
+      for (const value of descriptionDeletes) noteDescriptionRemoval(value);
+
       for (const row of attributeRows) {
         if (row.draftIndex !== null) continue;
         const key = row.key.trim();
         const value = row.value.trim();
+        if (key === 'description') {
+          // 使用者自行新增的描述列：只有選取的一列會保存。
+          if (row === chosenDescription && value) attributeSet.set(key, value);
+          continue;
+        }
         if (key && value) attributeSet.set(key, value);
       }
       // 本次流程曾寫入、但最終內容裡已不存在的鍵（例如部分保存後使用者
@@ -1057,15 +1284,32 @@ export async function createCaptureView(params, router) {
       for (const key of attributeAppliedKeys) {
         if (!attributeSet.has(key)) attributeRemove.add(key);
       }
-      if (attributeSet.size > 0 || attributeRemove.size > 0) {
+      if (attributeSet.size > 0 || attributeRemove.size > 0
+          || descriptionRemovals.size > 0) {
         try {
           const current = await api.getItem(currentItemId);
           const merged = { ...(current.item.attributes || {}) };
           for (const key of attributeRemove) delete merged[key];
+          if (descriptionRemovals.size > 0 && !attributeSet.has('description')) {
+            const currentDescription = merged['description'];
+            if (typeof currentDescription === 'string'
+                && descriptionRemovals.has(currentDescription.trim())) {
+              delete merged['description'];
+            }
+          }
           for (const [key, value] of attributeSet) merged[key] = value;
           await api.patchItem(currentItemId, { attributes: merged });
           for (const key of attributeRemove) attributeAppliedKeys.delete(key);
-          for (const key of attributeSet.keys()) attributeAppliedKeys.add(key);
+          for (const key of attributeSet.keys()) {
+            if (key === 'description') {
+              if (chosenDescription) {
+                chosenDescription.appliedValue = finalDescription;
+              }
+            } else {
+              attributeAppliedKeys.add(key);
+            }
+          }
+          descriptionDeletes.length = 0;
         } catch (err) {
           console.warn('Attribute reconcile failed:', err.message);
           failures.push({ what: t('capture.attributesSection'), error: err });
