@@ -16,7 +16,7 @@ from typing import Iterator
 from .config import Config
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 
 def connect(config: Config) -> sqlite3.Connection:
@@ -76,6 +76,7 @@ def init(config: Config) -> bool:
     fresh = not config.database.exists()
     with session(config) as conn:
         _migrate_pairing_tables(conn)
+        _migrate_phase4_folders(conn)
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         conn.execute(
             "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('version', ?)",
@@ -104,6 +105,63 @@ def _migrate_pairing_tables(conn: sqlite3.Connection) -> None:
     columns = {info[1] for info in conn.execute("PRAGMA table_info(paired_devices)")}
     if "token_hash" not in columns:
         conn.execute("DROP TABLE paired_devices")
+
+
+def _migrate_phase4_folders(conn: sqlite3.Connection) -> None:
+    """Phase 4 資料夾遷移。
+
+    - 若 items 表中尚無 folder_id 欄位，執行建表（STRICT 不支援 ALTER TABLE，
+      所以只能透過 CREATE TABLE AS SELECT 搭配 DROP/RENAME）
+    - 既有紀錄的 folder_id 預設為 NULL（未分類）
+    - 新表（folders/folder_rules/folder_classifications）在主 schema.sql 創建
+    """
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='items'"
+    ).fetchone()
+    if row is None:
+        # 首次建立，schema.sql 會處理
+        return
+    
+    columns = {info[1] for info in conn.execute("PRAGMA table_info(items)")}
+    if "folder_id" in columns:
+        # 已升級，無需動作
+        return
+    
+    # items 表需要添加 folder_id，但 STRICT 表不支援 ALTER TABLE ADD COLUMN
+    # 改用重建表的方式（SQLite 標準做法）
+    conn.execute("""
+        CREATE TABLE items_new (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL DEFAULT '',
+            brand       TEXT NOT NULL DEFAULT '',
+            model       TEXT NOT NULL DEFAULT '',
+            category    TEXT NOT NULL DEFAULT '',
+            quantity    INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 1),
+            condition   TEXT NOT NULL DEFAULT '',
+            notes       TEXT NOT NULL DEFAULT '',
+            attributes  TEXT NOT NULL DEFAULT '{}',
+            folder_id   TEXT,
+            status      TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active','archived','void')),
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        ) STRICT
+    """)
+    
+    # 複製既有資料（folder_id 為 NULL）
+    conn.execute("""
+        INSERT INTO items_new 
+        (id, name, brand, model, category, quantity, condition, notes, 
+         attributes, folder_id, status, created_at, updated_at)
+        SELECT 
+        id, name, brand, model, category, quantity, condition, notes, 
+        attributes, NULL, status, created_at, updated_at
+        FROM items
+    """)
+    
+    # 移除舊表、重命名新表
+    conn.execute("DROP TABLE items")
+    conn.execute("ALTER TABLE items_new RENAME TO items")
 
 
 def version(config: Config) -> str:

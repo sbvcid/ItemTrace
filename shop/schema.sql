@@ -11,11 +11,13 @@ CREATE TABLE IF NOT EXISTS items (
     condition   TEXT NOT NULL DEFAULT '',
     notes       TEXT NOT NULL DEFAULT '',
     attributes  TEXT NOT NULL DEFAULT '{}',
+    folder_id   TEXT REFERENCES folders(id) ON DELETE SET NULL,
     status      TEXT NOT NULL DEFAULT 'active'
                 CHECK (status IN ('active','archived','void')),
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 ) STRICT;
+CREATE INDEX IF NOT EXISTS idx_items_folder ON items(folder_id);
 
 CREATE TABLE IF NOT EXISTS observations (
     id          TEXT PRIMARY KEY,
@@ -139,6 +141,38 @@ CREATE TABLE IF NOT EXISTS pairing_sessions (
     claimed_device_id TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_pairing_expires ON pairing_sessions(expires_at);
+
+-- Phase 4：資料夾與 AI 自動分類
+CREATE TABLE IF NOT EXISTS folders (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active','archived'))
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_folders_status ON folders(status);
+
+CREATE TABLE IF NOT EXISTS folder_rules (
+    id          TEXT PRIMARY KEY,
+    rule_text   TEXT NOT NULL,
+    folders     TEXT NOT NULL DEFAULT '[]',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    active      INTEGER NOT NULL DEFAULT 1
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS folder_classifications (
+    id          TEXT PRIMARY KEY,
+    item_id     TEXT NOT NULL REFERENCES items(id) ON DELETE RESTRICT,
+    folder_id   TEXT REFERENCES folders(id) ON DELETE SET NULL,
+    source      TEXT NOT NULL DEFAULT 'manual'
+                CHECK (source IN ('manual','auto','rule')),
+    created_at  TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_class_item ON folder_classifications(item_id);
+CREATE INDEX IF NOT EXISTS idx_class_folder ON folder_classifications(folder_id);
 
 CREATE TABLE IF NOT EXISTS schema_meta (
     key   TEXT PRIMARY KEY,

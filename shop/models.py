@@ -23,6 +23,9 @@ from .ids import OBSERVATION_KINDS
 __all__ = [
     "Event",
     "FieldProvenance",
+    "Folder",
+    "FolderClassification",
+    "FolderRule",
     "Identifier",
     "Item",
     "Observation",
@@ -415,3 +418,72 @@ class FieldProvenance:
     last_user_edit_at: str | None = None
     last_user_edit_event_id: str | None = None
     rejected_values: frozenset[str] = frozenset()
+
+
+# Phase 4：資料夾與 AI 分類
+FOLDER_STATUSES = ("active", "archived")
+FOLDER_CLASSIFICATION_SOURCES = ("manual", "auto", "rule")
+
+
+@dataclass(frozen=True, slots=True)
+class Folder:
+    """資料夾。"""
+    id: str
+    name: str
+    description: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+    status: str = "active"
+
+    @staticmethod
+    def from_row(row: sqlite3.Row) -> Folder:
+        return Folder(
+            id=row["id"],
+            name=row["name"],
+            description=row["description"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            status=row["status"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FolderRule:
+    """自然語言分類規則。"""
+    id: str
+    rule_text: str
+    folders: str  # JSON 陣列
+    created_at: str = ""
+    updated_at: str = ""
+    active: int = 1
+
+    @staticmethod
+    def from_row(row: sqlite3.Row) -> FolderRule:
+        return FolderRule(
+            id=row["id"],
+            rule_text=row["rule_text"],
+            folders=row["folders"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            active=row["active"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FolderClassification:
+    """紀錄分類記錄（追蹤來源）。"""
+    id: str
+    item_id: str
+    folder_id: str | None = None
+    source: str = "manual"  # manual, auto, rule
+    created_at: str = ""
+
+    @staticmethod
+    def from_row(row: sqlite3.Row) -> FolderClassification:
+        return FolderClassification(
+            id=row["id"],
+            item_id=row["item_id"],
+            folder_id=row["folder_id"],
+            source=row["source"],
+            created_at=row["created_at"],
+        )

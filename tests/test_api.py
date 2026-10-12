@@ -57,7 +57,7 @@ def create_observation(client, item_id: str, **body) -> dict:
 def test_health(client):
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "schema_version": "2"}
+    assert response.json() == {"status": "ok", "schema_version": "3"}
 
 
 def test_health_does_not_leak_the_data_root(client, config):
