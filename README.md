@@ -141,7 +141,7 @@ ItemTrace 伺服器 (FastAPI)
 
 **特色**：
 - 零建置前端（純 HTML/CSS/JavaScript，無框架）
-- 無外部依賴（只有 FastAPI 用於 HTTP）
+- 不需要 Node.js／npm 前端建置工具；Python 後端依 `requirements.txt` 安裝套件
 - 原始照片永不覆寫；新拍照自動編號
 - 紀錄與原始照片本機保存；無內建雲端同步（外部 AI 傳輸例外，詳見隱私說明）
 
