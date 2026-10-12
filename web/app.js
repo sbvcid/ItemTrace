@@ -19,6 +19,8 @@ import { createRecordDetailView } from './views/record-detail.js';
 import { createSettingsView } from './views/settings.js';
 import { createTrashView } from './views/trash.js';
 import { createPairView } from './views/pair.js';
+import { createFoldersView } from './views/folders.js';
+import { createFolderDetailView } from './views/folder-detail.js';
 
 function renderUnpairedNotice(container) {
   container.innerHTML = `
@@ -55,6 +57,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     .add('/i/:id', createRecordDetailView)
     .add('/items/:id', createRecordDetailView) // Backward compatibility link
     .add('/trash', createTrashView)
+    .add('/folders', createFoldersView)
+    .add('/folders/:id', createFolderDetailView)
     .add('/settings', createSettingsView)
     .add('/pair', createPairView);
 

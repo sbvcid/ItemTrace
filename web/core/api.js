@@ -319,6 +319,45 @@ export const api = {
       }),
     });
   },
+
+  // Folder Management (Phase 4)
+  async listFolders(status = 'active') {
+    return request(`/api/folders?status=${encodeURIComponent(status)}`);
+  },
+
+  async createFolder({ name, description = '' } = {}) {
+    return request('/api/folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    });
+  },
+
+  async updateFolder(folderId, { name = '', description = '' } = {}) {
+    return request(`/api/folders/${encodeURIComponent(folderId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    });
+  },
+
+  async deleteFolder(folderId) {
+    return request(`/api/folders/${encodeURIComponent(folderId)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async getFolderItems(folderId, limit = 50, offset = 0) {
+    return request(`/api/folders/${encodeURIComponent(folderId)}/items?limit=${limit}&offset=${offset}`);
+  },
+
+  async moveItemToFolder(itemId, folderId = null, source = 'manual') {
+    return request(`/api/items/${encodeURIComponent(itemId)}/folder`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_id: folderId, source }),
+    });
+  },
 };
 
 /**

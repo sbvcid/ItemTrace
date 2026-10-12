@@ -1546,3 +1546,255 @@ body {
   color: var(--text-muted);
   padding-top: 8px;
 }
+
+/* Phase 4: Folder Management UI */
+
+/* Folder List View */
+.folders-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.folder-actions-bar {
+  padding: 12px 0;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.folder-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: box-shadow 0.2s ease;
+}
+
+.folder-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.folder-card-unclassified {
+  background: linear-gradient(135deg, var(--color-ai-surface) 0%, var(--bg-surface) 100%);
+  border-color: var(--color-ai-border);
+}
+
+.folder-card-header {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.folder-card-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.folder-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.folder-card-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+  word-wrap: break-word;
+}
+
+.folder-card-desc {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-card-count {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  padding: 0 4px;
+}
+
+.folder-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Modals for folder management */
+.modal {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(24, 29, 40, 0.5);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.modal-content {
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  max-width: 400px;
+  width: 90%;
+  position: relative;
+  z-index: 1001;
+  box-shadow: var(--shadow-lg);
+}
+
+.modal-content h3 {
+  margin-bottom: 12px;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.modal-content input,
+.modal-content textarea {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+/* Records header with folder navigation */
+.records-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 12px;
+}
+
+.records-nav-links {
+  display: flex;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+
+.records-nav-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.records-nav-link:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.records-trash-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.records-trash-link:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+/* Folder selector in record detail */
+.detail-folder-selector {
+  margin-top: 8px;
+}
+
+.folder-option-btn {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s ease;
+  width: 100%;
+}
+
+.folder-option-btn:hover {
+  background: var(--color-primary-subtle);
+  border-color: var(--color-primary);
+}
+
+.folder-option-btn:active {
+  background: var(--color-ai-surface);
+}
+
+/* Folder Detail View */
+.folder-detail-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* Mobile adjustments for folders */
+@media (max-width: 480px) {
+  .folder-card {
+    padding: 12px;
+  }
+
+  .folder-card-header {
+    gap: 8px;
+  }
+
+  .folder-card-icon {
+    font-size: 1.25rem;
+  }
+
+  .folder-card-title {
+    font-size: 0.9rem;
+  }
+
+  .records-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .records-nav-links {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .records-nav-link,
+  .records-trash-link {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+  }
+
+  .modal-content {
+    width: 95%;
+    padding: 16px;
+  }
+}

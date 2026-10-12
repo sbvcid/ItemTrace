@@ -31,17 +31,19 @@ export async function createRecordDetailView(params, router) {
        </div>
      </header>
 
-    <div class="container detail-toolbar-wrap">
-       <div class="detail-toolbar">
-         <button type="button" class="btn-secondary detail-tool-btn" id="btn-add-photo">📷 <span>${t('detail.addPhoto')}</span></button>
-         <button type="button" class="btn-secondary detail-tool-btn" id="btn-reanalyze">✨ <span>${t('detail.reanalyze')}</span></button>
-         <button type="button" class="btn-secondary detail-tool-btn" id="btn-edit-toggle">✎ <span>${t('detail.modify')}</span></button>
-         <button type="button" class="btn-secondary detail-tool-btn is-danger" id="btn-move-trash">🗑 <span>${t('detail.moveToTrash')}</span></button>
-      </div>
-      <div class="detail-analysis-status" id="analysis-status" hidden></div>
-      <div id="suggestion-review"></div>
-      <div class="detail-edit-form" id="detail-edit-form" hidden></div>
-    </div>
+     <div class="container detail-toolbar-wrap">
+        <div class="detail-toolbar">
+          <button type="button" class="btn-secondary detail-tool-btn" id="btn-add-photo">📷 <span>${t('detail.addPhoto')}</span></button>
+          <button type="button" class="btn-secondary detail-tool-btn" id="btn-reanalyze">✨ <span>${t('detail.reanalyze')}</span></button>
+          <button type="button" class="btn-secondary detail-tool-btn" id="btn-edit-toggle">✎ <span>${t('detail.modify')}</span></button>
+          <button type="button" class="btn-secondary detail-tool-btn" id="btn-move-folder">📁 <span>${t('detail.moveToFolder')}</span></button>
+          <button type="button" class="btn-secondary detail-tool-btn is-danger" id="btn-move-trash">🗑 <span>${t('detail.moveToTrash')}</span></button>
+       </div>
+       <div class="detail-analysis-status" id="analysis-status" hidden></div>
+       <div id="suggestion-review"></div>
+       <div class="detail-edit-form" id="detail-edit-form" hidden></div>
+       <div class="detail-folder-selector" id="folder-selector" style="display: none;"></div>
+     </div>
 
     <main class="container" id="detail-content">
       <div style="text-align: center; padding: 48px 20px; color: var(--text-muted);">
@@ -56,8 +58,10 @@ export async function createRecordDetailView(params, router) {
   const addPhotoBtn = el.querySelector('#btn-add-photo');
   const reanalyzeBtn = el.querySelector('#btn-reanalyze');
   const editToggleBtn = el.querySelector('#btn-edit-toggle');
+  const moveFolderBtn = el.querySelector('#btn-move-folder');
   const moveTrashBtn = el.querySelector('#btn-move-trash');
   const editFormContainer = el.querySelector('#detail-edit-form');
+  const folderSelector = el.querySelector('#folder-selector');
   const photoInput = el.querySelector('#detail-photo-input');
   const analysisStatus = el.querySelector('#analysis-status');
   const suggestionReview = el.querySelector('#suggestion-review');
@@ -72,6 +76,7 @@ export async function createRecordDetailView(params, router) {
     addPhotoBtn.disabled = on;
     reanalyzeBtn.disabled = on;
     editToggleBtn.disabled = on;
+    moveFolderBtn.disabled = on;
     moveTrashBtn.disabled = on;
   }
 
@@ -424,6 +429,106 @@ export async function createRecordDetailView(params, router) {
       setBusy(false);
     }
   });
+
+  moveFolderBtn.addEventListener('click', async () => {
+    if (busy || folderSelector.style.display !== 'none') return;
+    showFolderSelector();
+  });
+
+  function showFolderSelector() {
+    folderSelector.innerHTML = `
+      <div class="detail-card" style="margin-top: 16px; padding: 16px;">
+        <div style="font-weight: 700; margin-bottom: 12px;">${t('detail.selectFolder')}</div>
+        <div id="folder-options" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
+          <div style="text-align: center; color: var(--text-muted);">${t('app.loading')}</div>
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <button type="button" class="btn-secondary" id="btn-cancel-folder" style="flex: 1;">${t('app.cancel')}</button>
+        </div>
+      </div>
+    `;
+    folderSelector.style.display = 'block';
+    
+    // Load folders
+    loadFoldersForSelector();
+  }
+
+  async function loadFoldersForSelector() {
+    try {
+      const data = await api.listFolders('active');
+      const folders = data.folders || [];
+      const optionsContainer = folderSelector.querySelector('#folder-options');
+      
+      let html = '';
+      
+      // Unclassified option
+      html += `
+        <button type="button" class="folder-option-btn" data-folder-id="">
+          📋 ${t('folders.unclassified')}
+        </button>
+      `;
+      
+      // Folders
+      folders.forEach(folder => {
+        html += `
+          <button type="button" class="folder-option-btn" data-folder-id="${escapeHtml(folder.id)}">
+            📁 ${escapeHtml(folder.name)}
+          </button>
+        `;
+      });
+      
+      optionsContainer.innerHTML = html;
+      
+      // Attach event listeners
+      optionsContainer.querySelectorAll('.folder-option-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const folderId = btn.getAttribute('data-folder-id') || null;
+          await performMoveToFolder(folderId);
+        });
+      });
+    } catch (err) {
+      console.error('Failed to load folders:', err);
+      const optionsContainer = folderSelector.querySelector('#folder-options');
+      optionsContainer.innerHTML = `
+        <div style="color: var(--color-danger); padding: 8px;">
+          ${escapeHtml(err.message)}
+        </div>
+      `;
+    }
+  }
+
+  async function performMoveToFolder(folderId) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.moveItemToFolder(itemId, folderId);
+      showToast(t('detail.moveToFolderDone'));
+      closeFolderSelector();
+      await loadDetail();
+    } catch (err) {
+      console.error('Move to folder failed:', err);
+      showToast(`${t('detail.moveToFolderError')}: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function closeFolderSelector() {
+    folderSelector.style.display = 'none';
+    folderSelector.innerHTML = '';
+  }
+
+  // Close folder selector on click outside
+  folderSelector.addEventListener('click', (e) => {
+    if (e.target === folderSelector) {
+      closeFolderSelector();
+    }
+  });
+
+  const cancelFolderBtn = folderSelector.querySelector('#btn-cancel-folder');
+  if (cancelFolderBtn) {
+    cancelFolderBtn.addEventListener('click', closeFolderSelector);
+  }
 
   photoInput.addEventListener('change', async () => {
     const files = Array.from(photoInput.files || []);
