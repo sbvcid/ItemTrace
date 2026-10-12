@@ -843,7 +843,7 @@ def test_record_detail_edit_save_cancel_semantics(client):
 
     zh = client.get("/i18n/zh-TW.js").text
     en = client.get("/i18n/en.js").text
-    for key in ("edit:", "editTitle:", "saveDone:", "saveError:", "noChanges:",
+    for key in ("modify:", "modifyTitle:", "saveDone:", "saveError:", "noChanges:",
                 "save:", "cancel:"):
         assert key in zh
         assert key in en

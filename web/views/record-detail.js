@@ -32,11 +32,11 @@ export async function createRecordDetailView(params, router) {
      </header>
 
     <div class="container detail-toolbar-wrap">
-      <div class="detail-toolbar">
-        <button type="button" class="btn-secondary detail-tool-btn" id="btn-add-photo">📷 <span>${t('detail.addPhoto')}</span></button>
-        <button type="button" class="btn-secondary detail-tool-btn" id="btn-reanalyze">✨ <span>${t('detail.reanalyze')}</span></button>
-        <button type="button" class="btn-secondary detail-tool-btn" id="btn-edit-toggle">✎ <span>${t('detail.edit')}</span></button>
-        <button type="button" class="btn-secondary detail-tool-btn is-danger" id="btn-move-trash">🗑 <span>${t('detail.moveToTrash')}</span></button>
+       <div class="detail-toolbar">
+         <button type="button" class="btn-secondary detail-tool-btn" id="btn-add-photo">📷 <span>${t('detail.addPhoto')}</span></button>
+         <button type="button" class="btn-secondary detail-tool-btn" id="btn-reanalyze">✨ <span>${t('detail.reanalyze')}</span></button>
+         <button type="button" class="btn-secondary detail-tool-btn" id="btn-edit-toggle">✎ <span>${t('detail.modify')}</span></button>
+         <button type="button" class="btn-secondary detail-tool-btn is-danger" id="btn-move-trash">🗑 <span>${t('detail.moveToTrash')}</span></button>
       </div>
       <div class="detail-analysis-status" id="analysis-status" hidden></div>
       <div id="suggestion-review"></div>
@@ -475,11 +475,11 @@ export async function createRecordDetailView(params, router) {
   }
 
   function renderEditForm(data) {
-    const item = data.item || {};
-    editFormContainer.innerHTML = `
-      <div class="detail-card" style="margin-top: 16px; padding: 16px;">
-        <div style="font-weight: 700; margin-bottom: 12px;">${t('detail.editTitle')}</div>
-        
+     const item = data.item || {};
+     editFormContainer.innerHTML = `
+       <div class="detail-card" style="margin-top: 16px; padding: 16px;">
+         <div style="font-weight: 700; margin-bottom: 12px;">${t('detail.modifyTitle')}</div>
+         
         <div style="margin-bottom: 12px;">
           <label class="ai-field-label">${t('detail.fieldName')}</label>
           <input type="text" class="ai-edit-input" id="edit-name" value="${escapeHtml(item.name || '')}" />
