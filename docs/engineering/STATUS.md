@@ -2,11 +2,11 @@
 
 最後更新：2026-10-12
 
-**當前狀態：Phase 3 垃圾桶與刪除完成，UX 手機優先修整完成，工程文件清理完成，capture 建檔流程修正完成，既有紀錄 AI 重新分析流程改善完成，手機免設定檔配對完成，重複描述候選修正完成**
+**當前狀態：Phase 4 資料夾管理 UI 與路由完成，前端整合全數通過，1190 測試無失敗**
 
 遠端狀態：`main` 與 `origin/main` 同步（含本階段 commit）
 
-測試驗證：`pytest` 完全通過，全 **1179 測試**無失敗、無跳過
+測試驗證：`pytest` 完全通過，全 **1190 測試**無失敗、無跳過
 
 ## 📱 MVP 交付檢查清單
 
@@ -36,6 +36,38 @@
 ---
 
 ## 當前階段
+
+### Phase 4：資料夾管理 UI 與路由整合 ← **COMPLETED**
+
+完成時間：2026-10-12  
+Commit：`a658c68` Phase 4: Add folder management UI and routes（已推送）  
+基準：`1c1100d`（Phase 4 API & Repository 完成後）
+
+完成內容：
+- ✓ **前端視圖實作**：
+  - `web/views/folders.js`：資料夾列表頁面，含建立、編輯、刪除modal；虛擬「未分類」資料夾顯示未分類紀錄數
+  - `web/views/folder-detail.js`：資料夾詳情頁面，列出該資料夾內的紀錄，支援搜尋過濾
+- ✓ **路由與 API 集成**：
+  - `web/app.js`：新增 `/folders` 與 `/folders/:id` 路由
+  - `web/core/api.js`：6 個新方法（`listFolders`, `createFolder`, `updateFolder`, `deleteFolder`, `getFolderItems`, `moveItemToFolder`）
+- ✓ **紀錄移動操作**：
+  - `web/views/record-detail.js`：詳情頁新增「移至資料夾」按鈕，點擊展開資料夾選擇器
+  - 支援移至資料夾或回到「未分類」
+- ✓ **首頁導航集成**：
+  - `web/views/home.js`：在紀錄計數旁新增「📁 資料夾」與「🗑 垃圾桶」導航連結（低視覺權重）
+- ✓ **i18n 完整性**：
+  - 新增 `folders` 命名空間：建立、編輯、刪除、移動操作相關 key × 2（繁中＋英文）
+  - 新增 `app.create` key（繁中＋英文）
+  - 新增 `detail.moveToFolder`, `detail.selectFolder`, `detail.moveToFolderDone`, `detail.moveToFolderError` × 2
+- ✓ **UI 樣式**：
+  - `.folder-card`：資料夾卡片（包含名稱、描述、紀錄數、操作按鈕）
+  - `.folder-list`：卡片列表
+  - `.modal` 與 `.modal-content`：建立／編輯資料夾 modal
+  - `.folder-option-btn`：移動操作時的資料夾選擇按鈕
+  - `.records-nav-links`：首頁導航連結樣式
+  - 手機響應式調整（375px 以下）
+- ✓ **測試驗證**：全 1190 pytest 測試通過（無新增測試，基於 API/schema 已驗正）；前端靜態檢查通過（無 js 語法錯誤）
+- ✓ **無迴歸**：既有 1180 測試全數保留，無刪修；手機與桌面界面均可用
 
 ### 重複描述候選（多筆 attribute:description）修正 ← **COMPLETED**
 
